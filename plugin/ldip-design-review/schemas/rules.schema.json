@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicc.local/ldip-design-review/rules.schema.json",
+  "title": "LDIP Design Review Rulebook",
+  "description": "AICC-BIM-SPC-0004 Rev A (draft). Structure of rulebook/rules_v<N>.json. Git holds this schema and a placeholder example only; real values stay in LDIP_Review/rulebook/ (SPC-0002 C7, brief §10.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rulebook_schema_version", "rulebook_version", "spec", "status", "issued", "sources", "code_lists", "rules"],
+  "properties": {
+    "rulebook_schema_version": { "const": "1.0" },
+    "rulebook_version": { "type": "string", "pattern": "^v[0-9]+$" },
+    "spec": { "const": "AICC-BIM-SPC-0004" },
+    "status": { "enum": ["draft", "approved", "superseded"] },
+    "issued": { "type": "string", "format": "date" },
+    "approved_by": { "type": ["string", "null"] },
+    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+    "code_lists": { "type": "object", "additionalProperties": { "$ref": "#/$defs/code_list" } },
+    "rules": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } }
+  },
+  "$defs": {
+    "tag": { "enum": ["AGREED", "PROPOSED", "GAP"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "title", "status"],
+      "properties": {
+        "source_id": { "type": "string", "pattern": "^SRC-[0-9]{2}$" },
+        "doc_no": { "type": ["string", "null"] },
+        "title": { "type": "string" },
+        "revision": { "type": ["string", "null"] },
+        "status": {
+          "enum": ["approved", "for_approval", "internal_agreed", "unknown"],
+          "description": "approved = contractually approved/accepted; for_approval = issued but not yet approved (rules citing it are capped at 'advisory'); internal_agreed = approved by the AICC owner in SPC-0001/0002/0003 or the progress log."
+        },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "code_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "clause", "values", "tag"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "clause": { "type": "string" },
+        "values": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "tag": { "$ref": "#/$defs/tag" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "tag", "blocking"],
+      "properties": {
+        "value": { "type": ["number", "string", "boolean", "array", "object", "null"] },
+        "unit": { "type": ["string", "null"] },
+        "tag": { "$ref": "#/$defs/tag" },
+        "source_id": { "type": ["string", "null"] },
+        "clause": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] },
+        "blocking": {
+          "type": "boolean",
+          "description": "True: a GAP value stops the rule (state must be inactive). False: only the sub-check that uses it is skipped."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "A GAP parameter has no value; a non-GAP parameter must cite a source.",
+          "if": { "properties": { "tag": { "const": "GAP" } } },
+          "then": { "properties": { "value": { "const": null } } },
+          "else": {
+            "required": ["source_id"],
+            "properties": { "source_id": { "type": "string" }, "value": { "not": { "const": null } } }
+          }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "title", "group", "agent", "skill", "owner_role", "statement", "inputs", "method",
+                   "parameters", "severity_default", "issue_type", "default_status", "state", "state_reason", "tag"],
+      "properties": {
+        "rule_id": { "type": "string", "pattern": "^(PKG|GIS)-[0-9]{3}$" },
+        "title": { "type": "string", "maxLength": 100 },
+        "group": { "enum": ["PKG", "GIS"] },
+        "agent": { "enum": ["INT", "GIS"] },
+        "skill": { "enum": ["controlling-submittal-package", "comparing-drawing-revisions", "checking-cadastral-geometry"] },
+        "owner_role": { "enum": ["SBM", "Lead GIS"] },
+        "statement": { "type": "string", "description": "The requirement in 'shall' form." },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["file_name", "dwg_title_block", "pdf_title_block", "transmittal", "drawing_list", "previous_submittal",
+                     "dwg_cadastral", "dwg_header", "pdf_drawing", "dlus", "overall_summary", "planning_assumptions",
+                     "community_facilities", "site_boundary", "reference_cadastre"]
+          }
+        },
+        "method": { "type": "string", "description": "Short deterministic algorithm. Full procedure lives in the skill (SPC-0006)." },
+        "parameters": { "type": "object", "additionalProperties": { "$ref": "#/$defs/parameter" } },
+        "code_lists": { "type": "array", "items": { "type": "string" } },
+        "severity_default": { "enum": ["Critical", "Major", "Minor", "Observation"] },
+        "issue_type": { "enum": ["design_error", "inconsistency", "missing_information", "er_ambiguity", "package_control", "schedule_blocking"] },
+        "default_status": {
+          "type": "object",
+          "description": "Finder's proposed_status by evidence source_type (SPC-0003). Keys are evidence source types.",
+          "additionalProperties": { "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information"] },
+          "propertyNames": {
+            "enum": ["dwg_vector", "xlsx_cell", "csv_cell", "pdf_vector_text", "pdf_ocr", "pdf_raster_visual", "pdf_colour", "script_output", "landxml"]
+          }
+        },
+        "state": { "enum": ["active", "advisory", "inactive"] },
+        "state_reason": { "type": "string" },
+        "exclusions": { "type": "array", "items": { "type": "string" } },
+        "iso_ref": { "type": ["string", "null"] },
+        "brief_ref": { "type": ["string", "null"] },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["site", "expect"],
+            "properties": { "site": { "type": "string" }, "expect": { "type": "string" }, "ref": { "type": ["string", "null"] } }
+          }
+        },
+        "tag": { "$ref": "#/$defs/tag" }
+      },
+      "allOf": [
+        {
+          "$comment": "Confirmed defaults are forbidden for visual evidence (brief §5.4-5.5).",
+          "properties": {
+            "default_status": {
+              "properties": {
+                "pdf_colour": { "not": { "const": "Confirmed" } },
+                "pdf_raster_visual": { "not": { "const": "Confirmed" } }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

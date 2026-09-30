@@ -19,7 +19,7 @@ Every result is appended to runs/<run>/format_checks.json. The one-line stdout s
 on a retry (SPC-0005 §6.5). Exit 0 = the check ran; 2 = input error. This script never reads
 findings/<run>/reasoning/**. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -37,6 +37,9 @@ from ldip_common import (  # noqa: E402
 import check_batches  # noqa: E402
 
 PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or HERE.parent)
+# FC5 uses skill 8's function: one implementation of the rule cap (owner, 30 Sep 2026).
+sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "applying-ldip-rulebook" / "scripts"))
+from rulebook_lib import cap_errors  # noqa: E402
 SCHEMA_PATH = PLUGIN_ROOT / "schemas" / "finding.schema.json"
 MATRIX_PATH = PLUGIN_ROOT / "hooks" / "access_matrix.json"
 
@@ -44,10 +47,6 @@ SUMMARY_KEYS = ("agent", "instance", "run_id", "status", "files_written", "count
                 "gaps", "inconsistencies", "errors")  # SPC-0005 §4.8
 TIER_CONF = {"deterministic": "High", "extracted_text_crop": "Medium", "visual": "Low"}  # brief §5.4
 CONF_RANK = {"High": 3, "Medium": 2, "Low": 1}
-# Rule cap (SPC-0004 §4.3; SPC-0005 §8). Missing information ranks with Confirmed: it is a
-# Confirmed finding against Parsons (brief §5.1), so an advisory rule cannot produce it. [PROPOSED]
-STATUS_RANK = {"Confirmed": 3, "Missing information": 3, "Probable": 2, "Not auto-verifiable": 1}
-CAP_RANK = {"active": 3, "advisory": 2}
 
 AGENTS = {
     "intake-batch": {"stage": None, "code": None, "files": [], "batch_check": True},
@@ -92,10 +91,6 @@ def load_validator():
 
 def rel(root, p):
     return Path(p).resolve().relative_to(root).as_posix()
-
-
-def status_of(f):
-    return (f.get("verification") or {}).get("status") if f.get("stage") != "candidate" else f.get("proposed_status")
 
 
 # ------------------------------------------------------------------ S0 / S1
@@ -245,31 +240,8 @@ def check_evidence(rep, root, relpath, findings, manifest):
 
 def check_rule_cap(rep, relpath, findings, rules, rulebook_version):
     rep.run("FC5")
-    for i, f in enumerate(findings):
-        if not isinstance(f, dict):
-            continue
-        ref = f.get("reference") or {}
-        rid, st = ref.get("rule_id"), status_of(f)
-        if ref.get("rulebook_version") and rulebook_version and ref["rulebook_version"] != rulebook_version:
-            rep.fail("FC5", f"rulebook_version '{ref['rulebook_version']}' differs from the run's '{rulebook_version}'",
-                     file=relpath, path=f"/{i}/reference/rulebook_version")
-        if not rid:
-            if st == "Confirmed":
-                rep.fail("FC5", "Confirmed without a rule_id (SPC-0005 §8)", file=relpath, path=f"/{i}/reference/rule_id")
-            continue
-        rule = rules.get(rid)
-        if rule is None:
-            rep.fail("FC5", f"rule {rid} not in the run's rulebook", file=relpath, path=f"/{i}/reference/rule_id")
-            continue
-        state = rule.get("state")
-        if state == "inactive":
-            rep.fail("FC5", f"rule {rid} is inactive and shall not be run (SPC-0004 §4.1)", file=relpath,
-                     path=f"/{i}/reference/rule_id")
-            continue
-        cap = CAP_RANK.get(state)
-        if st and cap is not None and STATUS_RANK.get(st, 0) > cap:
-            rep.fail("FC5", f"status '{st}' exceeds the cap of {state} rule {rid}", file=relpath,
-                     path=f"/{i}/{'proposed_status' if f.get('stage') == 'candidate' else 'verification/status'}")
+    for e in cap_errors(findings, rules, rulebook_version):
+        rep.fail("FC5", e["message"], file=relpath, path=e["path"])
 
 
 def earlier_findings(rep, root, run, kind):

@@ -1,0 +1,30 @@
+{
+  "skill": "applying-ldip-rulebook",
+  "note": "Data paths only; files live in LDIP_Review (never in Git, brief §10.2). Run on sonnet and opus (SPC-0006 B7).",
+  "evals": [
+    {
+      "id": "T1-load-real-v0",
+      "query": "Validate the LDIP rulebook rulebook/rules_v0.json and report how many rules are active, advisory and inactive.",
+      "files": ["rulebook/rules_v0.json"],
+      "expected": ["load_rules.py run, exit 0", "states: active 15, advisory 5, inactive 9", "no edit to the file"]
+    },
+    {
+      "id": "T2-refuse-draft",
+      "query": "Get the GIS rules from rulebook/rules_v0_draft_copy.json (a copy of rules_v0 with status draft) for this run.",
+      "files": ["golden_set/seeded/rulebook/rules_v0_draft_copy.json"],
+      "expected": ["script refuses with exit 5", "agent stops and returns failed", "does not look for another rulebook"]
+    },
+    {
+      "id": "T3-cap-advisory",
+      "query": "A GIS candidate cites GIS-008 with proposed_status Confirmed. Check it against the rulebook and correct it if needed.",
+      "files": ["rulebook/rules_v0.json", "golden_set/seeded/candidates/gis_cap_test.json"],
+      "expected": ["check_cap.py reports status above the advisory cap", "status lowered to Probable", "rule and rulebook unchanged"]
+    },
+    {
+      "id": "T4-inactive-skipped",
+      "query": "Run the GIS rules for this submittal and list which rules you skipped and why.",
+      "files": ["rulebook/rules_v0.json"],
+      "expected": ["GIS-004, GIS-005, GIS-006, GIS-007, GIS-010, GIS-011, GIS-016, GIS-017 in rules_skipped with their state_reason", "none of them run"]
+    }
+  ]
+}
