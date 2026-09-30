@@ -1,0 +1,8 @@
+{
+  "name": "ldip-a1-probe",
+  "version": "0.1.0",
+  "description": "TEST ONLY - LDIP Stage 3 test A1: checks plugin sub-agents, agent_type in hook input, plugin hooks, command allowed-tools, disallowedTools, skill preload and enable/disable in Cowork. Disable and remove after the test.",
+  "author": { "name": "Musleh Bazamol (AICC BIM Office)" },
+  "license": "UNLICENSED",
+  "keywords": ["ldip", "test", "a1"]
+}
