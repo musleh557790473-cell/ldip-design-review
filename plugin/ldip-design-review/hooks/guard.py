@@ -18,7 +18,7 @@ Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
 $CLAUDE_PLUGIN_DATA or next to this file. No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import json
 import os
@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 
 from ldip_common import (  # noqa: E402
-    ACTIVE_RUN_FILE, any_match, expand, glob_match, rel_to_root, to_posix_abs,
+    ACTIVE_RUN_FILE, any_match, configured_review_root, expand, glob_match, rel_to_root, to_posix_abs,
 )
 
 WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
@@ -50,15 +50,10 @@ def plugin_root():
 
 
 def load_config():
-    root = os.environ.get("LDIP_REVIEW_ROOT")
-    if not root:
-        for d in (os.environ.get("CLAUDE_PLUGIN_DATA"), str(HERE)):
-            if d and (Path(d) / "guard_config.json").is_file():
-                root = json.loads((Path(d) / "guard_config.json").read_text(encoding="utf-8")).get("ldip_review_root")
-                break
+    root = configured_review_root(HERE)
     matrix_path = Path(os.environ.get("LDIP_ACCESS_MATRIX") or HERE / "access_matrix.json")
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-    return (to_posix_abs(root, "/") if root else None), matrix
+    return root, matrix
 
 
 def active_run(root):
@@ -133,6 +128,7 @@ class Ctx:
             self.read += g("read_test_mode")
         self.write = g("write")
         self.deny = expand(matrix.get("deny_always", []), vals)
+        self.deny_write = expand(matrix.get("deny_write_always", []), vals)
         self.deny_read = list(self.deny)
         if agent != "orchestrator":
             self.deny_read += expand(matrix.get("deny_subagents", []), vals) + g("deny_read")
@@ -172,6 +168,12 @@ def check_write(ctx, abs_p):
     rel = rel_to_root(abs_p, ctx.root) if ctx.root else None
     if "golden_set/" in abs_p and ("answer_key" in abs_p or "results" in abs_p):
         raise Deny("golden_set answer_key/results are never writable by the plugin (SPC-0002 §5)")
+    if rel is not None:
+        cands = [rel] + ([rel[:-4]] if rel.endswith(".tmp") else [])
+        for pat in ctx.deny_write:
+            if any(glob_match(c, pat) for c in cands):
+                raise Deny(f"write of '{rel}' is never allowed through tools (matches '{pat}'; "
+                           "submittals are read-only, run log / manifest / active-run marker are script-only)")
     if ctx.main and not ctx.run:
         return
     if rel is None:

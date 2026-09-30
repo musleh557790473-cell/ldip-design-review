@@ -15,7 +15,7 @@ Sub-commands:
 Prints a one-line JSON summary; exit 0 when the check ran (pass or fail is in the result),
 2 input error. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -29,6 +29,7 @@ from ldip_common import (  # noqa: E402
 )
 
 EXCLUDE = ["golden_set/answer_key/**"]  # never read, not even for hashing (SPC-0005 §6.2)
+REUSE_PREFIXES = ("submittals/",)  # hash reuse only for read-only inputs (P-S3-9)
 
 
 def take(root, reuse=None):
@@ -48,7 +49,8 @@ def take(root, reuse=None):
                 continue
             st = os.stat(os.path.join(dirpath, fn))
             old = prev.get(rel)
-            if old and old["bytes"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns:
+            if (old and rel.startswith(REUSE_PREFIXES)
+                    and old["bytes"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns):
                 digest = old["sha256"]
                 reused += 1
             else:

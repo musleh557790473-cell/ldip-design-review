@@ -7,7 +7,7 @@ Usage: python build_access_matrix.py --source <source.json> --out <access_matrix
 agent_type keys are plugin-qualified only ("<plugin_name>:<agent>"), per test A1 and
 P-S3-12 (owner, 30 Sep 2026). The main session has no agent_type and no key here.
 Exit codes per SPC-0006 §2.3.3."""
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -76,6 +76,7 @@ def main():
             "status": src.get("status"), "plugin_name": plugin, "agent_type_form": "qualified",
             "agent_types": types,
             "deny_always": src.get("deny_always", []), "deny_subagents": src.get("deny_subagents", []),
+            "deny_write_always": src.get("deny_write_always", []),
             "agents": src["agents"],
         }
         atomic_write_json(a.out, out)

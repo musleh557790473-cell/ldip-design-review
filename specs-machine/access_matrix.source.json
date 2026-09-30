@@ -1,5 +1,5 @@
 {
-  "matrix_source_version": "0.2.0",
+  "matrix_source_version": "0.3.0",
   "source": "AICC-BIM-SPC-0002 Rev E §5 (access matrix), narrowed by AICC-BIM-SPC-0005 Rev C §5 (per-agent reads/writes), §5.0.1, §7.2-7.3",
   "status": "AGREED form (P-S3-12, owner 30 Sep 2026): agent_type is plugin-qualified; absent agent_type = main session",
   "plugin_name": "ldip-design-review",
@@ -17,6 +17,13 @@
   "deny_subagents": [
     "golden_set/results/**"
   ],
+  "deny_write_always": [
+    "submittals/**",
+    "runs/*/run.jsonl",
+    "runs/*/manifest.json",
+    "runs/_active_run.json"
+  ],
+  "deny_write_note": "P-S3-2 (submittals read-only for every tool call, SPC-0002 §9.1) and P-S3-7 (run log, manifest and active-run marker are written by run_manifest.py only).",
   "agents": {
     "orchestrator": {
       "main_session": true,
@@ -34,13 +41,13 @@
         "findings/*/reasoning/**"
       ],
       "write": [
-        "runs/{run}/**",
-        "runs/_active_run.json"
+        "runs/{run}/**"
       ],
       "bash_scripts": [
         "{plugin_root}/scripts/run_manifest.py",
         "{plugin_root}/scripts/snapshot.py",
-        "{plugin_root}/scripts/format_check.py"
+        "{plugin_root}/scripts/format_check.py",
+        "{plugin_root}/scripts/check_batches.py"
       ],
       "outside_run": "unrestricted except deny_always"
     },
@@ -91,7 +98,9 @@
     "gis-cadastral": {
       "read": [
         "0.ai_context/{site}/{sub}/**",
-        "submittals/{site}/**",
+        "submittals/{site}/{sub}/**",
+        "submittals/{site}/_reference/**",
+        "submittals/{site}/masterplan-schedule/**",
         "rulebook/**",
         "findings/{run}/candidates/gis.json",
         "findings/{run}/reasoning/gis.md",

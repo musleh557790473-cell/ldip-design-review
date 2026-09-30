@@ -38,11 +38,18 @@ def root(tmp_path):
 
 
 # ------------------------------------------------------------------ run_manifest
-def open_run(root, **kw):
+def open_run(root, env_root="same", **kw):
+    env = {**os.environ}
+    env.pop("CLAUDE_PLUGIN_DATA", None)
+    env.pop("LDIP_REVIEW_ROOT", None)
+    if env_root == "same":
+        env["LDIP_REVIEW_ROOT"] = str(root)
+    elif env_root:
+        env["LDIP_REVIEW_ROOT"] = env_root
     args = [PLUGIN / "scripts/run_manifest.py", "open", "--root", root, "--site", kw.get("site", "QRWN"),
             "--sub", "T0001", "--mode", kw.get("mode", "live"), "--rulebook", kw.get("rb", "rulebook/rules_v0.json"),
             "--now", "20260930T1200"]
-    return sh(args)
+    return sh(args, env=env)
 
 
 def test_manifest_open_event_close(root):
@@ -70,6 +77,20 @@ def test_manifest_refusals(root):
     assert open_run(root, rb="rulebook/rules_v9.json")[0] == 5   # draft rulebook (SPC-0005 §4.12)
     assert open_run(root, site="XXXX")[0] == 2
     assert open_run(root, mode="prod")[0] == 2
+    # P-S3-8: guard root must be configured and equal to --root
+    assert open_run(root, env_root=None)[0] == 5
+    assert open_run(root, env_root="/some/other/LDIP_Review")[0] == 5
+    assert not (root / "runs/_active_run.json").exists()
+
+
+def test_emergency_close_lifts_run_restrictions(root):
+    """P-S3-1: a crashed run is ended with close --status aborted; the main session is free again."""
+    assert open_run(root)[0] == 0
+    cat = {"command": f"cat {root}/rulebook/rules_v0.json"}
+    assert guard_raw(root, {"tool_name": "Bash", "tool_input": cat}, run=None) == "deny"
+    rc, _ = sh([PLUGIN / "scripts/run_manifest.py", "close", "--root", root, "--run", RUN, "--status", "aborted"])
+    assert rc == 0 and not (root / "runs/_active_run.json").exists()
+    assert guard_raw(root, {"tool_name": "Bash", "tool_input": cat}, run=None) == "allow"
 
 
 # ------------------------------------------------------------------ snapshot / L3
@@ -82,7 +103,7 @@ def test_snapshot_l3(root, tmp_path):
     (root / f"findings/{RUN}/candidates/gis.json").write_text("[]")         # inside write set
     (root / f"findings/{RUN}/evidence/gis/GIS-001_1.png.tmp").write_text("x")  # tmp sibling, in set
     rc, res = sh([snap, "take", "--root", root, "--out", a, "--reuse", b])
-    assert rc == 0 and res["reused_hashes"] >= 5
+    assert rc == 0 and res["reused_hashes"] == 2        # P-S3-9: only the 2 submittal files reuse hashes
     common = ["--matrix", PLUGIN / "hooks/access_matrix.json", "--site", "QRWN", "--sub", "T0001", "--run", RUN]
     rc, res = sh([snap, "diff", "--before", b, "--after", a, "--agent", "gis-cadastral", *common])
     assert rc == 0 and res["l3"] == "pass" and res["added"] == 2
@@ -95,6 +116,54 @@ def test_snapshot_l3(root, tmp_path):
     assert json.loads(out.read_text())["violations"][0]["path"] == "submittals/QRWN/T0001/A-001.pdf"
     rc, res = sh([snap, "diff", "--before", b, "--after", a, "--agent", "nobody", *common])
     assert rc == 2
+
+
+def test_snapshot_detects_same_size_same_mtime_edit(root, tmp_path):
+    """P-S3-9: outside submittals/ a content change that keeps size and mtime is still detected."""
+    snap = PLUGIN / "scripts/snapshot.py"
+    f = root / "rulebook/rules_v0.json"
+    b, a = tmp_path / "b.json", tmp_path / "a.json"
+    sh([snap, "take", "--root", root, "--out", b])
+    st = f.stat()
+    data = f.read_bytes()
+    f.write_bytes(data.replace(b"approved", b"APPROVED"))
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+    sh([snap, "take", "--root", root, "--out", a, "--reuse", b])
+    common = ["--matrix", PLUGIN / "hooks/access_matrix.json", "--site", "QRWN", "--sub", "T0001", "--run", RUN]
+    rc, res = sh([snap, "diff", "--before", b, "--after", a, "--agent", "gis-cadastral", *common])
+    assert res["modified"] == 1 and res["l3"] == "fail"
+
+
+# ------------------------------------------------------------------ batch ownership (P-S3-4)
+def write_batch(root, name, outputs):
+    d = root / "0.ai_context/QRWN/T0001" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "batch_manifest.json").write_text(json.dumps({"files": [{"output": o} for o in outputs]}))
+    return d
+
+
+def test_check_batches(root, tmp_path):
+    cb = PLUGIN / "scripts/check_batches.py"
+    args = [cb, "--root", root, "--site", "QRWN", "--sub", "T0001"]
+    d1 = write_batch(root, "b01", ["A-001.dwg.json"])
+    (d1 / "A-001.dwg.json").write_text("{}")
+    d2 = write_batch(root, "b02", ["0.ai_context/QRWN/T0001/b02/A-001.pdf.json"])
+    (d2 / "A-001.pdf.json").write_text("{}")
+    rc, res = sh(args)
+    assert rc == 0 and res["result"] == "pass" and res["batches"] == 2
+    (d1 / "stray.json").write_text("{}")                      # file written by nobody's manifest
+    rc, res = sh(args)
+    assert res["result"] == "fail" and res["violations"] == 1
+    (d1 / "stray.json").unlink()
+    write_batch(root, "b02", ["0.ai_context/QRWN/T0001/b01/A-001.dwg.json", "A-001.pdf.json"])  # cross-batch claim
+    out = tmp_path / "cb.json"
+    rc, res = sh(args + ["--out", out])
+    assert res["result"] == "fail"
+    assert any("another folder" in v["issue"] for v in json.loads(out.read_text())["violations"])
+    (d2 / "batch_manifest.json").unlink()                     # missing manifest
+    rc, res = sh(args)
+    assert res["result"] == "fail"
+    assert sh([cb, "--root", root, "--site", "QRWN", "--sub", "NOPE"])[0] == 2
 
 
 # ------------------------------------------------------------------ guard (L2)
@@ -153,6 +222,17 @@ CASES = [
     ("gis-write-own", Q + "gis-cadastral", "Write", {"file_path": f"{F}/candidates/gis.json"}, True, "live", "allow"),
     ("gis-read-intake", Q + "gis-cadastral", "Read", {"file_path": f"{F}/candidates/intake.json"}, True, "live", "deny"),
     ("gis-read-schedule", Q + "gis-cadastral", "Read", {"file_path": "submittals/QRWN/masterplan-schedule/x.xlsx"}, True, "live", "allow"),
+    ("gis-read-other-sub", Q + "gis-cadastral", "Read", {"file_path": "submittals/QRWN/T0000/old.pdf"}, True, "live", "deny"),
+    ("gis-read-reference", Q + "gis-cadastral", "Read", {"file_path": "submittals/QRWN/_reference/DLUS.csv"}, True, "live", "allow"),
+    ("gis-read-own-sub", Q + "gis-cadastral", "Read", {"file_path": "submittals/QRWN/T0001/A-001.pdf"}, True, "live", "allow"),
+    # P-S3-2 / P-S3-7: never-writable paths, for every caller
+    ("main-norun-write-submittal", None, "Write", {"file_path": "submittals/QRWN/T0001/A-001.pdf"}, False, "live", "deny"),
+    ("main-norun-edit-submittal-tmp", None, "Edit", {"file_path": "submittals/QRWN/T0001/x.json.tmp"}, False, "live", "deny"),
+    ("main-run-write-runlog", None, "Write", {"file_path": f"runs/{RUN}/run.jsonl"}, True, "live", "deny"),
+    ("main-run-write-manifest", None, "Edit", {"file_path": f"runs/{RUN}/manifest.json"}, True, "live", "deny"),
+    ("main-run-write-marker", None, "Write", {"file_path": "runs/_active_run.json"}, True, "live", "deny"),
+    ("main-norun-write-marker", None, "Write", {"file_path": "runs/_active_run.json"}, False, "live", "deny"),
+    ("main-run-bash-check-batches", None, "Bash", {"command": f'python3 "{PLUGIN}/scripts/check_batches.py" --root . --site QRWN --sub T0001'}, True, "live", "allow"),
     ("gis-read-other-site", Q + "gis-cadastral", "Read", {"file_path": "submittals/NMAR/x.xlsx"}, True, "live", "deny"),
     ("gis-golden-live", Q + "gis-cadastral", "Read", {"file_path": "golden_set/inputs/a.dwg"}, True, "live", "deny"),
     ("gis-golden-test", Q + "gis-cadastral", "Read", {"file_path": "golden_set/inputs/a.dwg"}, True, "test", "allow"),
@@ -185,9 +265,9 @@ def test_guard(root, cid, atype, tool, ti, run, mode, expected):
 def guard_raw(root, data_extra, run=True):
     """Send hook input with full control over the agent_type key (present / absent / odd values)."""
     active = root / "runs/_active_run.json"
-    if run:
+    if run is True:
         active.write_text(json.dumps({"run_id": RUN, "site": "QRWN", "sub_id": "T0001", "mode": "live"}))
-    elif active.exists():
+    elif run is False and active.exists():
         active.unlink()
     env = {**os.environ, "CLAUDE_PLUGIN_ROOT": str(PLUGIN), "LDIP_REVIEW_ROOT": str(root)}
     env.pop("CLAUDE_PLUGIN_DATA", None)

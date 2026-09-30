@@ -5,7 +5,9 @@ Sub-commands:
   open   --root R --site S --sub ID --mode live|test|shadow --rulebook rulebook/rules_vN.json
          Creates runs/<run-id>/manifest.json (status running), runs/_active_run.json (read by the
          guard hook) and the first run.jsonl event. Refuses (exit 5) if a run is already active,
-         the run-id exists, or the rulebook is not 'approved' (SPC-0005 §4.12).
+         the run-id exists, the rulebook is not 'approved' (SPC-0005 §4.12), or the guard hook's
+         configured root (LDIP_REVIEW_ROOT / guard_config.json) is missing or differs from --root (P-S3-8).
+  Emergency end of a crashed run: close --status aborted (removes the active-run marker, P-S3-1).
   event  --root R --run RUN --agent A --event E [--instance N] [--detail JSON]
          Appends one event to runs/<run>/run.jsonl (SPC-0002 §7.2 event names only).
   close  --root R --run RUN --status completed|failed|aborted
@@ -13,7 +15,7 @@ Sub-commands:
 
 Prints a one-line JSON summary; exit codes per SPC-0006 §2.3.3. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -25,7 +27,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ldip_common import (  # noqa: E402
     ACTIVE_RUN_FILE, EXIT_INPUT, EXIT_OK, EXIT_REFUSED, RUN_ID_RE, SITES, SUB_ID_RE, ScriptError,
-    append_jsonl, atomic_write_json, check_path_len, iso_utc, now_riyadh, read_json, sha256_file,
+    append_jsonl, atomic_write_json, check_path_len, configured_review_root, iso_utc, now_riyadh,
+    read_json, sha256_file, to_posix_abs,
 )
 
 MODES = ("live", "test", "shadow")
@@ -69,6 +72,12 @@ def cmd_open(a):
         raise ScriptError(EXIT_INPUT, "sub-id must be the short Aconex form, no spaces (SPC-0002 §4.2)")
     if a.mode not in MODES:
         raise ScriptError(EXIT_INPUT, f"mode must be one of {MODES}")
+    guard_root = configured_review_root(PLUGIN_ROOT / "hooks")
+    if guard_root is None:
+        raise ScriptError(EXIT_REFUSED, "guard root not configured (LDIP_REVIEW_ROOT or guard_config.json); "
+                                        "the L2 guard would not protect this run (P-S3-8)")
+    if guard_root != to_posix_abs(root, "/"):
+        raise ScriptError(EXIT_REFUSED, f"guard root {guard_root} differs from --root {root} (P-S3-8)")
     sub_dir = root / "submittals" / a.site / a.sub
     if not sub_dir.is_dir():
         raise ScriptError(EXIT_INPUT, f"submittal folder not found: {sub_dir}")

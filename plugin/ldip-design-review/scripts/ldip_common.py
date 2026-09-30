@@ -3,7 +3,7 @@
 Conventions: SPC-0006 Rev B §2.3 (exit codes, atomic writes, pathlib, 250-char
 limit, determinism, no network, no shell).
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import hashlib
 import json
@@ -163,3 +163,16 @@ def rel_to_root(abs_posix, root_posix):
     if abs_posix.startswith(root + "/"):
         return abs_posix[len(root) + 1:]
     return None
+
+
+def configured_review_root(hooks_dir=None):
+    """LDIP_Review root as the guard hook sees it (P-S3-8): env LDIP_REVIEW_ROOT, else
+    guard_config.json {"ldip_review_root": ...} in $CLAUDE_PLUGIN_DATA or the plugin hooks folder.
+    Returns an absolute POSIX string, or None when not configured."""
+    root = os.environ.get("LDIP_REVIEW_ROOT")
+    if not root:
+        for d in (os.environ.get("CLAUDE_PLUGIN_DATA"), str(hooks_dir) if hooks_dir else None):
+            if d and (Path(d) / "guard_config.json").is_file():
+                root = json.loads((Path(d) / "guard_config.json").read_text(encoding="utf-8")).get("ldip_review_root")
+                break
+    return to_posix_abs(root, "/") if root else None
