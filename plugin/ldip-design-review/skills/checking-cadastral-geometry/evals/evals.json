@@ -1,0 +1,68 @@
+{
+ "skill": "checking-cadastral-geometry",
+ "note": "Data paths only; files live in LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0004 §8.1 / SPC-0006 §4.6.5. Run on sonnet and opus (SPC-0006 B7).",
+ "evals": [
+  {
+   "id": "T1-QRWN",
+   "query": "Run the GIS schedule checks on the QRWN masterplan schedule for run QRWN-TEST-20260930T1200 and write the candidate findings.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "submittals/QRWN/masterplan-schedule/LDIP-RCRC-SAP-01-QRWN-MPL-SCH-00001.xlsx"
+   ],
+   "expected": [
+    "read_dlus.py first: 6,542 plot rows + 1 street row",
+    "GIS-001: one finding, 7 IDs / 14 rows",
+    "GIS-003: one finding (Attenuation Park, Channel, Civil defense)",
+    "GIS-012: one finding, Channel 0 vs 2 plots; 'effected by boundary' groups pass on the labelled 53,430 m2 line",
+    "GIS-013: two findings, 19 + 10 = 29 rows",
+    "GIS-014: one finding, 5,713 villa rows at 2 spaces per unit vs 1",
+    "GIS-015: site area 1,032,067 vs 3,624,377 m2; facilities FAR",
+    "all candidates pass check_cap.py; no finding written by hand"
+   ]
+  },
+  {
+   "id": "T2-NMAR",
+   "query": "Check the NMAR masterplan schedule against the GIS rules and report the findings.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "submittals/NMAR/masterplan-schedule/LDIP-RCRC-SAP-02-NMAR-MPL-SCH-00001.xlsx"
+   ],
+   "expected": [
+    "GIS-012: Amenity Green 81 plots, 35,995.52 m2 missing from the Summary (unlabelled line does not explain it)",
+    "GIS-013: 97 villas not 360 m2; plots 770-772 and 774 FAR 0.5 vs GFA = area; plots 1-4 GFA without breakdown",
+    "GIS-015: site area 1,032,067 vs 569,933 m2; facilities FAR 0.5 vs 1.00",
+    "GIS-001, GIS-003, GIS-014 pass"
+   ]
+  },
+  {
+   "id": "T3-NRJS-csv",
+   "query": "The NRJS schedule was received only as CSV exports. Run the GIS schedule checks.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "submittals/NRJS/masterplan-schedule/DLUS.csv",
+    "submittals/NRJS/masterplan-schedule/Overall Summary.csv",
+    "submittals/NRJS/masterplan-schedule/Planning Assumptions.csv",
+    "submittals/NRJS/masterplan-schedule/Community Facilities.csv"
+   ],
+   "expected": [
+    "GIS-002: 167 plot rows; the reconciliation block below the table is ignored",
+    "GIS-013: plots 118-122 FAR 0.5 vs GFA = area",
+    "GIS-015: site area 1,032,067 vs 87,725 m2; density 5.4 vs about 64 persons/ha",
+    "no document number known: returns failed with the gap 'schedule document number' instead of inventing one"
+   ]
+  },
+  {
+   "id": "T4-rule-not-given",
+   "query": "Run the GIS schedule checks with a rules file that does not contain GIS-015.",
+   "files": [
+    "golden_set/seeded/rulebook/rules_GIS_without_015.json",
+    "submittals/NMAR/masterplan-schedule/LDIP-RCRC-SAP-02-NMAR-MPL-SCH-00001.xlsx"
+   ],
+   "expected": [
+    "GIS-015 not_run and listed in rules_skipped",
+    "no GIS-015 finding",
+    "no tolerance typed by the agent"
+   ]
+  }
+ ]
+}
