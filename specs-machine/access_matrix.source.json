@@ -1,0 +1,171 @@
+{
+  "matrix_source_version": "0.2.0",
+  "source": "AICC-BIM-SPC-0002 Rev E §5 (access matrix), narrowed by AICC-BIM-SPC-0005 Rev C §5 (per-agent reads/writes), §5.0.1, §7.2-7.3",
+  "status": "AGREED form (P-S3-12, owner 30 Sep 2026): agent_type is plugin-qualified; absent agent_type = main session",
+  "plugin_name": "ldip-design-review",
+  "agent_type_form": "qualified",
+  "agent_type_note": "Hook input agent_type = \"<plugin_name>:<agent>\" for plugin sub-agents; the key is absent in the main session (A1-03, A1-04). Bare names are not accepted.",
+  "placeholders": {
+    "{site}": "active run site key (QRWN|NRJS|NMAR)",
+    "{sub}": "active run sub-id",
+    "{run}": "active run run-id",
+    "{plugin_root}": "absolute plugin root (CLAUDE_PLUGIN_ROOT)"
+  },
+  "deny_always": [
+    "golden_set/answer_key/**"
+  ],
+  "deny_subagents": [
+    "golden_set/results/**"
+  ],
+  "agents": {
+    "orchestrator": {
+      "main_session": true,
+      "read": [
+        "submittals/**",
+        "rulebook/**",
+        "0.ai_context/**",
+        "findings/{run}/**",
+        "runs/**",
+        "outputs/**",
+        "golden_set/inputs/**",
+        "golden_set/seeded/**"
+      ],
+      "deny_read_during_run": [
+        "findings/*/reasoning/**"
+      ],
+      "write": [
+        "runs/{run}/**",
+        "runs/_active_run.json"
+      ],
+      "bash_scripts": [
+        "{plugin_root}/scripts/run_manifest.py",
+        "{plugin_root}/scripts/snapshot.py",
+        "{plugin_root}/scripts/format_check.py"
+      ],
+      "outside_run": "unrestricted except deny_always"
+    },
+    "intake-batch": {
+      "read": [
+        "submittals/{site}/{sub}/**",
+        "0.ai_context/{site}/{sub}/b*/**"
+      ],
+      "read_test_mode": [
+        "golden_set/inputs/**",
+        "golden_set/seeded/**"
+      ],
+      "write": [
+        "0.ai_context/{site}/{sub}/b*/**"
+      ],
+      "bash_skills": [
+        "extracting-dwg-data",
+        "extracting-pdf-drawings"
+      ]
+    },
+    "intake-package": {
+      "read": [
+        "submittals/{site}/{sub}/**",
+        "0.ai_context/{site}/{sub}/**",
+        "0.ai_context/{site}/*/package.json",
+        "rulebook/**",
+        "findings/{run}/candidates/intake.json",
+        "findings/{run}/reasoning/intake.md",
+        "findings/{run}/evidence/intake/**"
+      ],
+      "read_test_mode": [
+        "golden_set/inputs/**",
+        "golden_set/seeded/**"
+      ],
+      "write": [
+        "0.ai_context/{site}/{sub}/package.json",
+        "0.ai_context/{site}/{sub}/rev_diff.json",
+        "findings/{run}/candidates/intake.json",
+        "findings/{run}/reasoning/intake.md",
+        "findings/{run}/evidence/intake/**"
+      ],
+      "bash_skills": [
+        "controlling-submittal-package",
+        "comparing-drawing-revisions",
+        "applying-ldip-rulebook"
+      ]
+    },
+    "gis-cadastral": {
+      "read": [
+        "0.ai_context/{site}/{sub}/**",
+        "submittals/{site}/**",
+        "rulebook/**",
+        "findings/{run}/candidates/gis.json",
+        "findings/{run}/reasoning/gis.md",
+        "findings/{run}/evidence/gis/**"
+      ],
+      "read_test_mode": [
+        "golden_set/inputs/**",
+        "golden_set/seeded/**"
+      ],
+      "write": [
+        "findings/{run}/candidates/gis.json",
+        "findings/{run}/reasoning/gis.md",
+        "findings/{run}/evidence/gis/**"
+      ],
+      "bash_skills": [
+        "checking-cadastral-geometry",
+        "applying-ldip-rulebook"
+      ]
+    },
+    "verifier": {
+      "read": [
+        "findings/{run}/candidates/**",
+        "findings/{run}/evidence/**",
+        "findings/{run}/verified.json",
+        "0.ai_context/**",
+        "submittals/{site}/**",
+        "rulebook/**"
+      ],
+      "read_test_mode": [
+        "golden_set/inputs/**",
+        "golden_set/seeded/**"
+      ],
+      "deny_read": [
+        "findings/*/reasoning/**"
+      ],
+      "write": [
+        "findings/{run}/verified.json",
+        "findings/{run}/evidence/verifier/**"
+      ],
+      "bash_skills": [
+        "verifying-review-findings",
+        "applying-ldip-rulebook",
+        "extracting-pdf-drawings"
+      ]
+    },
+    "outputs-register": {
+      "read": [
+        "findings/{run}/verified.json",
+        "findings/{run}/evidence/**",
+        "0.ai_context/{site}/{sub}/package.json",
+        "runs/{run}/manifest.json",
+        "outputs/register.xlsx",
+        "outputs/{run}/**"
+      ],
+      "write": [
+        "outputs/register.xlsx",
+        "outputs/register.tmp.xlsx",
+        "outputs/{run}/**"
+      ],
+      "bash_skills": [
+        "drafting-review-correspondence",
+        "tracking-review-register",
+        "generating-review-reports"
+      ]
+    },
+    "source-locator": {
+      "no_run_required": true,
+      "read_anywhere": true,
+      "write": [
+        "_index/**"
+      ],
+      "bash_skills": [
+        "locating-project-sources"
+      ]
+    }
+  }
+}

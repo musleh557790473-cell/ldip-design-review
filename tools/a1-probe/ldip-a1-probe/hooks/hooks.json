@@ -1,0 +1,29 @@
+{
+  "description": "LDIP A1 probe hooks: log every event with agent_type; deny any tool call that names A1_DENY_SENTINEL; inject context at SubagentStart.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/probe_hook.py\"", "timeout": 15 }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/probe_hook.py\"", "timeout": 15 }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/probe_hook.py\"", "timeout": 15 }
+        ]
+      }
+    ]
+  }
+}

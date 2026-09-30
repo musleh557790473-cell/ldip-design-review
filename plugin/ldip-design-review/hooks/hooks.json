@@ -1,0 +1,13 @@
+{
+  "description": "ldip-design-review L2 guard (SPC-0005 §7): per-agent read/write/Bash allowlist from access_matrix.json; fail-closed.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Glob|Grep|Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 20 }
+        ]
+      }
+    ]
+  }
+}
