@@ -1,0 +1,59 @@
+{
+ "template_version": "1.0",
+ "source": {
+  "path": "submittals/<SITE>/<sub-id>/<file>.dwg",
+  "sha256": "<sha256>",
+  "bytes": 0,
+  "document_no": null,
+  "revision": null,
+  "file_type": "dwg"
+ },
+ "extractor": {
+  "skill": "extracting-dwg-data",
+  "script": "extract_dxf.py",
+  "version": "<version>",
+  "converter": {
+   "name": "<ezdwg|oda|accoreconsole>",
+   "version": "<version>"
+  }
+ },
+ "crs": {
+  "declared": null,
+  "units": "unknown",
+  "insunits": 0
+ },
+ "title_block": {
+  "document_no": null,
+  "revision": null,
+  "title": null,
+  "date": null,
+  "status": null,
+  "source_ref": "handle <h> (block <name>, paper:<layout>)"
+ },
+ "content": {
+  "header": {},
+  "layers": [],
+  "blocks": [],
+  "texts": [],
+  "dimensions": [],
+  "polylines": [],
+  "open_polylines_by_layer": {},
+  "xrefs": [],
+  "images": [],
+  "fonts": [],
+  "aecc": {},
+  "origin_signals": {
+   "confidence": "Probable"
+  },
+  "layouts": []
+ },
+ "warnings": [
+  {
+   "code": "<CODE>",
+   "detail": "<text>"
+  }
+ ],
+ "meta": {
+  "extracted_at": "<ISO 8601 +03:00>"
+ }
+}

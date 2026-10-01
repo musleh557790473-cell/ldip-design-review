@@ -317,3 +317,51 @@ def test_access_matrix_is_generated_copy(tmp_path):
     rc, _ = sh([PLUGIN / "scripts/build_access_matrix.py", "--source", REPO / "specs-machine/access_matrix.source.json", "--out", out])
     assert rc == 0
     assert json.loads(out.read_text()) == json.loads((PLUGIN / "hooks/access_matrix.json").read_text())
+
+
+# ------------------------------------------------------------------ documented commands pass the guard
+def test_documented_orchestrator_and_agent_commands_allowed(root):
+    """Every Bash line /review-submittal and the agents are told to run passes guard.py (P = plugin scripts)."""
+    P, S = f"{PLUGIN}/scripts", f"{PLUGIN}/skills"
+    R = f"runs/{RUN}"
+    main_cmds = [
+        f'python "{P}/run_manifest.py" event --root . --run {RUN} --agent gis-cadastral --event start --instance 1',
+        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_before.json',
+        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_after.json --reuse {R}/snapshots/s2_before.json',
+        f'python "{P}/snapshot.py" diff --before {R}/snapshots/s2_before.json --after {R}/snapshots/s2_after.json '
+        f'--agent gis-cadastral --matrix "${{CLAUDE_PLUGIN_ROOT}}/hooks/access_matrix.json" --site QRWN --sub T0001 '
+        f'--run {RUN} --out {R}/snapshots/s2_l3.json',
+        f'python "{P}/format_check.py" gis-cadastral {RUN} --root . --summary {R}/returns/s2_1.json --instance 1 --attempt 1',
+        f'python "{P}/run_manifest.py" event --root . --run {RUN} --agent gis-cadastral --event rule_skipped '
+        "--detail '{\"rule_id\": \"GIS-004\", \"reason\": \"inactive\"}'",
+    ]
+    for c in main_cmds:
+        assert guard(root, "Bash", {"command": c}) == "allow", c
+    assert guard(root, "Write", {"file_path": f"{R}/returns/s2_1.json"}) == "allow"
+    E = f"{F}/evidence"
+    agent_cmds = {
+        "gis-cadastral": [
+            f'python "{S}/applying-ldip-rulebook/scripts/get_rules.py" --rulebook rulebook/rules_v0.json --agent GIS '
+            f'--out {E}/gis/rules_GIS.json',
+            f'python "{S}/checking-cadastral-geometry/scripts/read_dlus.py" --file submittals/QRWN/T0001/s.xlsx '
+            f'--sheet DLUS --out {E}/gis/dlus.json',
+            f'python "{S}/checking-cadastral-geometry/scripts/build_candidates.py" --results {E}/gis/dlus.json '
+            f'--rules {E}/gis/rules_GIS.json --run {RUN} --site QRWN --sub T0001 --document-no X '
+            f'--out {F}/candidates/gis.json',
+        ],
+        "verifier": [
+            f'python "{S}/verifying-review-findings/scripts/recheck.py" --candidates {F}/candidates/gis.json '
+            f'--out {E}/verifier/recheck.json',
+            f'python "{S}/verifying-review-findings/scripts/set_status.py" --candidates {F}/candidates/gis.json '
+            f'--recheck {E}/verifier/recheck.json --rulebook rulebook/rules_v0.json --out {F}/verified.json',
+        ],
+        "intake-batch": [
+            f'python "{S}/extracting-dwg-data/scripts/convert.py" --engine oda --dwg submittals/QRWN/T0001/A-001.dwg '
+            f'--out 0.ai_context/QRWN/T0001/b01/A-001.dxf --log 0.ai_context/QRWN/T0001/b01/A-001.convert.json',
+        ],
+    }
+    for agent, cmds in agent_cmds.items():
+        for c in cmds:
+            assert guard(root, "Bash", {"command": c}, agent_type=Q + agent) == "allow", (agent, c)
+    # the Verifier cannot run a GIS finder script
+    assert guard(root, "Bash", {"command": agent_cmds["gis-cadastral"][1]}, agent_type=Q + "verifier") == "deny"

@@ -1,0 +1,56 @@
+{
+ "skill": "verifying-review-findings",
+ "note": "Data paths only (brief \u00a710.2). Expectations from SPC-0006 \u00a74.7.5. Run on opus (SPC-0005 \u00a75.7 model) and sonnet (B7).",
+ "evals": [
+  {
+   "id": "T1-QRWN-duplicates",
+   "query": "Verify the GIS candidates of run QRWN-TEST-20260930T1200.",
+   "files": [
+    "findings/QRWN-TEST-20260930T1200/candidates/gis.json",
+    "submittals/QRWN/masterplan-schedule/LDIP-RCRC-SAP-01-QRWN-MPL-SCH-00001.xlsx",
+    "rulebook/rules_v0.json"
+   ],
+   "expected": [
+    "recheck.py, set_status.py, validate_verified.py run in order",
+    "GIS-001 duplicate Plot ID: re-read agrees, Confirmed, High",
+    "8 findings in verified.json, none added or merged",
+    "reasoning/gis.md never read"
+   ]
+  },
+  {
+   "id": "T2-seeded-change",
+   "query": "Verify the NMAR GIS candidates; the schedule copy in this test has one DLUS value changed.",
+   "files": [
+    "golden_set/seeded/NMAR/LDIP-RCRC-SAP-02-NMAR-MPL-SCH-00001_altered.xlsx"
+   ],
+   "expected": [
+    "the affected finding: recheck disagrees, Probable",
+    "no retry and no edit of the candidate",
+    "the differing cell named in the summary"
+   ]
+  },
+  {
+   "id": "T3-advisory-cap",
+   "query": "A candidate cites advisory GIS-008 with proposed_status Confirmed. Verify it.",
+   "files": [
+    "golden_set/seeded/candidates/gis_cap_test.json",
+    "rulebook/rules_v0.json"
+   ],
+   "expected": [
+    "status Probable (advisory cap)",
+    "validate_verified.py passes FC5"
+   ]
+  },
+  {
+   "id": "T4-colour-only",
+   "query": "Verify a candidate whose only evidence is PDF colour.",
+   "files": [
+    "golden_set/seeded/candidates/colour_only.json"
+   ],
+   "expected": [
+    "recheck not_rechecked",
+    "status Probable, confidence Low, never Confirmed (V5)"
+   ]
+  }
+ ]
+}

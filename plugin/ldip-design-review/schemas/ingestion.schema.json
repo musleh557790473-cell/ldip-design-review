@@ -1,0 +1,820 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://aicc.local/ldip/ingestion.schema.json",
+ "title": "LDIP common ingestion file (*.dwg.json, *.pdf.json) \u2014 SPC-0006 Rev B \u00a72.4, \u00a74.1.4",
+ "description": "template_version 1.0. The PDF content (\u00a74.2.4) is checked only for type until skill 2 defines it.",
+ "type": "object",
+ "required": [
+  "template_version",
+  "source",
+  "extractor",
+  "crs",
+  "title_block",
+  "content",
+  "warnings",
+  "meta"
+ ],
+ "additionalProperties": false,
+ "properties": {
+  "template_version": {
+   "const": "1.0"
+  },
+  "source": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 250
+    },
+    "sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    },
+    "bytes": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "document_no": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "revision": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "file_type": {
+     "enum": [
+      "dwg",
+      "pdf"
+     ]
+    }
+   },
+   "required": [
+    "path",
+    "sha256",
+    "bytes",
+    "document_no",
+    "revision",
+    "file_type"
+   ],
+   "additionalProperties": false
+  },
+  "extractor": {
+   "type": "object",
+   "properties": {
+    "skill": {
+     "enum": [
+      "extracting-dwg-data",
+      "extracting-pdf-drawings"
+     ]
+    },
+    "script": {
+     "type": "string"
+    },
+    "version": {
+     "type": "string"
+    },
+    "converter": {
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "version": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "version"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "required": [
+    "skill",
+    "script",
+    "version",
+    "converter"
+   ],
+   "additionalProperties": false
+  },
+  "crs": {
+   "type": "object",
+   "properties": {
+    "declared": {
+     "type": [
+      "string",
+      "null"
+     ],
+     "pattern": "^EPSG:[0-9]{4,5}$"
+    },
+    "units": {
+     "enum": [
+      "m",
+      "mm",
+      "unknown"
+     ]
+    },
+    "insunits": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "declared",
+    "units",
+    "insunits"
+   ],
+   "additionalProperties": false
+  },
+  "title_block": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "document_no": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "revision": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "title": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "date": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "status": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "source_ref": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "document_no",
+      "revision",
+      "title",
+      "date",
+      "status",
+      "source_ref"
+     ],
+     "additionalProperties": false
+    }
+   ]
+  },
+  "content": {
+   "type": "object"
+  },
+  "warnings": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "properties": {
+     "code": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_]+$"
+     },
+     "detail": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "detail"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "meta": {
+   "type": "object",
+   "properties": {
+    "extracted_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   },
+   "required": [
+    "extracted_at"
+   ],
+   "additionalProperties": true
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "source": {
+      "properties": {
+       "file_type": {
+        "const": "dwg"
+       }
+      }
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "content": {
+      "type": "object",
+      "properties": {
+       "header": {
+        "type": "object",
+        "properties": {
+         "insunits": {
+          "type": "integer"
+         },
+         "measurement": {
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "extmin": {
+          "type": "array",
+          "items": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "minItems": 3,
+          "maxItems": 3
+         },
+         "extmax": {
+          "type": "array",
+          "items": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "minItems": 3,
+          "maxItems": 3
+         },
+         "acadver_source": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "acadver_dxf": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "insunits",
+         "measurement",
+         "extmin",
+         "extmax",
+         "acadver_source",
+         "acadver_dxf"
+        ],
+        "additionalProperties": false
+       },
+       "layers": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "color": {
+           "type": "integer"
+          },
+          "linetype": {
+           "type": "string"
+          },
+          "frozen": {
+           "type": "boolean"
+          },
+          "off": {
+           "type": "boolean"
+          },
+          "locked": {
+           "type": "boolean"
+          },
+          "entity_count": {
+           "type": "integer",
+           "minimum": 0
+          }
+         },
+         "required": [
+          "name",
+          "color",
+          "linetype",
+          "frozen",
+          "off",
+          "locked",
+          "entity_count"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "blocks": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "layer": {
+           "type": "string"
+          },
+          "insert": {
+           "type": "array",
+           "items": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "minItems": 3,
+           "maxItems": 3
+          },
+          "scale": {
+           "type": "array",
+           "items": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "minItems": 3,
+           "maxItems": 3
+          },
+          "rotation": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "attributes": {
+           "type": "object",
+           "additionalProperties": {
+            "type": "string"
+           }
+          },
+          "handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "space": {
+           "type": "string",
+           "pattern": "^(model|paper:.+)$"
+          }
+         },
+         "required": [
+          "name",
+          "layer",
+          "insert",
+          "scale",
+          "rotation",
+          "attributes",
+          "handle",
+          "space"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "texts": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "type": {
+           "enum": [
+            "TEXT",
+            "MTEXT"
+           ]
+          },
+          "text": {
+           "type": "string"
+          },
+          "layer": {
+           "type": "string"
+          },
+          "insert": {
+           "type": "array",
+           "items": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "minItems": 3,
+           "maxItems": 3
+          },
+          "height": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "rotation": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "space": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "text",
+          "layer",
+          "insert",
+          "height",
+          "rotation",
+          "handle",
+          "space"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "dimensions": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "dimtype": {
+           "type": "integer"
+          },
+          "measurement": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "text": {
+           "type": "string"
+          },
+          "override": {
+           "type": "boolean"
+          },
+          "override_kind": {
+           "enum": [
+            "measured",
+            "measured_with_prefix_suffix",
+            "text_override",
+            "suppressed"
+           ]
+          },
+          "layer": {
+           "type": "string"
+          },
+          "handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "space": {
+           "type": "string"
+          },
+          "text_value": {
+           "type": "number"
+          },
+          "text_differs": {
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "dimtype",
+          "measurement",
+          "text",
+          "override",
+          "override_kind",
+          "layer",
+          "handle",
+          "space"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "polylines": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "type": {
+           "enum": [
+            "LWPOLYLINE",
+            "POLYLINE"
+           ]
+          },
+          "layer": {
+           "type": "string"
+          },
+          "handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "vertices": {
+           "type": "array",
+           "items": {
+            "type": "array",
+            "items": {
+             "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+           },
+           "minItems": 2
+          },
+          "n_vertices": {
+           "type": "integer"
+          },
+          "has_bulge": {
+           "type": "boolean"
+          },
+          "elevation": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "area": {
+           "type": "number",
+           "minimum": 0
+          }
+         },
+         "required": [
+          "type",
+          "layer",
+          "handle",
+          "vertices",
+          "n_vertices",
+          "has_bulge",
+          "elevation",
+          "area"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "open_polylines_by_layer": {
+        "type": "object",
+        "additionalProperties": {
+         "type": "integer"
+        }
+       },
+       "xrefs": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "saved_path": {
+           "type": "string"
+          },
+          "overlay": {
+           "type": "boolean"
+          },
+          "resolved": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "name",
+          "saved_path",
+          "overlay",
+          "resolved"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "images": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "filename": {
+           "type": "string"
+          },
+          "resolved": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          }
+         },
+         "required": [
+          "filename",
+          "resolved",
+          "handle"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "fonts": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "style": {
+           "type": "string"
+          },
+          "font": {
+           "type": "string"
+          },
+          "bigfont": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "resolved": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "style",
+          "font",
+          "bigfont",
+          "resolved"
+         ],
+         "additionalProperties": false
+        }
+       },
+       "aecc": {
+        "type": "object",
+        "properties": {
+         "aecc_class_count": {
+          "type": "integer"
+         },
+         "aecc_classes": {
+          "type": "array"
+         },
+         "aecc_entities_by_type": {
+          "type": "object"
+         },
+         "aecc_objects_by_type": {
+          "type": "object"
+         },
+         "proxy_entities_by_class": {
+          "type": "object",
+          "additionalProperties": {
+           "type": "integer"
+          }
+         },
+         "proxy_objects_by_class": {
+          "type": "object",
+          "additionalProperties": {
+           "type": "integer"
+          }
+         },
+         "aecc_proxy_entity_count": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "proxy_count": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "civil3d_native": {
+          "type": "boolean"
+         },
+         "saved_in_civil3d": {
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "aecc_class_count",
+         "aecc_classes",
+         "aecc_entities_by_type",
+         "aecc_objects_by_type",
+         "proxy_entities_by_class",
+         "proxy_objects_by_class",
+         "aecc_proxy_entity_count",
+         "proxy_count",
+         "civil3d_native",
+         "saved_in_civil3d"
+        ],
+        "additionalProperties": false
+       },
+       "origin_signals": {
+        "type": "object",
+        "properties": {
+         "confidence": {
+          "const": "Probable"
+         }
+        },
+        "required": [
+         "confidence"
+        ],
+        "additionalProperties": true
+       },
+       "layouts": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "taborder": {
+           "type": "integer"
+          },
+          "title_block_candidate": {
+           "type": [
+            "object",
+            "null"
+           ]
+          },
+          "inserts_with_attributes": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "name",
+          "taborder",
+          "title_block_candidate",
+          "inserts_with_attributes"
+         ],
+         "additionalProperties": false
+        }
+       }
+      },
+      "required": [
+       "header",
+       "layers",
+       "blocks",
+       "texts",
+       "dimensions",
+       "polylines",
+       "open_polylines_by_layer",
+       "xrefs",
+       "images",
+       "fonts",
+       "aecc",
+       "origin_signals",
+       "layouts"
+      ],
+      "additionalProperties": false
+     },
+     "extractor": {
+      "properties": {
+       "skill": {
+        "const": "extracting-dwg-data"
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

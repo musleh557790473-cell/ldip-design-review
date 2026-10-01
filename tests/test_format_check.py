@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "plugin" / "ldip-design-review"
 PY = sys.executable
@@ -259,18 +261,61 @@ def test_outputs_fc8(root):
 
 
 # ------------------------------------------------------------------ intake-batch
-def test_intake_batch_c3(root):
+def batch_fixture(root, tmp_path):
+    """One DWG taken through skill 1 (stand-in converter) into b01, plus a valid batch manifest."""
+    import test_dwg_skill as sk1
+    sub = root / "submittals/QRWN/T0001"
+    dwg = sk1.fake_dwg(sub / "X-001.dwg")
     b = root / "0.ai_context/QRWN/T0001/b01"
-    b.mkdir(parents=True)
-    (b / "batch_manifest.json").write_text(json.dumps({"files": [{"output": "A-001.pdf.json"}]}))
-    (b / "A-001.pdf.json").write_text("{}")
-    files = ["0.ai_context/QRWN/T0001/b01/batch_manifest.json", "0.ai_context/QRWN/T0001/b01/A-001.pdf.json"]
-    rc, out = fc(root, "intake-batch", summary(root, "intake-batch", files))
+    exe = sk1.fake_oda(tmp_path, sk1.make_dxf(tmp_path / "prep.dxf"))
+    assert sk1.run("convert.py", "--engine", "oda", "--dwg", dwg, "--out", b / "X-001.dxf",
+                   "--log", b / "X-001.convert.json", "--exe", exe)[0] == 0
+    assert sk1.run("extract_dxf.py", "--dxf", b / "X-001.dxf", "--dwg", dwg, "--convert-log", b / "X-001.convert.json",
+                   "--out", b / "X-001.dwg.json", "--source-path", "submittals/QRWN/T0001/X-001.dwg")[0] == 0
+    m = {"run_id": RUN, "site": "QRWN", "sub_id": "T0001", "batch": "b01",
+         "files": [{"path": "submittals/QRWN/T0001/X-001.dwg", "sha256": sha(dwg), "type": "dwg", "status": "extracted",
+                    "output": "X-001.dwg.json", "intermediates": ["X-001.dxf", "X-001.convert.json"], "error": None}],
+         "converter": {"name": "oda", "version": "unknown"}, "counts": {"extracted": 1, "failed": 0, "skipped": 0}}
+    (b / "batch_manifest.json").write_text(json.dumps(m))
+    files = [f"0.ai_context/QRWN/T0001/b01/{n}" for n in
+             ("batch_manifest.json", "X-001.dwg.json", "X-001.dxf", "X-001.convert.json")]
+    return b, m, files
+
+
+def test_intake_batch_c3_and_s2(root, tmp_path):
+    b, m, files = batch_fixture(root, tmp_path)
+    s = summary(root, "intake-batch", files)
+    rc, out = fc(root, "intake-batch", s)
     e = last_entry(root)
-    assert out["result"] == "pass" and e["checks"]["S2"] == "not_run" and any("ingestion schemas" in n for n in e["notes"])
-    (b / "extra.json").write_text("{}")
-    fc(root, "intake-batch", summary(root, "intake-batch", files))
+    assert out["result"] == "pass", out
+    assert e["checks"]["S2"] == "pass" and e["checks"]["C3"] == "pass"
+    (b / "extra.json").write_text("{}")                                     # not in the manifest → C3
+    fc(root, "intake-batch", s)
     assert failed(root) == {"C3"}
+    (b / "extra.json").unlink()
+
+
+def test_intake_batch_s2_rejects(root, tmp_path):
+    b, m, files = batch_fixture(root, tmp_path)
+    s = summary(root, "intake-batch", files)
+    cases = [(lambda d: d["counts"].update(extracted=2), "counts"),
+             (lambda d: d.update(sub_id="T9999"), "sub_id"),
+             (lambda d: d["files"][0].update(sha256="0" * 64), "sha256"),
+             (lambda d: d["files"][0].update(status="failed"), "error")]
+    for mutate, why in cases:
+        d = json.loads(json.dumps(m))
+        mutate(d)
+        (b / "batch_manifest.json").write_text(json.dumps(d))
+        rc, out = fc(root, "intake-batch", s)
+        e = last_entry(root)
+        assert "S2" in failed(root), why
+        assert any(why in json.dumps(x) for x in e.get("errors", e)), (why, e)
+    (b / "batch_manifest.json").write_text(json.dumps(m))
+    ing = json.loads((b / "X-001.dwg.json").read_text())
+    ing["content"].pop("aecc")
+    (b / "X-001.dwg.json").write_text(json.dumps(ing))
+    fc(root, "intake-batch", s)
+    assert failed(root) == {"S2"}
 
 
 def test_retry_errors_and_log_accumulate(root):

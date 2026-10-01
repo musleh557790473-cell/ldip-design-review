@@ -1,0 +1,68 @@
+{
+ "skill": "extracting-dwg-data",
+ "note": "Data paths only; the DWGs are copied to golden_set/inputs/ before the run (SPC-0006 §2.6), never to Git. Expectations from SPC-0006 §4.1.8. Run on sonnet and opus (B7).",
+ "evals": [
+  {
+   "id": "T1-QRWN-DMP",
+   "query": "Extract the DWG in batch b01 of this run with engine oda and write the batch manifest.",
+   "files": [
+    "golden_set/inputs/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.dwg"
+   ],
+   "source_in_owner_folder": "TAWAZUN PROGRAM/Ongoing/PARSON/DMP/LDIP Package 1 Al Qairwan DMP/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.dwg",
+   "expected": [
+    "convert, extract, validate run in that order",
+    "title-block attributes read (document number, revision)",
+    "aecc result recorded",
+    "batch_manifest.json with status extracted"
+   ]
+  },
+  {
+   "id": "T2-Civil3D-positive",
+   "query": "Extract this Civil 3D surface drawing and report whether it is Civil 3D native.",
+   "files": [
+    "golden_set/inputs/Qairawan NGL and Grading Surface (Civil 3D).dwg"
+   ],
+   "source_in_owner_folder": "TAWAZUN PROGRAM/AICC/Drawings/Al-QIRWAN/Qairawan NGL and Grading Surface (Civil 3D).dwg",
+   "expected": [
+    "aecc.civil3d_native true with engine oda (positive control)",
+    "with engine ezdwg: warning AECC_DETECTION_LIMITED and no claim that the file is not Civil 3D"
+   ]
+  },
+  {
+   "id": "T3-AutoCAD-plan",
+   "query": "Extract the Al Narjis centre-line plan.",
+   "files": [
+    "golden_set/inputs/ACAD-AL NARJIS PLAN WITH CENTER LINES.dwg"
+   ],
+   "expected": [
+    "aecc.civil3d_native false",
+    "origin_signals reported with confidence Probable only"
+   ]
+  },
+  {
+   "id": "T4-NRJS-plots",
+   "query": "Extract the NRJS DMP drawing so the plot polygons and labels can be matched later.",
+   "files": [
+    "golden_set/inputs/LDIP-RCRC-SAP-01-NRJS-MPL-DWG-00-10001.dwg"
+   ],
+   "source_in_owner_folder": "TAWAZUN PROGRAM/Ongoing/PARSON/DMP/2026.08.17_AlNarjis DMP/CAD & PDF/LDIP-RCRC-SAP-01-NRJS-MPL-DWG-00-10001.dwg",
+   "expected": [
+    "closed polylines with areas and texts or block attributes carrying plot labels",
+    "input for SPC-0004 R8 (how plot IDs are carried)"
+   ]
+  },
+  {
+   "id": "T5-failed-file",
+   "query": "The batch has a corrupt DWG and a good one. Process the batch.",
+   "files": [
+    "golden_set/seeded/dwg/corrupt.dwg",
+    "golden_set/inputs/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.dwg"
+   ],
+   "expected": [
+    "corrupt file recorded as failed with the script's code and detail",
+    "good file extracted",
+    "no hand-written JSON; no engine switch"
+   ]
+  }
+ ]
+}

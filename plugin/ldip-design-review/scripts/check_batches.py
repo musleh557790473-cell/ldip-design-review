@@ -3,15 +3,15 @@
 
 The guard lets every intake-batch instance write any b<nn>/ folder of its submittal, because a
 hook cannot tell which batch an instance owns. This check closes the gap after the parallel step:
-every file in 0.ai_context/<SITE>/<sub-id>/b<nn>/ must be batch_manifest.json or an output listed
-in THAT folder's batch_manifest.json, and no manifest may list an output in another batch folder.
+every file in 0.ai_context/<SITE>/<sub-id>/b<nn>/ must be batch_manifest.json, or an output or an
+intermediate (DXF, converter log — P-S3-19) listed in THAT folder's batch_manifest.json, and no manifest may list an output in another batch folder.
 Intended to be called by format_check.py after the intake-batch step.
 
 Usage: python check_batches.py --root R --site S --sub ID [--out FILE]
 Prints a one-line JSON summary; exit 0 when the check ran (pass/fail in the result), 2 input error.
 No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -41,16 +41,15 @@ def check(root, site, sub):
             continue
         expected = {f"{rel_b}/batch_manifest.json"}
         for f in m.get("files", []):
-            out = f.get("output")
-            if not out:
-                continue
-            out_rel = str(PurePosixPath(str(out).replace("\\", "/")))
-            if "/" not in out_rel:
-                out_rel = f"{rel_b}/{out_rel}"
-            if not out_rel.startswith(rel_b + "/"):
-                violations.append({"batch": bdir.name, "issue": "manifest lists an output in another folder",
-                                   "path": out_rel})
-            expected.add(out_rel)
+            listed = ([f.get("output")] if f.get("output") else []) + list(f.get("intermediates") or [])
+            for out in listed:
+                out_rel = str(PurePosixPath(str(out).replace("\\", "/")))
+                if "/" not in out_rel:
+                    out_rel = f"{rel_b}/{out_rel}"
+                if not out_rel.startswith(rel_b + "/"):
+                    violations.append({"batch": bdir.name, "issue": "manifest lists an output in another folder",
+                                       "path": out_rel})
+                expected.add(out_rel)
         for fp in sorted(bdir.rglob("*")):
             if fp.is_file():
                 rel = fp.relative_to(root).as_posix()

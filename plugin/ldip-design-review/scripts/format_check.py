@@ -9,7 +9,7 @@ Usage:
 --summary is the agent's final message (SPC-0005 §4.8) saved by the Orchestrator as a file.
 
 Checks (SPC-0005 §6.3): S0 return summary · S1 files / .tmp / OneDrive conflict copies · S2 JSON
-Schema + identity · S3 script exit codes · FC1 confidence = strongest evidence tier · FC2 earlier
+Schema + identity (intake-batch: batch manifests and ingestion files, P-S3-19) · S3 script exit codes · FC1 confidence = strongest evidence tier · FC2 earlier
 fields unchanged · FC3 artifact hashes · FC4 input hashes · FC5 rule exists, not inactive, status
 within the rule cap · FC7 every candidate once in verified.json · FC8 every verified finding
 registered, gate PENDING · C3 batch ownership (P-S3-4, intake-batch).
@@ -19,7 +19,7 @@ Every result is appended to runs/<run>/format_checks.json. The one-line stdout s
 on a retry (SPC-0005 §6.5). Exit 0 = the check ran; 2 = input error. This script never reads
 findings/<run>/reasoning/**. No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -41,6 +41,8 @@ PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or HERE.parent)
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "applying-ldip-rulebook" / "scripts"))
 from rulebook_lib import cap_errors  # noqa: E402
 SCHEMA_PATH = PLUGIN_ROOT / "schemas" / "finding.schema.json"
+INGESTION_SCHEMA = PLUGIN_ROOT / "schemas" / "ingestion.schema.json"
+BATCH_SCHEMA = PLUGIN_ROOT / "schemas" / "batch_manifest.schema.json"
 MATRIX_PATH = PLUGIN_ROOT / "hooks" / "access_matrix.json"
 
 SUMMARY_KEYS = ("agent", "instance", "run_id", "status", "files_written", "counts", "rules_skipped",
@@ -87,6 +89,68 @@ def load_validator():
     schema = read_json(SCHEMA_PATH)
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+def validator_for(path):
+    try:
+        from jsonschema import Draft202012Validator, FormatChecker
+    except ImportError as exc:
+        raise ScriptError(EXIT_DEPENDENCY, "jsonschema is not installed") from exc
+    return Draft202012Validator(read_json(path), format_checker=FormatChecker())
+
+
+def check_ingestion(rep, root, manifest):
+    """S2 for intake-batch (P-S3-19): each b<nn>/batch_manifest.json against batch_manifest.schema.json
+    with run identity and counts; each *.dwg.json / *.pdf.json against ingestion.schema.json, with the
+    file name matching its source and the source hash matching the manifest entry."""
+    rep.run("S2")
+    base = root / "0.ai_context" / manifest["site"] / manifest["sub_id"]
+    vb, vi = validator_for(BATCH_SCHEMA), validator_for(INGESTION_SCHEMA)
+    for bdir in sorted(p for p in base.glob("b*") if p.is_dir()):
+        mp = bdir / "batch_manifest.json"
+        rel_m = mp.relative_to(root).as_posix()
+        if not mp.is_file():
+            continue                                  # reported by C3
+        try:
+            m = read_json(mp)
+        except ScriptError as e:
+            rep.fail("S2", f"batch manifest unreadable: {e.detail}", file=rel_m)
+            continue
+        errs = list(vb.iter_errors(m))
+        for e in errs[:20]:
+            rep.fail("S2", e.message[:200], file=rel_m, path="/" + "/".join(map(str, e.absolute_path)))
+        if errs:
+            continue
+        for k, want in (("run_id", manifest.get("run_id")), ("site", manifest["site"]), ("sub_id", manifest["sub_id"]),
+                        ("batch", bdir.name)):
+            if want is not None and m[k] != want:
+                rep.fail("S2", f"{k} '{m[k]}' differs from the run ('{want}')", file=rel_m, path=f"/{k}")
+        tally = {s_: sum(1 for f in m["files"] if f["status"] == s_) for s_ in ("extracted", "failed", "skipped")}
+        if tally != m["counts"]:
+            rep.fail("S2", f"counts {m['counts']} differ from files[] {tally}", file=rel_m, path="/counts")
+        for i, f in enumerate(m["files"]):
+            if f["status"] != "extracted" or not f["output"]:
+                continue
+            out = str(f["output"]).replace("\\", "/")
+            op = root / out if "/" in out else bdir / out
+            rel_o = op.relative_to(root).as_posix() if op.is_relative_to(root) else out
+            if not op.is_file():
+                rep.fail("S2", "listed output not found", file=rel_m, path=f"/files/{i}/output")
+                continue
+            try:
+                ing = read_json(op)
+            except ScriptError as e:
+                rep.fail("S2", f"ingestion file unreadable: {e.detail}", file=rel_o)
+                continue
+            ierrs = list(vi.iter_errors(ing))
+            for e in ierrs[:20]:
+                rep.fail("S2", e.message[:200], file=rel_o, path="/" + "/".join(map(str, e.absolute_path)))
+            if ierrs:
+                continue
+            if op.name != Path(ing["source"]["path"]).name + ".json":
+                rep.fail("S2", f"file name should be {Path(ing['source']['path']).name}.json", file=rel_o)
+            if ing["source"]["sha256"] != f["sha256"]:
+                rep.fail("S2", "source.sha256 differs from the batch manifest entry", file=rel_o, path="/source/sha256")
 
 
 def rel(root, p):
@@ -324,7 +388,7 @@ def run_checks(agent, run, root, summary_path, host=None):
         cb = check_batches.check(root, manifest["site"], manifest["sub_id"])
         for v in cb["violations"]:
             rep.fail("C3", v["issue"], file=v.get("path"), path=v.get("batch"))
-        rep.skip("S2", "SPC-0006 ingestion schemas (*.dwg.json, *.pdf.json, batch_manifest.json) not yet built [GAP]")
+        check_ingestion(rep, root, manifest)
     if agent == "intake-package":
         rep.skip("S2-package", "package.json / rev_diff.json schemas not yet built [GAP]")
 

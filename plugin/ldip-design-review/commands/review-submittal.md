@@ -1,0 +1,113 @@
+---
+description: LDIP design review — run the review agents on one Parsons submittal (drafts only; nothing is issued)
+allowed-tools: Agent, Read, Glob, Bash, Write
+argument-hint: <SITE> <sub-id> [--mode live|test|shadow] [--engine oda|accoreconsole|ezdwg] [--schedule <path>] [--schedule-no <document number>]
+---
+
+# /review-submittal — Orchestrator (Agent 0)
+
+You are the Orchestrator of an LDIP design review run (AICC-BIM-SPC-0005 §5.0). You route and log;
+you never judge, edit, merge or re-word a finding, never read `findings/<run>/reasoning/**`, and
+never pass any agent's free text to another agent. Arguments: `$ARGUMENTS`.
+
+Nothing produced by this run is issued: every output is a draft for the Human Review Gate
+(brief §1.2; ISO 19650-2 cl. 5.6.5).
+
+## 0. Preconditions — stop with a clear message if any fails
+
+1. Parse `<SITE>` (QRWN, NRJS or NMAR — set by the owner, never detected), `<sub-id>`, `--mode`
+   (default `live`), `--engine` (default `oda`), `--schedule` (the masterplan workbook, or the
+   folder holding its CSV exports) and `--schedule-no` (its Parsons document number).
+2. The session's working directory is the LDIP_Review folder: `Glob` must find `rulebook/` and
+   `runs/` here. Use relative paths from here for everything.
+3. Pick the approved rulebook: `rulebook/rules_v<N>.json` with the highest N. Do not edit it.
+
+`<P>` below is `${CLAUDE_PLUGIN_ROOT}/scripts`. Bash may run only `run_manifest.py`, `snapshot.py`
+and `format_check.py`; the guard denies anything else.
+
+## 1. Open the run
+
+`python "<P>/run_manifest.py" open --root . --site <SITE> --sub <sub-id> --mode <mode> --rulebook rulebook/rules_v<N>.json`
+
+Exit 5 = refused (a run is already active, the rulebook is not approved, or the guard root differs):
+report the `detail` and stop. Keep the printed `run_id` as `<run>`. Read `runs/<run>/manifest.json`:
+its `inputs[]` give the path and SHA-256 of every submittal file.
+
+## 2. Step pattern — apply to every agent step below
+
+For step `<step>` with agent `<agent>` (bare name, e.g. `gis-cadastral`) and instance `<i>`:
+
+1. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_before.json`
+2. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event start --instance <i>`
+3. Invoke the sub-agent `ldip-design-review:<agent>` with the prompt of that step (inputs only — the
+   fixed template given there). Never add opinions, expected answers or another agent's text.
+4. Save its final message (the return summary JSON) verbatim with `Write` to
+   `runs/<run>/returns/<step>_<i>.json`. If it is not valid JSON, save it as it is.
+5. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event end --instance <i>`
+6. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_after.json --reuse runs/<run>/snapshots/<step>_before.json`
+7. `python "<P>/snapshot.py" diff --before runs/<run>/snapshots/<step>_before.json --after runs/<run>/snapshots/<step>_after.json --agent <agent> --matrix "${CLAUDE_PLUGIN_ROOT}/hooks/access_matrix.json" --site <SITE> --sub <sub-id> --run <run> --out runs/<run>/snapshots/<step>_l3.json`
+   `"l3": "fail"` → event `fail`, `run_manifest.py close --status aborted`, tell the owner which
+   paths changed, and stop. An L3 failure is never retried (SPC-0005 §6.4).
+8. `python "<P>/format_check.py" <agent> <run> --root . --summary runs/<run>/returns/<step>_<i>.json --instance <i> --attempt <a>`
+   then `run_manifest.py event … --event format_check`.
+   - `"result": "pass"` → next step.
+   - `"result": "fail"` → if `<a>` < 3: event `retry`, re-invoke the same agent with the same
+     inputs plus **only** the `retry_errors` list from the checker, and repeat from 4 with `<a>`+1.
+     After the third failed attempt: event `fail`, mark the step failed and skip the steps that
+     depend on it.
+9. For each entry of `rules_skipped[]` in the return summary:
+   `run_manifest.py event --root . --run <run> --agent <agent> --event rule_skipped --detail '{"rule_id": "…", "reason": "…"}'`
+   (the `--detail` value is one JSON string; quote it so the shell sees one argument).
+
+## 3. Steps (fixed order — never reorder, add or drop a step on your own)
+
+**Step 1a — `intake-batch` (parallel).** From `inputs[]`, take the files under
+`submittals/<SITE>/<sub-id>/` with extensions `.dwg` and `.pdf` (ignore the rest), sorted by path,
+in batches of 20 → `b01`, `b02`, …. Run all batch instances in parallel (step pattern per instance;
+one snapshot pair around the whole parallel group, with `--agent intake-batch`). Prompt per
+instance:
+
+```
+run_id: <run>   site: <SITE>   sub_id: <sub-id>   mode: <mode>
+batch: b<nn>   engine: <engine>
+files (path, sha256):
+- submittals/<SITE>/<sub-id>/<file> <sha256>
+```
+
+If the submittal holds no DWG or PDF, skip step 1a and log it in the chat summary.
+
+**Step 1b — `intake-package`.** Not built yet (skills 6 and 7). Do not invoke it. Record in the chat
+summary: "intake-package not run — skills not built (Stage 3)".
+
+**Step 2 — `gis-cadastral`.** Runs if `--schedule` and `--schedule-no` were given; otherwise skip
+it and say so. Prompt:
+
+```
+run_id: <run>   site: <SITE>   sub_id: <sub-id>   mode: <mode>
+rulebook: rulebook/rules_v<N>.json
+schedule: <path of the workbook, or one CSV per sheet: DLUS, Planning Assumptions, Overall Summary, Community Facilities>
+schedule document number: <schedule-no>
+```
+
+**Step 7 — `verifier`.** Runs when at least one candidate file exists in `findings/<run>/candidates/`.
+Prompt:
+
+```
+run_id: <run>   site: <SITE>   sub_id: <sub-id>   mode: <mode>
+rulebook: rulebook/rules_v<N>.json
+candidate files:
+- findings/<run>/candidates/gis.json
+```
+
+**Step 9 — `outputs-register`.** Not built yet (skills 22–24). Do not invoke it. Record:
+"outputs-register not run — skills not built (Stage 3); verified.json is the latest stage".
+
+## 4. Close and report
+
+`python "<P>/run_manifest.py" close --root . --run <run> --status <completed|failed>`
+(`failed` if any step failed after its retries).
+
+Then give the owner a short chat summary, built only from the return summaries and
+`findings/<run>/verified.json`: counts by verification status and by severity, the steps skipped
+or failed and why, every `disagrees` and `not_rechecked` count, and the run folder. Do not quote
+finding text beyond titles, and do not present anything as issued.

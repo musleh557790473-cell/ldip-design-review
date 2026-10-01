@@ -1,0 +1,204 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://aicc.local/ldip/batch_manifest.schema.json",
+ "title": "LDIP intake-batch manifest \u2014 SPC-0006 Rev B \u00a73.1 (P-S3-19)",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "run_id",
+  "site",
+  "sub_id",
+  "batch",
+  "files",
+  "converter",
+  "counts"
+ ],
+ "properties": {
+  "run_id": {
+   "type": "string",
+   "pattern": "^(QRWN|NMAR|NRJS)-[A-Za-z0-9._-]+-[0-9]{8}T[0-9]{4}$"
+  },
+  "site": {
+   "enum": [
+    "QRWN",
+    "NMAR",
+    "NRJS"
+   ]
+  },
+  "sub_id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "batch": {
+   "type": "string",
+   "pattern": "^b[0-9]{2}$"
+  },
+  "files": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path",
+     "sha256",
+     "type",
+     "status",
+     "output",
+     "error"
+    ],
+    "properties": {
+     "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 250
+     },
+     "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     },
+     "type": {
+      "enum": [
+       "dwg",
+       "pdf",
+       "other"
+      ]
+     },
+     "status": {
+      "enum": [
+       "extracted",
+       "failed",
+       "skipped"
+      ]
+     },
+     "output": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 250
+       }
+      ]
+     },
+     "intermediates": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 250
+      }
+     },
+     "error": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "code",
+         "detail"
+        ],
+        "properties": {
+         "code": {
+          "type": "integer"
+         },
+         "detail": {
+          "type": "string"
+         }
+        }
+       }
+      ]
+     }
+    },
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "extracted"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "output": {
+         "type": "string",
+         "minLength": 1,
+         "maxLength": 250
+        },
+        "error": {
+         "type": "null"
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "failed"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "error": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    ]
+   }
+  },
+  "converter": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "name",
+    "version"
+   ],
+   "properties": {
+    "name": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "version": {
+     "type": [
+      "string",
+      "null"
+     ]
+    }
+   }
+  },
+  "counts": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "extracted",
+    "failed",
+    "skipped"
+   ],
+   "properties": {
+    "extracted": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "failed": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "skipped": {
+     "type": "integer",
+     "minimum": 0
+    }
+   }
+  }
+ }
+}
