@@ -7,15 +7,18 @@ Engines:
   accoreconsole  AutoCAD Core Console, Windows only (--exe or env LDIP_ACCORE_EXE). Script DXFOUT.
 
 Usage: python convert.py --engine ezdwg|oda|accoreconsole --dwg <file.dwg> --out <file.dxf>
-                         --log <file.convert.json> [--exe <converter>] [--timeout 600]
+                         --log <file.convert.json> [--exe <converter>] [--timeout 600] [--reuse]
+--reuse (0.1.1, D9): keep an earlier conversion when its log says ok for the same engine, its input
+hash equals the DWG on disk and its output hash equals the DXF on disk; nothing is rewritten.
 Writes the DXF (via a temporary name, then rename) and a converter log: engine and version, input
 hash and DWG version, output hash, duration, return code, entities the engine skipped.
 Exit: 0 converted · 2 input error or no DXF produced · 3 engine missing, DWG version not supported,
 or timeout. The only external program called is the named converter (SPC-0006 §2.3.5).
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -110,6 +113,21 @@ def run_accore(dwg, out_tmp, log, exe, timeout):
             shutil.move(str(target), str(out_tmp))
 
 
+def reusable(dwg, out, logp, engine):
+    """The earlier log if it can be kept as is (same engine, same DWG, same DXF), else None."""
+    try:
+        prev = json.loads(Path(logp).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if prev.get("status") != "ok" or prev.get("engine") != engine or not Path(out).is_file():
+        return None
+    if (prev.get("input") or {}).get("sha256") != sha256_file(dwg):
+        return None
+    if (prev.get("output") or {}).get("sha256") != sha256_file(out):
+        return None
+    return prev
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", required=True, choices=["ezdwg", "oda", "accoreconsole"])
@@ -118,6 +136,7 @@ def main(argv=None):
     ap.add_argument("--log", required=True)
     ap.add_argument("--exe")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--reuse", action="store_true")
     a = ap.parse_args(argv)
     log = {"script": f"convert.py {__version__}", "engine": a.engine, "engine_version": None, "warnings": []}
     try:
@@ -126,6 +145,12 @@ def main(argv=None):
         if dwg.suffix.lower() != ".dwg":
             raise DwgError(EXIT_INPUT, f"not a .dwg file: {dwg.name}")
         sig = dwg_version(dwg)
+        if a.reuse:
+            prev = reusable(dwg, out, logp, a.engine)
+            if prev:
+                emit({"status": "ok", "reused": True, "engine": a.engine, "engine_version": prev.get("engine_version"),
+                      "acadver": sig, "warnings": len(prev.get("warnings", [])), "out": str(out), "log": str(logp)})
+                return EXIT_OK
         log["input"] = {"path": dwg.as_posix(), "sha256": sha256_file(dwg), "bytes": dwg.stat().st_size,
                         "acadver": sig, "release": ACADVER.get(sig, "unknown")}
         out.parent.mkdir(parents=True, exist_ok=True)

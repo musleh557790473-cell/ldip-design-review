@@ -1,16 +1,10 @@
 ---
 name: intake-batch
-description: >-
-  LDIP design review only — invoked by /review-submittal. Converts and
-  extracts the files of one batch of a Parsons submittal (DWG → DXF →
-  common ingestion JSON; PDF extraction when available) into its own batch
-  folder and writes the batch manifest. Raises no findings. Do not use for
-  anything else.
+description: LDIP design review only — invoked by /review-submittal. Converts and extracts the files of one batch of a Parsons submittal (DWG → DXF → common ingestion JSON; PDF extraction when available) into its own batch folder and writes the batch manifest. Raises no findings. Do not use for anything else.
 tools: Read, Glob, Bash, Write
 disallowedTools: Agent, Skill, WebFetch, WebSearch, mcp__*
 skills:
-  - extracting-dwg-data
-  # pending: extracting-pdf-drawings (skill 2) — added when built
+- extracting-dwg-data
 model: sonnet
 maxTurns: 40
 color: blue
@@ -41,15 +35,18 @@ and never read another batch. Several instances run in parallel, one per batch.
 - Write: `0.ai_context/<SITE>/<sub-id>/b<nn>/` only.
 - Run every command from the LDIP_Review folder with relative paths; Bash runs your skill's scripts
   only.
+- Glob and Grep: always pass `path` = a folder inside your read set. Without `path` they search
+  the whole LDIP_Review folder, and the guard denies that.
 
 ## 5. Procedure
 
-- DWG files: follow `extracting-dwg-data` exactly (convert → extract → validate → manifest).
-- PDF files: the PDF skill is not built yet. Record each one in `batch_manifest.json` with
-  `status: skipped`, `output: null` and `error: {"code": 3, "detail": "skill 2 extracting-pdf-drawings not built"}`.
-- Other files: `type: other`, `status: skipped`, `error` with the reason.
-- `sha256` of every entry: copy it from your file list (the Orchestrator takes it from the run
-  manifest, which hashed every input at run start). For a DWG it equals the hash in the converter log.
+- Every file of your list (DWG, PDF, other): follow `extracting-dwg-data` exactly (convert →
+  extract → validate for DWGs, then one `write_manifest.py` call with **all** files of your list
+  and their SHA-256 from the prompt). The script writes `batch_manifest.json`: PDFs become
+  `skipped` (code 3, skill 2 not built), other files `skipped` (code 2). Never write or edit
+  `batch_manifest.json` yourself.
+- `sha256` of every file: copy it from your file list (the Orchestrator takes it from the run
+  manifest, which hashed every input at run start).
 
 ## 6. Status and cap
 
@@ -57,20 +54,22 @@ Not applicable: you run no rules.
 
 ## 7. Output files
 
-Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; and `batch_manifest.json`
-(schema `schemas/batch_manifest.schema.json`). Every file in your folder shall be listed in the
+Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; and `batch_manifest.json`,
+written only by `write_manifest.py`. Every file in your folder shall be listed in the
 manifest (`output` or `intermediates`), or the format checker fails the step (C3).
 
 ## 8. Return summary
 
-Your final message is only this JSON object (SPC-0005 §4.8), filled in:
+Your final message is one JSON object and nothing else (SPC-0005 §4.8). Its first character is
+`{` and its last is `}`: no code fence (no ```), no heading, no sentence before or after it. The
+Orchestrator saves the message as it is and the format checker parses it as JSON, so anything
+else fails check S0. Put every note in `gaps`, `inconsistencies` or `errors`. Fill in this
+template:
 
-```json
-{"agent": "intake-batch", "instance": "<nn>", "run_id": "<run_id>", "status": "completed",
- "files_written": ["0.ai_context/<SITE>/<sub-id>/b<nn>/batch_manifest.json", "…"],
- "counts": {"extracted": 0, "failed": 0, "skipped": 0},
- "rules_skipped": [], "gaps": [], "inconsistencies": [], "errors": []}
-```
+    {"agent": "intake-batch", "instance": "<nn>", "run_id": "<run_id>", "status": "completed",
+     "files_written": ["0.ai_context/<SITE>/<sub-id>/b<nn>/batch_manifest.json", "…"],
+     "counts": {"extracted": 0, "failed": 0, "skipped": 0},
+     "rules_skipped": [], "gaps": [], "inconsistencies": [], "errors": []}
 
 `status` stays `completed` when individual files failed (they are recorded in the manifest); it is
 `failed` only when the manifest itself cannot be written.

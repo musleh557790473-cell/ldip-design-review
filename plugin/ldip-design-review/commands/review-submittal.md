@@ -18,8 +18,10 @@ Nothing produced by this run is issued: every output is a draft for the Human Re
 1. Parse `<SITE>` (QRWN, NRJS or NMAR — set by the owner, never detected), `<sub-id>`, `--mode`
    (default `live`), `--engine` (default `oda`), `--schedule` (the masterplan workbook, or the
    folder holding its CSV exports) and `--schedule-no` (its Parsons document number).
-2. The session's working directory is the LDIP_Review folder: `Glob` must find `rulebook/` and
-   `runs/` here. Use relative paths from here for everything.
+2. The session's working directory is the LDIP_Review folder: `Glob` with pattern `*` and
+   `path` = `rulebook` must list `rulebook/rules_v<N>.json`, and with `path` = `runs` must list
+   `runs/README.md`. Never Glob or Grep without `path` (the guard denies a search of the whole
+   folder). Use relative paths from here for everything.
 3. Pick the approved rulebook: `rulebook/rules_v<N>.json` with the highest N. Do not edit it.
 
 `<P>` below is `${CLAUDE_PLUGIN_ROOT}/scripts`. Bash may run only `run_manifest.py`, `snapshot.py`

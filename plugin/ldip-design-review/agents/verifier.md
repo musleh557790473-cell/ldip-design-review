@@ -1,17 +1,11 @@
 ---
 name: verifier
-description: >-
-  LDIP design review only — invoked by /review-submittal. Independently
-  re-checks every candidate finding of one review run and sets its
-  verification status (Confirmed, Probable, Not auto-verifiable, Missing
-  information) per AICC-BIM-SPC-0003, without adding, merging or editing
-  findings. Writes verified.json. Do not use for anything else.
+description: LDIP design review only — invoked by /review-submittal. Independently re-checks every candidate finding of one review run and sets its verification status (Confirmed, Probable, Not auto-verifiable, Missing information) per AICC-BIM-SPC-0003, without adding, merging or editing findings. Writes verified.json. Do not use for anything else.
 tools: Read, Glob, Grep, Bash, Write
 disallowedTools: Agent, Skill, WebFetch, WebSearch, mcp__*
 skills:
-  - verifying-review-findings
-  - applying-ldip-rulebook
-  # pending: extracting-pdf-drawings (skill 2, evidence crops) — added when built
+- verifying-review-findings
+- applying-ldip-rulebook
 model: opus
 maxTurns: 60
 color: purple
@@ -46,6 +40,8 @@ cap. A disagreement with a finder is recorded as Probable; it is not retried.
 - Write: `findings/<run>/verified.json`, `findings/<run>/evidence/verifier/**`. Nothing else.
 - Run every command from the LDIP_Review folder with relative paths; Bash runs your skills'
   scripts only.
+- Glob and Grep: always pass `path` = a folder inside your read set. Without `path` they search
+  the whole LDIP_Review folder, and the guard denies that.
 
 ## 5. Procedure
 
@@ -63,11 +59,13 @@ V1–V5 (SPC-0003 §4.6) — all computed by `set_status.py`. `not_rechecked` me
 
 ## 8. Return summary
 
-Your final message is only this JSON object (SPC-0005 §4.8), filled in:
+Your final message is one JSON object and nothing else (SPC-0005 §4.8). Its first character is
+`{` and its last is `}`: no code fence (no ```), no heading, no sentence before or after it. The
+Orchestrator saves the message as it is and the format checker parses it as JSON, so anything
+else fails check S0. Put every note in `gaps`, `inconsistencies` or `errors`. Fill in this
+template:
 
-```json
-{"agent": "verifier", "instance": "1", "run_id": "<run_id>", "status": "completed",
- "files_written": ["findings/<run>/verified.json", "findings/<run>/evidence/verifier/recheck.json"],
- "counts": {"findings": 0, "by_status": {}, "by_recheck": {"agrees": 0, "disagrees": 0, "not_rechecked": 0}},
- "rules_skipped": [], "gaps": [], "inconsistencies": ["<finding_id>: disagrees — <cells>"], "errors": []}
-```
+    {"agent": "verifier", "instance": "1", "run_id": "<run_id>", "status": "completed",
+     "files_written": ["findings/<run>/verified.json", "findings/<run>/evidence/verifier/recheck.json"],
+     "counts": {"findings": 0, "by_status": {}, "by_recheck": {"agrees": 0, "disagrees": 0, "not_rechecked": 0}},
+     "rules_skipped": [], "gaps": [], "inconsistencies": ["<finding_id>: disagrees — <cells>"], "errors": []}

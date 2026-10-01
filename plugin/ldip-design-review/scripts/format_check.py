@@ -19,7 +19,7 @@ Every result is appended to runs/<run>/format_checks.json. The one-line stdout s
 on a retry (SPC-0005 §6.5). Exit 0 = the check ran; 2 = input error. This script never reads
 findings/<run>/reasoning/**. No network, no shell calls.
 """
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import argparse
 import json
@@ -31,6 +31,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from ldip_common import (  # noqa: E402
+    parse_summary,
     EXIT_DEPENDENCY, EXIT_INPUT, EXIT_OK, RUN_ID_RE, ScriptError, any_match, atomic_write_json, expand,
     iso_utc, read_json, sha256_file,
 )
@@ -161,10 +162,13 @@ def rel(root, p):
 def check_summary(rep, summary_path, agent, run_id):
     rep.run("S0")
     try:
-        s = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+        s, fenced = parse_summary(Path(summary_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        rep.fail("S0", f"return summary is not valid JSON ({exc.__class__.__name__}); output may be partial")
+        rep.fail("S0", f"return summary is not valid JSON ({exc.__class__.__name__}); output may be partial. "
+                       "Send one raw JSON object only: no code fence and no text before or after it")
         return {}
+    if fenced:
+        rep.notes.append("S0: summary was one fenced JSON block with nothing around it; accepted (D7)")
     if not isinstance(s, dict):
         rep.fail("S0", "return summary is not a JSON object")
         return {}

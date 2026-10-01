@@ -16,9 +16,9 @@ Allow = exit 0 with no output (normal permission flow continues).
 Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
-$CLAUDE_PLUGIN_DATA or next to this file. No network, no shell calls.
+$CLAUDE_PLUGIN_DATA, a standard plugin data folder (ldip_common 0.3.0, D6) or next to this file. No network, no shell calls.
 """
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 import json
 import os
@@ -243,10 +243,15 @@ def decide(data):
         check_write(ctx, to_posix_abs(ti.get(WRITE_TOOLS[tool], ""), cwd))
     elif tool in ("Glob", "Grep"):
         base = ti.get("path") or cwd
-        pat = ti.get("pattern", "") if tool == "Glob" else ""
-        if pat.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", pat):
-            lit = re.split(r"[*?\[]", pat.replace("\\", "/"), 1)[0]
-            base = lit.rsplit("/", 1)[0] or "/"
+        pat = (ti.get("pattern", "") if tool == "Glob" else "").replace("\\", "/")
+        # the literal folder part of the pattern narrows the search (D5, 0.3.2); a pattern that
+        # starts with a wildcard or brace keeps the whole base and is judged on it
+        lit = re.split(r"[*?\[{]", pat, 1)[0]
+        lit_dir = lit.rsplit("/", 1)[0] if "/" in lit else ""
+        if pat.startswith("/") or re.match(r"^[A-Za-z]:/", pat):
+            base = lit_dir or "/"
+        elif lit_dir and ".." not in lit_dir.split("/"):
+            base = to_posix_abs(base, cwd).rstrip("/") + "/" + lit_dir
         check_read(ctx, to_posix_abs(base, cwd), recursive_dir=True)
     elif tool == "Bash":
         check_bash(ctx, ti.get("command", ""))

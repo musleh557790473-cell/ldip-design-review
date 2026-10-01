@@ -18,7 +18,7 @@ Sub-commands:
 
 Prints a one-line JSON summary; exit codes per SPC-0006 §2.3.3. No network, no shell calls.
 """
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 import argparse
 import json
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ldip_common import (  # noqa: E402
     ACTIVE_RUN_FILE, EXIT_INPUT, EXIT_OK, EXIT_REFUSED, RUN_ID_RE, SITES, SUB_ID_RE, ScriptError,
     append_jsonl, atomic_write_json, check_path_len, configured_review_root, iso_utc, now_riyadh,
-    read_json, sha256_file, to_posix_abs,
+    parse_summary, read_json, sha256_file, to_posix_abs,
 )
 
 MODES = ("live", "test", "shadow")
@@ -153,7 +153,12 @@ def log_skipped(d, a):
     src = (src if src.is_absolute() else Path(a.root) / src).resolve()
     if src.parent != d / "returns":
         raise ScriptError(EXIT_INPUT, f"--from-summary shall be a file in runs/{a.run}/returns/")
-    summary = read_json(src)
+    try:
+        summary, _ = parse_summary(src.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ScriptError(EXIT_INPUT, f"file not found: {src}") from exc
+    except json.JSONDecodeError as exc:
+        raise ScriptError(EXIT_INPUT, f"invalid JSON in {src}: {exc}") from exc
     entries = summary.get("rules_skipped") if isinstance(summary, dict) else None
     if not isinstance(entries, list):
         raise ScriptError(EXIT_INPUT, "return summary has no rules_skipped list")
