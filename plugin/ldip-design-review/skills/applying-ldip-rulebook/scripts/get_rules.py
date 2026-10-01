@@ -5,7 +5,7 @@ Usage: python get_rules.py --rulebook <rules_vN.json> --agent INT|GIS [--states 
                            [--skill <skill-name>] [--out <file.json>]
 Inactive rules are listed under "rules_skipped" (the Orchestrator logs them as rule_skipped).
 Exit: 0 · 2 input error · 3 dependency · 5 refused (rulebook invalid or not approved)."""
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 import argparse, json, os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +27,7 @@ def main(argv=None):
         res = rules_for_agent(load_rulebook(a.rulebook), a.agent, states, a.skill)
         if a.out:
             out = Path(a.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
             tmp = out.with_name(out.name + ".tmp")
             tmp.write_text(json.dumps(res, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, out)

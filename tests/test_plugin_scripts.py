@@ -326,14 +326,14 @@ def test_documented_orchestrator_and_agent_commands_allowed(root):
     R = f"runs/{RUN}"
     main_cmds = [
         f'python "{P}/run_manifest.py" event --root . --run {RUN} --agent gis-cadastral --event start --instance 1',
-        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_before.json',
-        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_after.json --reuse {R}/snapshots/s2_before.json',
-        f'python "{P}/snapshot.py" diff --before {R}/snapshots/s2_before.json --after {R}/snapshots/s2_after.json '
+        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_1_before.json',
+        f'python "{P}/snapshot.py" take --root . --out {R}/snapshots/s2_1_after.json --reuse {R}/snapshots/s2_1_before.json',
+        f'python "{P}/snapshot.py" diff --before {R}/snapshots/s2_1_before.json --after {R}/snapshots/s2_1_after.json '
         f'--agent gis-cadastral --matrix "${{CLAUDE_PLUGIN_ROOT}}/hooks/access_matrix.json" --site QRWN --sub T0001 '
-        f'--run {RUN} --out {R}/snapshots/s2_l3.json',
+        f'--run {RUN} --out {R}/snapshots/s2_1_l3.json',
         f'python "{P}/format_check.py" gis-cadastral {RUN} --root . --summary {R}/returns/s2_1.json --instance 1 --attempt 1',
         f'python "{P}/run_manifest.py" event --root . --run {RUN} --agent gis-cadastral --event rule_skipped '
-        "--detail '{\"rule_id\": \"GIS-004\", \"reason\": \"inactive\"}'",
+        f'--instance 1 --from-summary {R}/returns/s2_1.json',
     ]
     for c in main_cmds:
         assert guard(root, "Bash", {"command": c}) == "allow", c
@@ -365,3 +365,59 @@ def test_documented_orchestrator_and_agent_commands_allowed(root):
             assert guard(root, "Bash", {"command": c}, agent_type=Q + agent) == "allow", (agent, c)
     # the Verifier cannot run a GIS finder script
     assert guard(root, "Bash", {"command": agent_cmds["gis-cadastral"][1]}, agent_type=Q + "verifier") == "deny"
+
+
+def test_guard_bash_directory_argument(root):
+    """A directory argument (e.g. extract_dxf --resolve-base) is allowed when its whole tree is readable,
+    and still denied when it lies outside the read set (live trial 2026-10-01)."""
+    S = f"{PLUGIN}/skills/extracting-dwg-data/scripts"
+    base = (f'python "{S}/extract_dxf.py" --dxf 0.ai_context/QRWN/T0001/b01/A-001.dxf '
+            f'--dwg submittals/QRWN/T0001/A-001.dwg --out 0.ai_context/QRWN/T0001/b01/A-001.dwg.json ')
+    ok = base + "--resolve-base submittals/QRWN/T0001"
+    assert guard(root, "Bash", {"command": ok}, agent_type=Q + "intake-batch") == "allow"
+    bad = base + "--resolve-base submittals/QRWN"          # the whole site, wider than the sub-id
+    assert guard(root, "Bash", {"command": bad}, agent_type=Q + "intake-batch") == "deny"
+    bad2 = base + "--resolve-base golden_set/inputs"
+    assert guard(root, "Bash", {"command": bad2}, agent_type=Q + "intake-batch") == "deny"
+
+
+def test_snapshot_l3_inside_run_folder(root):
+    """Snapshots stored in runs/<run>/snapshots/ (as /review-submittal does) are ignored, not violations;
+    any other change outside the write set still fails (live trial 2026-10-01)."""
+    snap = PLUGIN / "scripts/snapshot.py"
+    S = f"runs/{RUN}/snapshots"
+    (root / S).mkdir(parents=True, exist_ok=True)
+    rc, _ = sh([str(snap), "take", "--root", str(root), "--out", str(root / S / "s1a_1_before.json")])
+    assert rc == 0
+    (root / "0.ai_context/QRWN/T0001/b01/x.dwg.json").write_text("{}")
+    rc, _ = sh([str(snap), "take", "--root", str(root), "--out", str(root / S / "s1a_1_after.json"),
+                "--reuse", str(root / S / "s1a_1_before.json")])
+    args = [str(snap), "diff", "--before", str(root / S / "s1a_1_before.json"), "--after",
+            str(root / S / "s1a_1_after.json"), "--agent", "intake-batch", "--matrix",
+            str(PLUGIN / "hooks/access_matrix.json"), "--site", "QRWN", "--sub", "T0001", "--run", RUN]
+    rc, res = sh(args)
+    assert rc == 0 and res["l3"] == "pass" and res["added"] == 1, res
+    (root / f"runs/{RUN}/run.jsonl").write_text("tampered")
+    rc, _ = sh([str(snap), "take", "--root", str(root), "--out", str(root / S / "s1a_1_after.json"),
+                "--reuse", str(root / S / "s1a_1_before.json")])
+    rc, res = sh(args)
+    assert res["l3"] == "fail" and res["violations"] == 1, res
+
+
+def test_rule_skipped_from_summary(root):
+    """rules_skipped[] is logged from the saved return summary; reasons with ';' never touch the shell."""
+    rid = open_run(root)[1]["run_id"]
+    rm = PLUGIN / "scripts/run_manifest.py"
+    ret = root / f"runs/{rid}/returns"
+    ret.mkdir(parents=True, exist_ok=True)
+    (ret / "s2_1.json").write_text(json.dumps({"rules_skipped": [
+        {"rule_id": "GIS-005", "reason": "inactive: Needs the plot-label source; runs once profiled."},
+        {"rule_id": "GIS-017", "reason": "inactive: Distance threshold GAP; survey not profiled."}]}))
+    base = [rm, "event", "--root", root, "--run", rid, "--agent", "gis-cadastral", "--event", "rule_skipped"]
+    rc, res = sh(base + ["--from-summary", f"runs/{rid}/returns/s2_1.json"])
+    assert rc == 0 and res["logged"] == 2, res
+    log = [json.loads(x) for x in (root / f"runs/{rid}/run.jsonl").read_text().splitlines()]
+    assert [e["detail"]["rule_id"] for e in log if e["event"] == "rule_skipped"] == ["GIS-005", "GIS-017"]
+    (root / "outside.json").write_text(json.dumps({"rules_skipped": []}))
+    assert sh(base + ["--from-summary", "outside.json"])[0] == 2          # only runs/<run>/returns/
+    assert sh(base[:-1] + ["start", "--from-summary", f"runs/{rid}/returns/s2_1.json"])[0] == 2

@@ -138,7 +138,7 @@ def test_get_rules_caps_and_skips(tmp_path):
     rc, out = run("get_rules.py", "--rulebook", p, "--agent", "GIS", "--states", "active")
     assert [r["rule_id"] for r in out["rules"]] == ["GIS-001"]
     assert run("get_rules.py", "--rulebook", p, "--agent", "GIS", "--states", "inactive")[0] == 2
-    o = tmp_path / "out.json"
+    o = tmp_path / "evidence" / "int" / "out.json"          # parent folder created by the script
     rc, res = run("get_rules.py", "--rulebook", p, "--agent", "INT", "--out", o)
     assert rc == 0 and json.loads(o.read_text())["rules"][0]["code_lists"] == {"section": ["AA", "BB"]}
 

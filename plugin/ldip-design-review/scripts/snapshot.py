@@ -10,12 +10,14 @@ Sub-commands:
         --site S --sub ID --run RUN [--out FILE]
         Lists added / modified / deleted files and flags every change outside the union of
         the agents' write sets (parallel steps pass several agents). Result "l3": pass|fail.
+        The snapshot files themselves (runs/<run>/snapshots/**) are listed under "ignored", not
+        judged: the before-snapshot is written after it is taken, so it is always "added".
         An L3 failure is never retried (SPC-0005 §6.4); the Orchestrator aborts and escalates.
 
 Prints a one-line JSON summary; exit 0 when the check ran (pass or fail is in the result),
 2 input error. No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import argparse
 import json
@@ -69,11 +71,17 @@ def write_set(matrix, agents, values):
     return pats
 
 
+SELF = ["runs/{run}/snapshots/**"]  # this script's own outputs (live trial 2026-10-01)
+
+
 def diff(before, after, agents, matrix, values):
     b, a = before["files"], after["files"]
-    added = sorted(set(a) - set(b))
-    deleted = sorted(set(b) - set(a))
-    modified = sorted(k for k in set(a) & set(b) if a[k]["sha256"] != b[k]["sha256"])
+    own = expand(SELF, values)
+    ignored = sorted(k for k in set(a) ^ set(b) | {k for k in set(a) & set(b) if a[k]["sha256"] != b[k]["sha256"]}
+                     if any_match(k, own))
+    added = sorted(set(a) - set(b) - set(ignored))
+    deleted = sorted(set(b) - set(a) - set(ignored))
+    modified = sorted(k for k in set(a) & set(b) if a[k]["sha256"] != b[k]["sha256"] and k not in ignored)
     pats = write_set(matrix, agents, values)
 
     def allowed(rel):
@@ -86,7 +94,7 @@ def diff(before, after, agents, matrix, values):
     return {
         "check": "L3 write-set", "script_version": __version__, "agents": agents,
         "run_id": values.get("{run}"), "write_set": pats,
-        "changes": {"added": added, "modified": modified, "deleted": deleted},
+        "changes": {"added": added, "modified": modified, "deleted": deleted}, "ignored": ignored,
         "violations": violations, "l3": "fail" if violations else "pass",
         "checked_at": iso_utc(),
     }

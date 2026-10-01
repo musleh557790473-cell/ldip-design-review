@@ -10,12 +10,15 @@ Sub-commands:
   Emergency end of a crashed run: close --status aborted (removes the active-run marker, P-S3-1).
   event  --root R --run RUN --agent A --event E [--instance N] [--detail JSON]
          Appends one event to runs/<run>/run.jsonl (SPC-0002 §7.2 event names only).
+         --event rule_skipped --from-summary runs/<run>/returns/<step>_<i>.json logs one event per
+         rules_skipped[] entry (rule_id and reason only), so no free text passes through the shell:
+         rulebook reasons contain ';' which the guard denies on a command line (live trial 2026-10-01).
   close  --root R --run RUN --status completed|failed|aborted
          Closes the manifest and removes runs/_active_run.json.
 
 Prints a one-line JSON summary; exit codes per SPC-0006 §2.3.3. No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import argparse
 import json
@@ -130,6 +133,8 @@ def cmd_event(a):
     d = run_dir_of(a.root, a.run)
     if a.event not in EVENTS:
         raise ScriptError(EXIT_INPUT, f"event must be one of {EVENTS}")
+    if a.from_summary:
+        return log_skipped(d, a)
     detail = {}
     if a.detail:
         try:
@@ -139,6 +144,28 @@ def cmd_event(a):
     append_jsonl(d / "run.jsonl", {"ts": iso_utc(), "agent": a.agent, "instance": a.instance,
                                    "event": a.event, "detail": detail})
     return {"status": "ok", "run_id": a.run, "event": a.event, "agent": a.agent}
+
+
+def log_skipped(d, a):
+    if a.event != "rule_skipped" or a.detail:
+        raise ScriptError(EXIT_INPUT, "--from-summary goes with --event rule_skipped and no --detail")
+    src = Path(a.from_summary)
+    src = (src if src.is_absolute() else Path(a.root) / src).resolve()
+    if src.parent != d / "returns":
+        raise ScriptError(EXIT_INPUT, f"--from-summary shall be a file in runs/{a.run}/returns/")
+    summary = read_json(src)
+    entries = summary.get("rules_skipped") if isinstance(summary, dict) else None
+    if not isinstance(entries, list):
+        raise ScriptError(EXIT_INPUT, "return summary has no rules_skipped list")
+    n = 0
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("rule_id"), str):
+            raise ScriptError(EXIT_INPUT, f"rules_skipped entry without rule_id: {str(e)[:80]}")
+        append_jsonl(d / "run.jsonl", {"ts": iso_utc(), "agent": a.agent, "instance": a.instance,
+                                       "event": "rule_skipped",
+                                       "detail": {"rule_id": e["rule_id"], "reason": str(e.get("reason", ""))[:300]}})
+        n += 1
+    return {"status": "ok", "run_id": a.run, "event": "rule_skipped", "agent": a.agent, "logged": n}
 
 
 def cmd_close(a):
@@ -175,6 +202,7 @@ def main(argv=None):
     e.add_argument("--event", required=True)
     e.add_argument("--instance", default="1")
     e.add_argument("--detail")
+    e.add_argument("--from-summary")
     c = sp.add_parser("close")
     c.add_argument("--root", required=True)
     c.add_argument("--run", required=True)

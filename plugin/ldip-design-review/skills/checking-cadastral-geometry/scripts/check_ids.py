@@ -4,7 +4,7 @@
 Usage: python check_ids.py --dlus <dlus.json from read_dlus.py> --out <gis001.json>
 Result: one pattern 'duplicate_plot_id' (count of IDs, rows, up to ten samples with cells) and the
 excluded Plot ID list used by GIS-004…007. Exit 0 ran · 2 input error. No network, no shell calls."""
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 import argparse, collections, json, os, sys
 from pathlib import Path
 
@@ -46,6 +46,7 @@ def main(argv=None):
         return 2
     res = check(dlus)
     out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".tmp")
     tmp.write_text(json.dumps(res, indent=1, sort_keys=True, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, out)

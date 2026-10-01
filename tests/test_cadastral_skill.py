@@ -125,7 +125,8 @@ def rules_file(tmp_path, drop=(), gis002_state="advisory"):
 
 
 def pipeline(tmp_path, wb, **kw):
-    d, g1, sc = tmp_path / "dlus.json", tmp_path / "g001.json", tmp_path / "sched.json"
+    ev = tmp_path / "findings" / "evidence" / "gis"          # not created: scripts make it (live trial)
+    d, g1, sc = ev / "dlus.json", ev / "g001.json", ev / "sched.json"
     rules = rules_file(tmp_path, **kw)
     assert run("read_dlus.py", "--file", wb, "--out", d)[0] == 0
     assert run("check_ids.py", "--dlus", d, "--out", g1)[0] == 0

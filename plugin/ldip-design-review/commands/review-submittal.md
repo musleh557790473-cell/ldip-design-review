@@ -35,36 +35,39 @@ its `inputs[]` give the path and SHA-256 of every submittal file.
 
 ## 2. Step pattern — apply to every agent step below
 
-For step `<step>` with agent `<agent>` (bare name, e.g. `gis-cadastral`) and instance `<i>`:
+For step `<step>` with agent `<agent>` (bare name, e.g. `gis-cadastral`), instance `<i>` and
+attempt `<a>` (starts at 1). The snapshot pair wraps only the agent's own work: your events and the
+saved return summary fall outside it, so L3 judges the agent alone.
 
-1. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_before.json`
-2. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event start --instance <i>`
+1. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event start --instance <i>`
+2. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_<a>_before.json`
 3. Invoke the sub-agent `ldip-design-review:<agent>` with the prompt of that step (inputs only — the
    fixed template given there). Never add opinions, expected answers or another agent's text.
-4. Save its final message (the return summary JSON) verbatim with `Write` to
-   `runs/<run>/returns/<step>_<i>.json`. If it is not valid JSON, save it as it is.
-5. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event end --instance <i>`
-6. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_after.json --reuse runs/<run>/snapshots/<step>_before.json`
-7. `python "<P>/snapshot.py" diff --before runs/<run>/snapshots/<step>_before.json --after runs/<run>/snapshots/<step>_after.json --agent <agent> --matrix "${CLAUDE_PLUGIN_ROOT}/hooks/access_matrix.json" --site <SITE> --sub <sub-id> --run <run> --out runs/<run>/snapshots/<step>_l3.json`
+4. `python "<P>/snapshot.py" take --root . --out runs/<run>/snapshots/<step>_<a>_after.json --reuse runs/<run>/snapshots/<step>_<a>_before.json`
+5. `python "<P>/snapshot.py" diff --before runs/<run>/snapshots/<step>_<a>_before.json --after runs/<run>/snapshots/<step>_<a>_after.json --agent <agent> --matrix "${CLAUDE_PLUGIN_ROOT}/hooks/access_matrix.json" --site <SITE> --sub <sub-id> --run <run> --out runs/<run>/snapshots/<step>_<a>_l3.json`
    `"l3": "fail"` → event `fail`, `run_manifest.py close --status aborted`, tell the owner which
    paths changed, and stop. An L3 failure is never retried (SPC-0005 §6.4).
+6. Save the agent's final message (the return summary JSON) verbatim with `Write` to
+   `runs/<run>/returns/<step>_<i>.json`. If it is not valid JSON, save it as it is.
+7. `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event end --instance <i>`
 8. `python "<P>/format_check.py" <agent> <run> --root . --summary runs/<run>/returns/<step>_<i>.json --instance <i> --attempt <a>`
    then `run_manifest.py event … --event format_check`.
    - `"result": "pass"` → next step.
-   - `"result": "fail"` → if `<a>` < 3: event `retry`, re-invoke the same agent with the same
-     inputs plus **only** the `retry_errors` list from the checker, and repeat from 4 with `<a>`+1.
+   - `"result": "fail"` → if `<a>` < 3: event `retry`, then repeat from 2 with `<a>`+1, re-invoking
+     the same agent with the same inputs plus **only** the `retry_errors` list from the checker.
      After the third failed attempt: event `fail`, mark the step failed and skip the steps that
      depend on it.
-9. For each entry of `rules_skipped[]` in the return summary:
-   `run_manifest.py event --root . --run <run> --agent <agent> --event rule_skipped --detail '{"rule_id": "…", "reason": "…"}'`
-   (the `--detail` value is one JSON string; quote it so the shell sees one argument).
+9. Log the rules the agent skipped, straight from its saved return summary (no free text on the
+   command line):
+   `python "<P>/run_manifest.py" event --root . --run <run> --agent <agent> --event rule_skipped --instance <i> --from-summary runs/<run>/returns/<step>_<i>.json`
 
 ## 3. Steps (fixed order — never reorder, add or drop a step on your own)
 
 **Step 1a — `intake-batch` (parallel).** From `inputs[]`, take the files under
 `submittals/<SITE>/<sub-id>/` with extensions `.dwg` and `.pdf` (ignore the rest), sorted by path,
 in batches of 20 → `b01`, `b02`, …. Run all batch instances in parallel (step pattern per instance;
-one snapshot pair around the whole parallel group, with `--agent intake-batch`). Prompt per
+all start events first, then one snapshot pair around the whole parallel group with
+`--agent intake-batch`, then the returns and end events). Prompt per
 instance:
 
 ```

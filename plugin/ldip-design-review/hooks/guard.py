@@ -18,7 +18,7 @@ Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
 $CLAUDE_PLUGIN_DATA or next to this file. No network, no shell calls.
 """
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import json
 import os
@@ -216,7 +216,8 @@ def check_bash(ctx, command):
         p = to_posix_abs(val, ctx.cwd)
         rel = rel_to_root(p, ctx.root) if ctx.root else None
         try:
-            check_read(ctx, p)
+            # a sub-agent's directory argument (e.g. --resolve-base) is checked as a tree, like Glob/Grep
+            check_read(ctx, p, recursive_dir=not ctx.main and os.path.isdir(p))
         except Deny:
             if rel is None or ctx.main or not any_match(rel, ctx.write):
                 raise

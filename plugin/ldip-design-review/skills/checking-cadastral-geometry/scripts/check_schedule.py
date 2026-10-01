@@ -17,7 +17,7 @@ A rule whose sheet is not given is reported as not_run with the reason.
 One result per rule; one pattern per (rule, pattern) with count and up to ten samples (SPC-0004 §5.7).
 Exit: 0 ran · 2 input error · 3 dependency. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import json
@@ -213,6 +213,7 @@ def main(argv=None):
         doc = {"script": f"check_schedule.py {__version__}", "rulebook_version": rb.get("rulebook_version"),
                "dlus_source": dlus.get("source"), "results": results}
         out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_name(out.name + ".tmp")
         tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False, default=sorted), encoding="utf-8")
         os.replace(tmp, out)
