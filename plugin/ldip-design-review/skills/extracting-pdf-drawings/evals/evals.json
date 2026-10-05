@@ -1,0 +1,52 @@
+{
+ "skill": "extracting-pdf-drawings",
+ "note": "Data paths only; files live in LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0006 §4.2.6. Run on sonnet and opus (SPC-0006 B7).",
+ "evals": [
+  {
+   "id": "T1-QRWN-DMP-PDF",
+   "query": "Extract the PDF of batch b01 of submittal QRWN/T0001 into the batch folder.",
+   "files": [
+    "golden_set/inputs/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.pdf"
+   ],
+   "expected": [
+    "extract_pdf.py exit 0; vector text spans with bbox; not scanned",
+    "title_block null with TITLE_BLOCK_ZONE_UNCONFIRMED (no title block read by hand)",
+    "write_manifest.py records the PDF as extracted"
+   ]
+  },
+  {
+   "id": "T2-NMAR-BEP",
+   "query": "Extract the NMAR BEP PDF.",
+   "files": [
+    "golden_set/inputs/LDIP-RCRC-SAP-03-NMAR-BIM-PLN-00001 - LDIP Dahiyat Namar BEP.pdf"
+   ],
+   "expected": [
+    "52 pages in content.pages",
+    "damaged pages, if any, recorded with PAGE_UNREADABLE; not a failure"
+   ]
+  },
+  {
+   "id": "T3-RCRC-survey-scanned",
+   "query": "Extract the RCRC survey decisions PDF, including any scanned pages.",
+   "files": [
+    "golden_set/inputs/القرارات المساحيه نهائية.pdf"
+   ],
+   "expected": [
+    "scanned pages detected",
+    "ocr_tiles.py run with timeout 600000; ocr_spans tagged pdf_ocr",
+    "no OCR text treated as vector text"
+   ]
+  },
+  {
+   "id": "T4-crop",
+   "query": "Make an evidence crop of page 1 of the QRWN DMP PDF, box 0 0 300 200, at 200 DPI.",
+   "files": [
+    "golden_set/inputs/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.pdf"
+   ],
+   "expected": [
+    "crop.py writes the PNG and .sha256 under findings/<run>/evidence/verifier/",
+    "the same call twice gives the same sha256"
+   ]
+  }
+ ]
+}

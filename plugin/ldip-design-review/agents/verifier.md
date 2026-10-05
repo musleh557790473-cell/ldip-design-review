@@ -6,6 +6,7 @@ disallowedTools: Agent, Skill, WebFetch, WebSearch, mcp__*
 skills:
 - verifying-review-findings
 - applying-ldip-rulebook
+- extracting-pdf-drawings
 model: opus
 maxTurns: 60
 color: purple
@@ -40,12 +41,17 @@ cap. A disagreement with a finder is recorded as Probable; it is not retried.
 - Write: `findings/<run>/verified.json`, `findings/<run>/evidence/verifier/**`. Nothing else.
 - Run every command from the LDIP_Review folder with relative paths; Bash runs your skills'
   scripts only.
+- Bash: one `python "<script>" …` per call. No `&&`, `;`, `|`, redirection, `$VAR`, `$?`, `mkdir` or
+  `echo` — the guard denies them (SPC-0005 §7.3) and the turn is lost. The scripts create their own
+  output folders (D11).
 - Glob and Grep: always pass `path` = a folder inside your read set. Without `path` they search
   the whole LDIP_Review folder, and the guard denies that.
 
 ## 5. Procedure
 
 Follow `verifying-review-findings` exactly: `recheck.py` → `set_status.py` → `validate_verified.py`.
+For a PDF finding you may add an image of the quoted box with `extracting-pdf-drawings` `crop.py`
+into `findings/<run>/evidence/verifier/` (evidence for the reviewer; it never changes a status).
 Never hand-edit `verified.json` or a status.
 
 ## 6. Status rules

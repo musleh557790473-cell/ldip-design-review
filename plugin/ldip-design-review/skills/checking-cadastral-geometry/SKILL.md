@@ -8,7 +8,7 @@ description: >-
   plot polygon validity and DLUS-to-drawing matching. Use for any LDIP GIS,
   DLUS, plot or land-use check.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   spec: "AICC-BIM-SPC-0006 Rev B §4.6; AICC-BIM-SPC-0004 Rev C §5, §7"
 ---
 
@@ -18,11 +18,12 @@ This skill runs the GIS rules of the LDIP Rulebook on a Parsons masterplan sched
 candidate findings. The scripts do the checks. You run them in order, read their one-line results and
 write the return summary. Do not re-do a check by hand, and do not read the scripts' source.
 
-Current coverage: the schedule rules GIS-001, GIS-002, GIS-003 and GIS-012 to GIS-015. The drawing
-rules (GIS-008, GIS-009 and the DLUS-to-DWG matching rules) are not built yet. If the rules file lists
-them, report each one in `rules_skipped[]` with the reason "script not built yet (skill 9 phase b)".
+Coverage: the schedule rules GIS-001, GIS-002, GIS-003, GIS-012 to GIS-015, and the drawing rules
+GIS-008 (`check_crs.py`), GIS-009 (`check_topology.py`) and the DLUS-to-drawing rules GIS-004 to
+GIS-007, GIS-010, GIS-011, GIS-016 (`match_plots.py`). The drawing scripts read the ingestion files
+(`*.dwg.json`) that skill 1 wrote; they never open a DWG.
 
-Packages: Python 3.11+, `openpyxl`, `jsonschema`.
+Packages: Python 3.11+, `openpyxl`, `jsonschema`, `shapely` 2.x, `numpy`.
 
 ## Hard rules
 
@@ -37,7 +38,10 @@ Packages: Python 3.11+, `openpyxl`, `jsonschema`.
 5. Do not change a statement, status, severity or location that `build_candidates.py` wrote. If a
    candidate looks wrong, say so in `reasoning/gis.md` and in the return summary.
 6. Plot IDs listed by GIS-001 (`excluded_plot_ids`) are excluded from any later plot-matching rule
-   (SPC-0004 §5.6).
+   (SPC-0004 §5.6). Pass `gis001.json` to `match_plots.py`.
+7. A sub-check the scripts list in `subchecks_not_run` produced no finding. Copy each one, with its
+   reason, into `gaps[]`. Never run `match_plots.py --profile` in a review run: it is an owner tool
+   and `build_candidates.py` refuses its output.
 
 ## Procedure (plan → validate → execute → verify)
 
@@ -56,8 +60,15 @@ that has only CSV exports, pass each sheet's CSV file instead of the workbook (`
    - GIS-003, GIS-012 to GIS-015:
      `python "<SK>/check_schedule.py" --dlus "<EV>/dlus.json" --rules "<EV>/rules_GIS.json" --pa-file "<WB>" --summary-file "<WB>" --cf-file "<WB>" --out "<EV>/schedule.json"`
      Omit an argument when that sheet is not in the submittal; the rules that need it return `not_run`.
+   - Drawing rules, when the prompt lists ingestion files (`<IN>` = those paths, space-separated):
+     `python "<SK>/check_crs.py" --ingestion <IN> --rules "<EV>/rules_GIS.json" --site <SITE> --out "<EV>/gis008.json"`
+     `python "<SK>/check_topology.py" --ingestion <IN> --rules "<EV>/rules_GIS.json" --site <SITE> --out "<EV>/gis009.json"`
+     `python "<SK>/match_plots.py" --ingestion <IN> --dlus "<EV>/dlus.json" --gis001 "<EV>/gis001.json" --rules "<EV>/rules_GIS.json" --site <SITE> --out "<EV>/match.json"`
+     Without a schedule, omit `--dlus` and `--gis001`; the rules that need the DLUS return `not_run`.
+     With no ingestion files, skip these three and report GIS-004 to GIS-011 and GIS-016 as
+     "no drawing in the submittal" in `rules_skipped[]`.
 4. **Build and verify the candidates**
-   `python "<SK>/build_candidates.py" --results "<EV>/dlus.json" "<EV>/gis001.json" "<EV>/schedule.json" --rules "<EV>/rules_GIS.json" --run <run-id> --site <SITE> --sub <sub-id> --document-no <schedule document number> --out "findings/<run>/candidates/gis.json"`
+   `python "<SK>/build_candidates.py" --results "<EV>/dlus.json" "<EV>/gis001.json" "<EV>/schedule.json" "<EV>/gis008.json" "<EV>/gis009.json" "<EV>/match.json" --rules "<EV>/rules_GIS.json" --run <run-id> --site <SITE> --sub <sub-id> --document-no <schedule document number> --out "findings/<run>/candidates/gis.json"`
    The script validates every candidate against `finding.schema.json` and writes nothing if one
    fails (exit 4). Then check the caps:
    `python "${CLAUDE_PLUGIN_ROOT}/skills/applying-ldip-rulebook/scripts/check_cap.py" --findings "findings/<run>/candidates/gis.json" --rulebook "<RB>"`
@@ -66,8 +77,10 @@ that has only CSV exports, pass each sheet's CSV file instead of the workbook (`
    (for example the controlled vocabulary of GIS-003, or the GIS-014 mapping of non-villa land uses)
    in `rules_skipped[]` or `gaps[]`.
 
-The document number is the schedule's Parsons number. When only CSV exports were received and no
-number is known, stop and return `failed` with the gap "schedule document number"; do not invent one.
+List only the result files you produced. `--document-no` is the schedule's Parsons number; drawing
+findings take the drawing's number from its ingestion file, so a drawing-only run omits it. When a
+schedule was received as CSV exports only and no number is known, stop and return `failed` with the
+gap "schedule document number"; do not invent one.
 
 ## Outputs and exit codes
 
@@ -76,4 +89,5 @@ Every script prints one JSON line and writes one JSON file. Exit codes (SPC-0006
 failed the finding schema. Codes 2–4 are retried by the Orchestrator; report the script's `detail`.
 
 What each rule checks, the pattern names, how a labelled reconciliation line is accepted, and the
-known limits: `references/schedule_rules.md`.
+known limits: `references/schedule_rules.md` (schedule rules) and `references/dwg_rules.md` (drawing
+rules and the rule values they need).

@@ -11,6 +11,11 @@ PreToolUse hook for Read | Glob | Grep | Write | Edit | MultiEdit | NotebookEdit
   * Bash must match the agent's script allowlist (SPC-0005 §4.3, §7.3); shell operators
     are refused; path arguments are checked like reads/writes.
   * Fail-closed: unknown agent_type, missing configuration or an internal error -> deny.
+  * Scope (D12, owner approved 5 Oct 2026): the plugin is enabled account-wide, so the guard sees
+    every task. A sub-agent that is not an LDIP agent (another plugin's, or a built-in one such as
+    general-purpose) is left alone unless it touches the LDIP_Review folder or an LDIP review run is
+    active; then it is denied. Spoofs stay denied: bare LDIP agent names, unknown
+    "ldip-design-review:*" names, an empty or non-string agent_type.
 
 Allow = exit 0 with no output (normal permission flow continues).
 Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
@@ -18,7 +23,7 @@ Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
 $CLAUDE_PLUGIN_DATA, a standard plugin data folder (ldip_common 0.3.0, D6) or next to this file. No network, no shell calls.
 """
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 import json
 import os
@@ -64,6 +69,44 @@ def active_run(root):
         return None
     data = json.loads(f.read_text(encoding="utf-8"))
     return data if data.get("run_id") else None
+
+
+def foreign_agent(data, matrix):
+    """True for a sub-agent that is not one of ours and does not imitate one (D12)."""
+    at = data.get("agent_type")
+    if not isinstance(at, str) or not at:
+        return False
+    plugin = matrix.get("plugin_name", "ldip-design-review")
+    if at in matrix.get("agent_types", {}) or at.startswith(plugin + ":"):
+        return False
+    bare_ours = {v for v in matrix.get("agent_types", {}).values()} | set(matrix.get("agents", {}))
+    return at not in bare_ours
+
+
+def touches_root(data, root):
+    """True if the call refers to the LDIP_Review folder (path inputs, cwd, or text of a Bash command)."""
+    if not root:
+        return False
+    root_p = to_posix_abs(root, "/").rstrip("/")
+    cwd = data.get("cwd") or os.getcwd()
+    if under(to_posix_abs(cwd, "/"), root_p):
+        return True
+    ti = data.get("tool_input") or {}
+    for key in ("file_path", "notebook_path", "path"):
+        v = ti.get(key)
+        if isinstance(v, str) and v and under(to_posix_abs(v, cwd), root_p):
+            return True
+    pat = ti.get("pattern")
+    if data.get("tool_name") == "Glob" and isinstance(pat, str) and (pat.startswith("/") or re.match(r"^[A-Za-z]:", pat)):
+        if under(to_posix_abs(re.split(r"[*?\[{]", pat, 1)[0] or "/", "/"), root_p) or root_p.startswith(
+                to_posix_abs(re.split(r"[*?\[{]", pat, 1)[0] or "/", "/").rstrip("/") + "/"):
+            return True
+    cmd = ti.get("command")
+    if isinstance(cmd, str):
+        flat = cmd.replace("\\", "/")
+        if root_p in flat or Path(root_p).name in flat:
+            return True
+    return False
 
 
 def resolve_agent(data, matrix):
@@ -225,6 +268,14 @@ def check_bash(ctx, command):
 
 def decide(data):
     root, matrix = load_config()
+    if foreign_agent(data, matrix):        # D12: other projects and other plugins are not governed
+        if root and active_run(root):
+            raise Deny(f"agent_type {data['agent_type']!r} may not act while an LDIP review run is active (fail-closed)")
+        if touches_root(data, root):
+            raise Deny(f"agent_type {data['agent_type']!r} may not touch the LDIP_Review folder (only LDIP agents)")
+        if "golden_set/answer_key" in json.dumps(data.get("tool_input") or {}):
+            raise Deny("golden_set/answer_key is never readable (SPC-0002 §5.3)")
+        return
     agent = resolve_agent(data, matrix)
     if agent != "orchestrator" and not root:
         raise Deny("LDIP_REVIEW_ROOT not configured (fail-closed)")

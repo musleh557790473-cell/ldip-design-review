@@ -50,16 +50,28 @@ The rule's own `default_status` in the rulebook governs; this table is the conve
 | `xlsx_cell` | every quoted `CELL=value` re-read from the workbook XML (zipfile + ElementTree), not openpyxl; sheet prefixes `Summary`, `DLUS`, `PA`, `Community Facilities` map to their sheets | agrees / disagrees |
 | `csv_cell` | the same with an own CSV parser, not the csv module; tokens of other sheets (other CSV files) are skipped | agrees / disagrees |
 | any | source file hash ≠ `location.file_sha256` | disagrees (file changed since the finder read it) |
-| `dwg_vector` | recompute from `0.ai_context` — not built yet | not_rechecked |
-| `pdf_vector_text`, `pdf_ocr` | re-crop with skill 2 `crop.py` — not built yet | not_rechecked |
+| `xlsx_cell` GIS-012 / 013 / 014, with `--rulebook` | operand cells named by role re-read, rule formula recomputed with the rulebook tolerance (P-S3-24) | agrees only if every sample still breaches; else disagrees |
+| `dwg_vector` | no independent second path yet | not_rechecked |
+| `pdf_vector_text` | every quoted `"text"` looked for in the text pdfplumber reads inside `location.pdf.bbox_pt` (finder: pypdfium2); rotated pages and pages above 200,000 objects not supported | agrees / disagrees (not_rechecked on a rotated or very large page) |
+| `pdf_ocr` | none independent (a second OCR is not independent); skill 2 `crop.py` gives the image | not_rechecked |
 | other | none | not_rechecked |
 
-Values are compared at the precision printed in the extract (e.g. `5508.27` ± 0.005, `3.57095e+06` ±
-5); text is compared trimmed and case-insensitive.
+Value match by type (P-S3-43): a quoted value is a **number** only when the whole token is a number
+(thousands commas, `%`, parentheses allowed), optionally followed by one unit `m2`, `m²`, `m`, `ha`,
+`pr/ha` (recorded, not compared). Numbers are compared at the printed precision (e.g. `5508.27` ± 0.005,
+`3.57095e+06` ± 5). Anything else — `1/1`, `G+2`, `12a`, `5 kg` — is **text**, compared with the cell's
+raw text after collapsing spaces, case-insensitive. A number against a text cell disagrees. `-` means
+zero or an empty cell.
+
+Recomputed formulas (P-S3-24): GIS-013 `|gfa − area × far|`, `|gfa − units × fixed_villa_gfa|`,
+`|gfa − (res + com + cf)|` against `tol`; GIS-014 `|field − units × rate / per|` against `tol_persons` /
+`tol_spaces`; GIS-012 Summary area / plots against the DLUS sum / count of that Level 2 re-read over
+the quoted row range, against `area_tol`.
 
 ## 5. Known limits
 
-- The cell re-read confirms the quoted observations; it does not recompute the rule arithmetic
-  (for example GFA = area × FAR). The method text says so. Rule-level recomputation for GIS rules
-  is a candidate improvement.
+- Rule arithmetic is recomputed for GIS-012, GIS-013 and GIS-014 only, and only with `--rulebook`.
+  For other rules the re-read confirms the quoted values; the method text says which applied.
+- GIS-012: a labelled reconciliation line is not re-evaluated. CSV sources: operands in another CSV
+  file (another sheet) are not recomputed.
 - A finding whose extract quotes no cell values is `not_rechecked`.

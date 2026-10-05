@@ -25,7 +25,8 @@ Nothing produced by this run is issued: every output is a draft for the Human Re
 3. Pick the approved rulebook: `rulebook/rules_v<N>.json` with the highest N. Do not edit it.
 
 `<P>` below is `${CLAUDE_PLUGIN_ROOT}/scripts`. Bash may run only `run_manifest.py`, `snapshot.py`
-and `format_check.py`; the guard denies anything else.
+and `format_check.py`; the guard denies anything else. One `python "<P>/<script>" …` per Bash call:
+no `&&`, `;`, `|`, redirection, `$VAR`, `$?`, `date`, `mkdir` or `echo` (D11).
 
 ## 1. Open the run
 
@@ -84,14 +85,18 @@ If the submittal holds no DWG or PDF, skip step 1a and log it in the chat summar
 **Step 1b — `intake-package`.** Not built yet (skills 6 and 7). Do not invoke it. Record in the chat
 summary: "intake-package not run — skills not built (Stage 3)".
 
-**Step 2 — `gis-cadastral`.** Runs if `--schedule` and `--schedule-no` were given; otherwise skip
-it and say so. Prompt:
+**Step 2 — `gis-cadastral`.** Runs if `--schedule` and `--schedule-no` were given, or if step 1a
+extracted at least one DWG; otherwise skip it and say so. The drawing list is every `output` of a
+`files[]` entry with `status: extracted` and `type: dwg` in the `batch_manifest.json` files of this
+submittal (read them with Read). Omit a line that does not apply. Prompt:
 
 ```
 run_id: <run>   site: <SITE>   sub_id: <sub-id>   mode: <mode>
 rulebook: rulebook/rules_v<N>.json
 schedule: <path of the workbook, or one CSV per sheet: DLUS, Planning Assumptions, Overall Summary, Community Facilities>
 schedule document number: <schedule-no>
+drawings (ingestion files):
+- 0.ai_context/<SITE>/<sub-id>/b<nn>/<file>.dwg.json
 ```
 
 **Step 7 — `verifier`.** Runs when at least one candidate file exists in `findings/<run>/candidates/`.

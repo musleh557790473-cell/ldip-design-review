@@ -4,7 +4,7 @@ Independent cell readers: the finders read xlsx with openpyxl and CSV with the c
 Verifier reads xlsx straight from the package XML (zipfile + ElementTree) and CSV with its own
 parser, so a reader defect cannot confirm itself (SPC-0005 §5.7.1). No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import hashlib
 import json
@@ -166,26 +166,47 @@ def as_number(s):
     return -x if neg else x
 
 
+# P-S3-43 (owner approved 5 Oct 2026): a quoted value is a number only when the whole token is a
+# number, optionally followed by one unit from UNITS (recorded, not compared). Anything else ("1/1",
+# "G+2", "12a") is text and is compared with the cell's raw text. "-" / "–" means zero or an empty cell.
+UNITS = ("pr/ha", "m2", "m²", "ha", "m")
+NUM_FULL = re.compile(r"^(?P<num>\(?[-+]?[0-9][0-9,]*(\.[0-9]+)?([eE][-+]?[0-9]+)?\)?%?)"
+                      r"(?:\s*(?P<unit>" + "|".join(re.escape(u) for u in UNITS) + r"))?$")
+
+
 def expected_value(token_value):
-    """Split an extract value into (number or None, printed decimals, text)."""
-    v = token_value.strip()
-    m = NUM_HEAD.match(v.replace(" ", ""))
-    if m and m.group(0):
-        head = m.group(0)
-        mant, _, exp = head.rstrip(")%").lower().partition("e")
+    """(number or None, printed decimals, text, unit) for a quoted value (P-S3-43)."""
+    v = " ".join(str(token_value).split())
+    m = NUM_FULL.match(v)
+    if m:
+        head = m.group("num")
+        mant, _, exp = head.strip("()").rstrip("%").lower().partition("e")
         dec = len(mant.split(".")[1]) if "." in mant else 0
         if exp:                       # "%g" printing: 3.57095e+06 → tolerance of the last printed digit
             dec -= int(exp)
-        return as_number(head), dec, v
-    return None, 0, v
+        if head.endswith("%") or head.endswith("%)"):
+            dec += 2                  # 12.5% is 0.125: two more decimals in the stored fraction
+        return as_number(head), dec, v, m.group("unit")
+    return None, 0, v, None
+
+
+def value_kind(token_value):
+    v = " ".join(str(token_value).split())
+    if v in ("-", "–"):
+        return "dash"
+    return "number" if expected_value(v)[0] is not None else "text"
 
 
 def values_agree(expected_token, found_raw):
-    num, dec, text = expected_value(expected_token)
-    if num is not None:
-        f = as_number(found_raw)
+    kind = value_kind(expected_token)
+    raw = "" if found_raw is None else " ".join(str(found_raw).split())
+    if kind == "dash":
+        return raw in ("", "-", "–") or as_number(raw) == 0.0
+    if kind == "number":
+        num, dec, _, _ = expected_value(expected_token)
+        f = as_number(raw)
         if f is None:
             return False
         tol = 0.5 * 10 ** (-dec) + 1e-9 * max(1.0, abs(num))
         return abs(f - num) <= tol
-    return str(found_raw or "").strip().casefold() == text.casefold()
+    return raw.casefold() == " ".join(str(expected_token).split()).casefold()

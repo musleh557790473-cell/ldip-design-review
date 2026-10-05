@@ -30,9 +30,11 @@ not review roads, utilities or package control, you do not run PKG rules, and yo
 
 ## 3. Inputs (from the Orchestrator only — never infer or change them)
 
-`run_id`, `site`, `sub_id`, `mode`, the rulebook path, the schedule workbook path (or one CSV per
-sheet: DLUS, Planning Assumptions, Overall Summary, Community Facilities) and the schedule document
-number. If a value is missing, do not assume one: return `failed` with the gap.
+`run_id`, `site`, `sub_id`, `mode`, the rulebook path, and at least one of: the schedule workbook
+path (or one CSV per sheet: DLUS, Planning Assumptions, Overall Summary, Community Facilities) with
+the schedule document number; the list of drawing ingestion files (`0.ai_context/<SITE>/<sub-id>/b<nn>/*.dwg.json`).
+If a value is missing, do not assume one: return `failed` with the gap. Use only the ingestion files
+listed; never search for others.
 
 ## 4. Paths
 
@@ -51,9 +53,13 @@ number. If a value is missing, do not assume one: return `failed` with the gap.
 Follow the procedure of `checking-cadastral-geometry` exactly (plan → validate → execute →
 verify): rules from `applying-ldip-rulebook` into `findings/<run>/evidence/gis/rules_GIS.json`;
 `read_dlus.py` (GIS-002) first; `check_ids.py` (GIS-001); `check_schedule.py` (GIS-003,
-GIS-012 to GIS-015); `build_candidates.py`; then `check_cap.py`. The DWG rules (GIS-008, GIS-009
-and the matching rules) are not built yet: list each one the rules file returns in
-`rules_skipped[]` with reason "script not built yet (skill 9 phase b)".
+GIS-012 to GIS-015); when ingestion files are listed, `check_crs.py` (GIS-008),
+`check_topology.py` (GIS-009) and `match_plots.py` (matching rules); `build_candidates.py`; then
+`check_cap.py`. Copy every `subchecks_not_run` entry into `gaps[]`. Never use `match_plots.py --profile`.
+
+Bash: one `python "<script>" …` per call. No `&&`, `;`, `|`, redirection, `$VAR`, `$?`, `mkdir` or
+`echo` — the guard denies them (SPC-0005 §7.3) and the turn is lost. The scripts create their own
+output folders.
 
 ## 6. Status and cap
 
@@ -78,7 +84,9 @@ template:
     {"agent": "gis-cadastral", "instance": "1", "run_id": "<run_id>", "status": "completed",
      "files_written": ["findings/<run>/candidates/gis.json", "findings/<run>/reasoning/gis.md",
                        "findings/<run>/evidence/gis/rules_GIS.json", "findings/<run>/evidence/gis/dlus.json",
-                       "findings/<run>/evidence/gis/gis001.json", "findings/<run>/evidence/gis/schedule.json"],
+                       "findings/<run>/evidence/gis/gis001.json", "findings/<run>/evidence/gis/schedule.json",
+                       "findings/<run>/evidence/gis/gis008.json", "findings/<run>/evidence/gis/gis009.json",
+                       "findings/<run>/evidence/gis/match.json"],
      "counts": {"findings": 0, "by_proposed_status": {}, "rules_run": 0},
      "rules_skipped": [{"rule_id": "GIS-004", "reason": "inactive: …"}],
      "gaps": [], "inconsistencies": [], "errors": []}

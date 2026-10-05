@@ -8,7 +8,7 @@ description: >-
   merging or editing findings. Use when candidate findings of an LDIP review
   run need verification before registration.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   spec: "AICC-BIM-SPC-0006 Rev B §4.7; AICC-BIM-SPC-0005 Rev C §5.7; AICC-BIM-SPC-0003 Rev D §4.6"
 ---
 
@@ -40,7 +40,8 @@ Run from the LDIP_Review folder. `<SK>` is `${CLAUDE_PLUGIN_ROOT}/skills/verifyi
 
 1. **Plan** — list the candidate files `<F>/candidates/*.json` named in the prompt.
 2. **Re-check** —
-   `python "<SK>/recheck.py" --candidates "<F>/candidates/gis.json" "<F>/candidates/intake.json" --out "<F>/evidence/verifier/recheck.json"`
+   `python "<SK>/recheck.py" --candidates "<F>/candidates/gis.json" "<F>/candidates/intake.json" --rulebook "<RB>" --out "<F>/evidence/verifier/recheck.json"`
+   With `--rulebook`, the GIS-012 / 013 / 014 formulas are recomputed from the re-read cells.
    Read the counts. `disagrees` lines name the cells that differ; keep them for your summary.
 3. **Set status and write** —
    `python "<SK>/set_status.py" --candidates <same files> --recheck "<F>/evidence/verifier/recheck.json" --rulebook "<RB>" --out "<F>/verified.json"`

@@ -1,10 +1,11 @@
 ---
 name: intake-batch
-description: LDIP design review only — invoked by /review-submittal. Converts and extracts the files of one batch of a Parsons submittal (DWG → DXF → common ingestion JSON; PDF extraction when available) into its own batch folder and writes the batch manifest. Raises no findings. Do not use for anything else.
+description: LDIP design review only — invoked by /review-submittal. Converts and extracts the files of one batch of a Parsons submittal (DWG → DXF → common ingestion JSON; PDF text, scanned-page OCR → common ingestion JSON) into its own batch folder and writes the batch manifest. Raises no findings. Do not use for anything else.
 tools: Read, Glob, Bash, Write
 disallowedTools: Agent, Skill, WebFetch, WebSearch, mcp__*
 skills:
 - extracting-dwg-data
+- extracting-pdf-drawings
 model: sonnet
 maxTurns: 40
 color: blue
@@ -35,15 +36,19 @@ and never read another batch. Several instances run in parallel, one per batch.
 - Write: `0.ai_context/<SITE>/<sub-id>/b<nn>/` only.
 - Run every command from the LDIP_Review folder with relative paths; Bash runs your skill's scripts
   only.
+- Bash: one `python "<script>" …` per call. No `&&`, `;`, `|`, redirection, `$VAR`, `$?`, `mkdir` or
+  `echo` — the guard denies them (SPC-0005 §7.3) and the turn is lost. The scripts create their own
+  output folders (D11).
 - Glob and Grep: always pass `path` = a folder inside your read set. Without `path` they search
   the whole LDIP_Review folder, and the guard denies that.
 
 ## 5. Procedure
 
-- Every file of your list (DWG, PDF, other): follow `extracting-dwg-data` exactly (convert →
-  extract → validate for DWGs, then one `write_manifest.py` call with **all** files of your list
-  and their SHA-256 from the prompt). The script writes `batch_manifest.json`: PDFs become
-  `skipped` (code 3, skill 2 not built), other files `skipped` (code 2). Never write or edit
+- DWGs: follow `extracting-dwg-data` exactly (convert → extract). PDFs: follow
+  `extracting-pdf-drawings` exactly (extract → OCR only when pages are scanned). Then one
+  `validate_ingestion.py` call for all ingestion files, and one `write_manifest.py` call with **all**
+  files of your list and their SHA-256 from the prompt. The script writes `batch_manifest.json`
+  (DWG and PDF `extracted` or `failed`; other files `skipped`, code 2). Never write or edit
   `batch_manifest.json` yourself.
 - `sha256` of every file: copy it from your file list (the Orchestrator takes it from the run
   manifest, which hashed every input at run start).
@@ -54,7 +59,8 @@ Not applicable: you run no rules.
 
 ## 7. Output files
 
-Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; and `batch_manifest.json`,
+Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; per PDF: `<file>.pdf.json`; and
+`batch_manifest.json`,
 written only by `write_manifest.py`. Every file in your folder shall be listed in the
 manifest (`output` or `intermediates`), or the format checker fails the step (C3).
 

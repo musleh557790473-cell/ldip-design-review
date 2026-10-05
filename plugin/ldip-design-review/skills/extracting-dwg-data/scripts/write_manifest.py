@@ -4,7 +4,8 @@
 The agent no longer writes the manifest by hand. For each input of the batch the script reads the
 converter log (<stem>.convert.json) and the ingestion file (<stem>.dwg.json) in the batch folder,
 validates the ingestion file (validate_ingestion.check), and sets status / output / intermediates /
-error. PDFs are `skipped` (code 3, skill 2 not built); other files are `skipped` (code 2).
+error. PDFs (skill 2): the ingestion file <name>.pdf.json written by extract_pdf.py is validated →
+`extracted`; missing or invalid → `failed`. Other files are `skipped` (code 2).
 The manifest is validated against schemas/batch_manifest.schema.json before it is written.
 
 Usage: python write_manifest.py --batch-dir <0.ai_context/SITE/SUB/bNN> --run <run_id> --site <SITE>
@@ -13,7 +14,7 @@ Usage: python write_manifest.py --batch-dir <0.ai_context/SITE/SUB/bNN> --run <r
 Exit: 0 written · 2 input error · 3 jsonschema missing · 4 manifest failed its schema (not written).
 No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -31,7 +32,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 BATCH_SCHEMA = PLUGIN_ROOT / "schemas" / "batch_manifest.schema.json"
 INGESTION_SCHEMA = PLUGIN_ROOT / "schemas" / "ingestion.schema.json"
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
-PDF_DETAIL = "skill 2 extracting-pdf-drawings not built"
+PDF_MISSING = "no ingestion file: extract_pdf.py not run or failed"
 
 
 def read_json(p):
@@ -39,6 +40,33 @@ def read_json(p):
         return json.loads(Path(p).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def pdf_entry(bdir, path, sha, ing_validator, root):
+    out = bdir / f"{Path(path).name}.json"
+    entry = {"path": path, "sha256": sha, "type": "pdf", "status": "failed", "output": None, "error": None}
+    if not out.is_file():
+        entry["error"] = {"code": EXIT_INPUT, "detail": PDF_MISSING}
+        return entry
+    doc = read_json(out)
+    if doc is None:
+        entry["error"] = {"code": EXIT_SCHEMA, "detail": "ingestion file is not readable JSON"}
+        entry["intermediates"] = [out.name]
+        return entry
+    if (doc.get("source") or {}).get("sha256") != sha:
+        entry["error"] = {"code": EXIT_INPUT, "detail": "ingestion source hash differs from the file list"}
+        entry["intermediates"] = [out.name]
+        return entry
+    try:
+        errs = validate_ingestion.check(out, ing_validator, root)
+    except (OSError, json.JSONDecodeError) as exc:
+        errs = [f"unreadable: {exc}"]
+    if errs:
+        entry["error"] = {"code": EXIT_SCHEMA, "detail": "ingestion file failed validation: " + "; ".join(errs[:3])}
+        entry["intermediates"] = [out.name]
+        return entry
+    entry.update(status="extracted", output=out.name)
+    return entry
 
 
 def dwg_entry(bdir, path, sha, ing_validator, root):
@@ -109,8 +137,7 @@ def main(argv=None):
             if log and log.get("engine"):
                 (ok_engines if log.get("status") == "ok" else engines).add((log.get("engine"), log.get("engine_version")))
         elif ext == ".pdf":
-            entry = {"path": path, "sha256": sha, "type": "pdf", "status": "skipped", "output": None,
-                     "error": {"code": EXIT_DEPENDENCY, "detail": PDF_DETAIL}}
+            entry = pdf_entry(bdir, path, sha, vi, a.root)
         else:
             entry = {"path": path, "sha256": sha, "type": "other", "status": "skipped", "output": None,
                      "error": {"code": EXIT_INPUT, "detail": "file type not handled by intake-batch"}}

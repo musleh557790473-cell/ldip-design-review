@@ -8,7 +8,7 @@ from that file is reported as not_run. Level 1 and Level 2 are compared trimmed 
 Library used by check_schedule.py (run that script; do not run this module).
 No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import itertools
 import sys
@@ -137,6 +137,19 @@ def row_span(rows):
     return f"{min(rows)}-{max(rows)}" if len(rows) > 1 else str(rows[0])
 
 
+def dlus_agg(dlus, x):
+    """Re-computable DLUS aggregate for one Level 2 (P-S3-24): column ranges and the key, e.g.
+    'dlus_sum DLUS sum(D4:D878 if C=Amenity Green)=35,995.52; dlus_count DLUS count(C4:C878 = Amenity Green)=81'.
+    Empty when the DLUS column letters are not known."""
+    cols = dlus.get("columns") or {}
+    a, l2 = cols.get("land_area"), cols.get("level2")
+    if not (a and l2):
+        return ""
+    r0, r1 = min(x["rows"]), max(x["rows"])
+    return (f"dlus_sum DLUS sum({a}{r0}:{a}{r1} if {l2}={x['level2']})={x['area']:,.2f}; "
+            f"dlus_count DLUS count({l2}{r0}:{l2}{r1} = {x['level2']})={x['plots']}")
+
+
 # ------------------------------------------------------------------ GIS-003
 def gis003(dlus, rules, summ):
     if "GIS-003" not in rules:
@@ -220,8 +233,9 @@ def gis012(dlus, rules, summ):
             {"plot_id": None, "level2": x["level2"], "dlus_plots": x["plots"], "dlus_area": round(x["area"], 2),
              "cells": [tot["cells"]["land_area"]] if tot else [],
              "extract": f"DLUS rows {row_span(x['rows'])}: '{x['level2']}' {x['plots']} plots, {x['area']:,.2f} m2; "
-                        f"not in Overall Summary" + (f" (Summary total {tot['cells']['land_area']}={tot['land_area']:,.2f})"
-                                                     if tot and tot.get("land_area") is not None else "")},
+                        f"not in Overall Summary" + (f"; total Summary {tot['cells']['land_area']}={tot['land_area']:,.2f}"
+                                                     if tot and tot.get("land_area") is not None else "")
+                        + (f"; {dlus_agg(dlus, x)}" if dlus_agg(dlus, x) else "")},
             source=src)
     # both directions on the groups present in both, and summary-only groups
     for k, lst in srows.items():
@@ -241,13 +255,15 @@ def gis012(dlus, rules, summ):
             add(pats, "area_ne_dlus", "Overall Summary area differs from the DLUS total for the Level 2 land use",
                 {"plot_id": None, "level2": s["level2"], "cells": [s["cells"]["land_area"]],
                  "summary": round(s_area, 2), "dlus": round(x["area"], 2),
-                 "extract": f"Summary {s['cells']['land_area']}={s_area:,.2f}; DLUS rows {row_span(x['rows'])} sum={x['area']:,.2f}"},
+                 "extract": f"area Summary {s['cells']['land_area']}={s_area:,.2f}; DLUS rows {row_span(x['rows'])} sum={x['area']:,.2f}"
+                            + (f"; {dlus_agg(dlus, x)}" if dlus_agg(dlus, x) and len(lst) == 1 else "")},
                 source=src)
         if norm(s["level2"]) != "street" and int(round(s_plots)) != x["plots"]:
             add(pats, "plots_ne_dlus", "Overall Summary plot count differs from the DLUS count for the Level 2 land use",
                 {"plot_id": None, "level2": s["level2"], "cells": [s["cells"]["plots"]],
                  "summary": int(round(s_plots)), "dlus": x["plots"],
-                 "extract": f"Summary {s['cells']['plots']}={s_plots:g}; DLUS rows {row_span(x['rows'])} = {x['plots']} plots"},
+                 "extract": f"plots Summary {s['cells']['plots']}={s_plots:g}; DLUS rows {row_span(x['rows'])} = {x['plots']} plots"
+                            + (f"; {dlus_agg(dlus, x)}" if dlus_agg(dlus, x) and len(lst) == 1 else "")},
                 source=src)
     return finish("GIS-012", pats, {"level2_dlus": len(g), "level2_summary": len(srows), "area_tol_m2": tol,
                                     "reconciled": explained_by, "reconciliation_lines": summ["reconciliation"]})

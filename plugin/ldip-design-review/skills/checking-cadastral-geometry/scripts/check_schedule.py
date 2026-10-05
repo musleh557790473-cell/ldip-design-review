@@ -17,7 +17,7 @@ A rule whose sheet is not given is reported as not_run with the reason.
 One result per rule; one pattern per (rule, pattern) with count and up to ten samples (SPC-0004 §5.7).
 Exit: 0 ran · 2 input error · 3 dependency. No network, no shell calls.
 """
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -53,6 +53,12 @@ def add(patterns, key, msg, sample):
         p["samples"].append(sample)
 
 
+def q(role, cell, value):
+    """Quote one value with its role and cell (P-S3-43 / P-S3-24): 'role CELL=value', or 'role=value'
+    when the column is absent. Each quoted value is the cell's own value, never a composite."""
+    return f"{role} {cell}={value:g}" if cell else f"{role}={value:g}"
+
+
 def finish(rid, patterns, extra=None):
     pats = sorted(patterns.values(), key=lambda p: p["pattern"])
     res = {"rule_id": rid, "result": "fail" if pats else "pass", "patterns": pats}
@@ -82,7 +88,7 @@ def gis013(dlus, rules):
                     f"Villa GFA shall be {villa_gfa:g} m2 per unit (GIS-013 fixed_villa_gfa)",
                     {"plot_id": r["plot_id"], "level2": r["level2"], "cells": [c["gfa"], c.get("units")],
                      "measured": round(gfa, 2), "required": round(exp, 2),
-                     "extract": f"{c['gfa']}={gfa:g}; units={units:g}; area={r['land_area']:g}"})
+                     "extract": f"{q('gfa', c['gfa'], gfa)}; {q('units', c.get('units'), units)}; {q('area', c['land_area'], r['land_area'])}"})
         elif r.get("far"):
             exp = r["land_area"] * r["far"]
             if abs(gfa - exp) > tol:
@@ -92,7 +98,7 @@ def gis013(dlus, rules):
                     {"plot_id": r["plot_id"], "level2": r["level2"], "cells": [c["land_area"], c["far"], c["gfa"]],
                      "measured": round(gfa, 2), "required": round(exp, 2),
                      "implied_far": round(gfa / r["land_area"], 3) if r["land_area"] else None,
-                     "extract": f"{c['land_area']}={r['land_area']:g}; {c['far']}={r['far']:g}; {c['gfa']}={gfa:g}"})
+                     "extract": f"{q('area', c['land_area'], r['land_area'])}; {q('far', c['far'], r['far'])}; {q('gfa', c['gfa'], gfa)}"})
         br = [r.get(k) for k in ("gfa_res", "gfa_com", "gfa_cf")]
         if all(x in (None, 0.0) for x in br):
             add(pats, f"gfa_without_breakdown/{r['level2']}",
@@ -105,7 +111,9 @@ def gis013(dlus, rules):
                 add(pats, f"gfa_ne_breakdown/{r['level2']}",
                     "GFA shall equal the sum of its breakdown (Residential + Commercial + Community Facilities)",
                     {"plot_id": r["plot_id"], "level2": r["level2"], "cells": [c["gfa"]] + [c[k] for k in ("gfa_res", "gfa_com", "gfa_cf") if k in c],
-                     "measured": round(gfa, 2), "required": round(s, 2), "extract": f"{c['gfa']}={gfa:g}; breakdown sum={s:g}"})
+                     "measured": round(gfa, 2), "required": round(s, 2),
+                     "extract": "; ".join([q("gfa", c["gfa"], gfa)] + [q(k[4:], c.get(k), r.get(k) or 0.0)
+                                                                       for k in ("gfa_res", "gfa_com", "gfa_cf") if c.get(k)])})
     return finish("GIS-013", pats, {"rows_checked": checked, "tolerance_m2": tol})
 
 
@@ -173,7 +181,8 @@ def gis014(dlus, rules, pa):
                     {"plot_id": r["plot_id"], "level2": r["level2"], "cells": [c[field], c.get("units")], "pa_cells": rate["cells"],
                      "measured": round(r[field], 3), "required": round(exp, 3),
                      "measured_rate_per_unit": round(r[field] / units, 3),
-                     "extract": f"{c[field]}={r[field]:g}; units={units:g}; PA {rate['cells'][0]}={rate['rate']:g}/{rate['per']:g}"})
+                     "extract": f"{q(field, c[field], r[field])}; {q('units', c.get('units'), units)}; "
+                                f"rate PA {rate['cells'][0]}={rate['rate']:g}; per PA {rate['cells'][1]}={rate['per']:g}"})
     return finish("GIS-014", pats, {"rows_checked": checked, "rows_not_checked_no_mapping": not_checked,
                                     "note": "Only villa rows are checked; other land uses need an agreed DLUS Level 2 -> "
                                             "Planning Assumptions mapping [GAP]",

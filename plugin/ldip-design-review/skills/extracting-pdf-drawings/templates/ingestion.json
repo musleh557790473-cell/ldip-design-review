@@ -1,0 +1,64 @@
+{
+ "template_version": "1.0",
+ "source": {
+  "path": "submittals/<SITE>/<sub-id>/<file>.pdf",
+  "sha256": "<sha256>",
+  "bytes": 0,
+  "document_no": null,
+  "revision": null,
+  "file_type": "pdf"
+ },
+ "extractor": {
+  "skill": "extracting-pdf-drawings",
+  "script": "extract_pdf.py",
+  "version": "<version>",
+  "converter": {
+   "name": "pypdfium2",
+   "version": "<version>"
+  }
+ },
+ "crs": {
+  "declared": null,
+  "units": "unknown",
+  "insunits": null
+ },
+ "title_block": null,
+ "content": {
+  "pages": [
+   {
+    "page": 1,
+    "width_pt": 0,
+    "height_pt": 0,
+    "rotation": 0,
+    "char_count": 0,
+    "image_cover": 0.0,
+    "raster_ratio": 0.0,
+    "scanned": false,
+    "spans": [],
+    "ocr_spans": [],
+    "colours_used": [],
+    "error": null,
+    "objects": 0,
+    "colours_complete": true,
+    "image_count": 0,
+    "image_regions": []
+   }
+  ],
+  "page_count": 1,
+  "callouts": [],
+  "ocr": null,
+  "scanned_rule": {
+   "max_chars": 20,
+   "min_raster_ratio": 0.9
+  }
+ },
+ "warnings": [
+  {
+   "code": "TITLE_BLOCK_ZONE_UNCONFIRMED",
+   "detail": "…"
+  }
+ ],
+ "meta": {
+  "extracted_at": "<ISO 8601 +03:00>"
+ }
+}

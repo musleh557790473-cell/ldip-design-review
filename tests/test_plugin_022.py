@@ -300,10 +300,11 @@ def test_d8_manifest_from_disk_and_checkers(batch):
     assert by["A-01.dwg"]["status"] == "extracted" and by["A-01.dwg"]["output"] == "A-01.dwg.json"
     assert sorted(by["A-01.dwg"]["intermediates"]) == ["A-01.convert.json", "A-01.dxf"]
     assert by["B-02.dwg"]["status"] == "failed" and by["B-02.dwg"]["error"]["code"] == 3
-    assert by["C-03.pdf"]["status"] == "skipped" and by["C-03.pdf"]["error"]["code"] == 3
+    # skill 2 (session 8): a PDF with no ingestion file is failed, code 2 (extract_pdf.py not run)
+    assert by["C-03.pdf"]["status"] == "failed" and by["C-03.pdf"]["error"]["code"] == 2
     assert by["D-04.txt"]["type"] == "other" and by["D-04.txt"]["status"] == "skipped"
     assert m["converter"] == {"name": "oda", "version": "unknown"}
-    assert m["counts"] == {"extracted": 1, "failed": 1, "skipped": 2}
+    assert m["counts"] == {"extracted": 1, "failed": 2, "skipped": 1}
     # C3 batch ownership passes on the folder the script described
     sys.path.insert(0, str(SCRIPTS))
     import check_batches

@@ -63,6 +63,47 @@
     "no GIS-015 finding",
     "no tolerance typed by the agent"
    ]
+  },
+  {
+   "id": "T5-QRWN-DWG",
+   "query": "Run the GIS drawing checks on the QRWN DMP drawing extracted in batch b01 for run QRWN-T0001-20261005T1200 with the approved rulebook.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "0.ai_context/QRWN/T0001/b01/LDIP-RCRC-SAP-01-QRWN-MPL-DWG-00-11000.dwg.json"
+   ],
+   "expected": [
+    "check_crs.py: GIS-008 pass on units (INSUNITS 6), CRS not declared (no finding), envelope sub-check not_run with the GAP reason copied into gaps[]",
+    "check_topology.py: GIS-009 not_run (plot layers GAP); no finding",
+    "match_plots.py: GIS-004 to GIS-007, GIS-010, GIS-011, GIS-016 all not_run (inactive)",
+    "no --profile call; no finding written by hand"
+   ]
+  },
+  {
+   "id": "T6-NRJS-DWG-schedule",
+   "query": "Check the NRJS DMP drawing together with the NRJS schedule CSV exports against the GIS rules.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "0.ai_context/NRJS/T0001/b01/LDIP-RCRC-SAP-01-NRJS-MPL-DWG-00-10001.dwg.json",
+    "submittals/NRJS/masterplan-schedule/DLUS.csv"
+   ],
+   "expected": [
+    "schedule rules as T3",
+    "drawing rules as T5",
+    "match_plots.py receives --dlus and --gis001",
+    "build_candidates.py lists only the result files produced; schedule number gap reported (CSV only)"
+   ]
+  },
+  {
+   "id": "T7-seeded-envelope",
+   "query": "With the test rulebook golden_set/seeded/rules_test_envelope.json, check the seeded NRJS drawing whose plots were shifted by dE -1107.56 / dN +34.31 m.",
+   "files": [
+    "golden_set/seeded/rules_test_envelope.json",
+    "golden_set/seeded/NRJS-shifted.dwg.json"
+   ],
+   "expected": [
+    "GIS-008 outside_site_envelope findings, one per layer",
+    "proposed_status Probable (advisory cap)"
+   ]
   }
  ]
 }

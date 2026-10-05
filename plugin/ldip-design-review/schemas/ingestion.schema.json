@@ -2,7 +2,7 @@
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://aicc.local/ldip/ingestion.schema.json",
  "title": "LDIP common ingestion file (*.dwg.json, *.pdf.json) \u2014 SPC-0006 Rev B \u00a72.4, \u00a74.1.4",
- "description": "template_version 1.0. The PDF content (\u00a74.2.4) is checked only for type until skill 2 defines it.",
+ "description": "template_version 1.0. DWG content per \u00a74.1.4 (skill 1); PDF content per \u00a74.2.4 (skill 2 extracting-pdf-drawings 0.1.0).",
  "type": "object",
  "required": [
   "template_version",
@@ -810,6 +810,339 @@
       "properties": {
        "skill": {
         "const": "extracting-dwg-data"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "source": {
+      "properties": {
+       "file_type": {
+        "const": "pdf"
+       }
+      }
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "pages",
+       "page_count",
+       "callouts",
+       "ocr",
+       "scanned_rule"
+      ],
+      "properties": {
+       "pages": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "page",
+          "width_pt",
+          "height_pt",
+          "rotation",
+          "char_count",
+          "image_cover",
+          "raster_ratio",
+          "scanned",
+          "spans",
+          "ocr_spans",
+          "colours_used",
+          "error",
+          "objects",
+          "colours_complete",
+          "image_count",
+          "image_regions"
+         ],
+         "properties": {
+          "page": {
+           "type": "integer",
+           "minimum": 1
+          },
+          "width_pt": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "height_pt": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "rotation": {
+           "enum": [
+            0,
+            90,
+            180,
+            270
+           ]
+          },
+          "char_count": {
+           "type": "integer",
+           "minimum": 0
+          },
+          "image_cover": {
+           "type": "number",
+           "minimum": 0,
+           "maximum": 1
+          },
+          "raster_ratio": {
+           "type": "number",
+           "minimum": 0,
+           "maximum": 1
+          },
+          "scanned": {
+           "type": "boolean"
+          },
+          "spans": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "text",
+             "bbox",
+             "font",
+             "size"
+            ],
+            "properties": {
+             "text": {
+              "type": "string"
+             },
+             "bbox": {
+              "type": "array",
+              "items": {
+               "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+             },
+             "font": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "size": {
+              "type": [
+               "number",
+               "null"
+              ]
+             }
+            }
+           }
+          },
+          "ocr_spans": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "text",
+             "bbox",
+             "conf",
+             "source_type",
+             "region"
+            ],
+            "properties": {
+             "text": {
+              "type": "string",
+              "minLength": 1
+             },
+             "bbox": {
+              "type": "array",
+              "items": {
+               "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+             },
+             "conf": {
+              "type": "number"
+             },
+             "source_type": {
+              "const": "pdf_ocr"
+             },
+             "region": {
+              "enum": [
+               "page",
+               "image"
+              ]
+             }
+            }
+           }
+          },
+          "colours_used": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "colour",
+             "count"
+            ],
+            "properties": {
+             "colour": {
+              "type": "string"
+             },
+             "count": {
+              "type": "integer",
+              "minimum": 1
+             }
+            }
+           }
+          },
+          "error": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "objects": {
+           "type": "integer",
+           "minimum": 0
+          },
+          "colours_complete": {
+           "type": "boolean"
+          },
+          "image_count": {
+           "type": "integer",
+           "minimum": 0
+          },
+          "image_regions": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "bbox",
+             "pieces",
+             "share",
+             "ocr_candidate"
+            ],
+            "properties": {
+             "bbox": {
+              "type": "array",
+              "items": {
+               "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+             },
+             "pieces": {
+              "type": "integer",
+              "minimum": 1
+             },
+             "share": {
+              "type": "number",
+              "minimum": 0
+             },
+             "ocr_candidate": {
+              "type": "boolean"
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "page_count": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "callouts": {
+        "type": "array"
+       },
+       "ocr": {
+        "oneOf": [
+         {
+          "type": "null"
+         },
+         {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+           "engine",
+           "version",
+           "lang",
+           "dpi",
+           "tile_px",
+           "overlap_px",
+           "pages",
+           "script",
+           "image_regions"
+          ],
+          "properties": {
+           "engine": {
+            "const": "tesseract"
+           },
+           "version": {
+            "type": "string"
+           },
+           "lang": {
+            "type": "string"
+           },
+           "dpi": {
+            "type": "integer"
+           },
+           "tile_px": {
+            "type": "integer"
+           },
+           "overlap_px": {
+            "type": "integer"
+           },
+           "pages": {
+            "type": "array",
+            "items": {
+             "type": "integer",
+             "minimum": 1
+            }
+           },
+           "script": {
+            "type": "string"
+           },
+           "image_regions": {
+            "type": "integer",
+            "minimum": 0
+           }
+          }
+         }
+        ]
+       },
+       "scanned_rule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "max_chars",
+         "min_raster_ratio"
+        ],
+        "properties": {
+         "max_chars": {
+          "type": "integer"
+         },
+         "min_raster_ratio": {
+          "type": "number"
+         }
+        }
+       }
+      }
+     },
+     "extractor": {
+      "properties": {
+       "skill": {
+        "const": "extracting-pdf-drawings"
        }
       }
      }

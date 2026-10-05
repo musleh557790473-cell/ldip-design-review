@@ -7,16 +7,19 @@ Confidence follows the evidence tier (deterministic cell reads → High). The st
 observed facts and the requirement only; no reasoning (SPC-0002 C5).
 
 Usage: python build_candidates.py --results <r1.json> [<r2.json> ...] --rules <rules_GIS.json>
-           --run <run-id> --site <SITE> --sub <sub-id> --document-no <number> [--review-root <LDIP_Review>]
+           --run <run-id> --site <SITE> --sub <sub-id> [--document-no <schedule number>] [--review-root <LDIP_Review>]
            [--start 1] --out findings/<run>/candidates/gis.json
 Results files: read_dlus.py (GIS-002), check_ids.py (GIS-001), check_schedule.py (GIS-003, GIS-012 to
-GIS-015) outputs. Each finding is located in the sheet and file its pattern
-was read from (location.file_path is relative to --review-root, default the working directory, which
-is the LDIP_Review folder in a run; file_sha256 is that file's hash).
+GIS-015), check_crs.py (GIS-008), check_topology.py (GIS-009) and match_plots.py (GIS-004 to 007, 010,
+011, 016) outputs; a match_plots.py --profile file is refused. Each finding is located in the file its
+pattern was read from (location.file_path is relative to --review-root, default the working directory,
+which is the LDIP_Review folder in a run; file_sha256 is that file's hash). Schedule findings take
+--document-no; drawing findings take the drawing's number from its ingestion file (the file name when
+the title block was not read). A drawing finding is located by handles and layer (location.dwg).
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -39,9 +42,11 @@ def collect(results_docs):
     """Normalise the three result shapes into a list of rule results."""
     out = []
     for d in results_docs:
+        if d.get("mode") == "profile":
+            raise ValueError("a match_plots.py --profile file is not a check result")
         if "results" in d:
             out += [dict(r, source=r.get("source") or d.get("dlus_source")) for r in d["results"]]
-        elif d.get("rule_id") == "GIS-001":
+        elif d.get("rule_id") in ("GIS-001", "GIS-008", "GIS-009"):
             out.append(dict(d, source=d.get("source") or d.get("dlus_source")))
         elif "result" in d and isinstance(d["result"], dict) and d["result"].get("rule_id") == "GIS-002":
             res = d["result"]
@@ -59,14 +64,25 @@ def collect(results_docs):
 
 def finding(n, rr, pat, rule, a, rb_version, now):
     src = pat.get("source") or rr.get("source") or a.default_source
+    if not src:
+        raise ValueError(f"no source for {rule['rule_id']} pattern {pat['pattern']}")
     source_type = src["source_type"]
+    is_dwg = source_type.startswith("dwg")
+    document_no = src.get("document_no") if is_dwg else a.document_no
+    if is_dwg and not document_no:
+        document_no = Path(src["path"]).stem
+    if not document_no:
+        raise ValueError(f"no document number for {rule['rule_id']} (pass --document-no for schedule findings)")
     samples = pat.get("samples", [])
     count = pat.get("count", pat.get("count_rows", len(samples)))
-    cells = []
+    cells, handles = [], []
     for s in samples:
-        for c in s.get("cells", []) or []:
+        for c in (s.get("cells", []) or []) if not is_dwg else []:
             if c and c not in cells:
                 cells.append(c)
+        for h in s.get("handles", []) or []:
+            if h and h not in handles:
+                handles.append(h)
     plot_ids = [str(s["plot_id"]) for s in samples if s.get("plot_id") not in (None, "")]
     for s in samples:
         plot_ids += [str(x) for x in s.get("plot_ids", []) if str(x) not in plot_ids]
@@ -81,12 +97,15 @@ def finding(n, rr, pat, rule, a, rb_version, now):
                  + (f". Observed: {observed}" if observed else "")
                  + f". Requirement ({rule['rule_id']}): {rule['statement']}")[:1500]
     default = rule["default_status"].get(source_type) or rule["default_status"].get("script_output") or "Probable"
-    loc = {"document_no": a.document_no, "file_path": rel_path(src["path"], a.review_root), "file_sha256": src["sha256"]}
+    loc = {"document_no": document_no, "file_path": rel_path(src["path"], a.review_root), "file_sha256": src["sha256"]}
+    if is_dwg and handles:
+        layers = sorted({s["layer"] for s in samples if s.get("layer")})
+        loc["dwg"] = {"handles": handles[:40], **({"layer": layers[0]} if len(layers) == 1 else {})}
     if cells:
         loc["table"] = {"sheet": src.get("sheet") or Path(src["path"]).stem, "cells": cells[:40]}
     if plot_ids:
         loc["plot_ids"] = plot_ids
-    if not cells and not plot_ids:
+    if not cells and not plot_ids and not loc.get("dwg"):
         loc["package_level"] = True
     tol = next((p.get("value") for k, p in rule["parameters"].items() if k.startswith("tol") or k.endswith("_tol")), None)
     return {
@@ -126,7 +145,7 @@ def main(argv=None):
     ap.add_argument("--run", required=True)
     ap.add_argument("--site", required=True)
     ap.add_argument("--sub", required=True)
-    ap.add_argument("--document-no", required=True)
+    ap.add_argument("--document-no")
     ap.add_argument("--review-root", default=".",
                     help="LDIP_Review folder (default: the working directory); file paths are written relative to it")
     ap.add_argument("--start", type=int, default=1)
@@ -138,18 +157,22 @@ def main(argv=None):
     try:
         docs = [json.loads(Path(p).read_text(encoding="utf-8")) for p in a.results]
         rb = json.loads(Path(a.rules).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        if any(d.get("mode") == "profile" for d in docs if isinstance(d, dict)):
+            raise ValueError("a match_plots.py --profile file is not a check result")
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({"status": "error", "code": 2, "detail": f"cannot read input: {exc}"}))
         return 2
     rules = {r["rule_id"]: r for r in rb["rules"]}
-    a.default_source = next((d.get("source") or d.get("dlus_source") for d in docs if d.get("source") or d.get("dlus_source")), None)
-    if not a.default_source:
-        print(json.dumps({"status": "error", "code": 2, "detail": "no source block in the results (run read_dlus.py first)"}))
-        return 2
-    a.script_of = {"GIS-001": "check_ids.py", "GIS-002": "read_dlus.py"}
+    a.default_source = next((d.get("source") or d.get("dlus_source") for d in docs
+                             if d.get("rule_id") in (None, "GIS-001") and (d.get("source") or d.get("dlus_source"))), None)
+    a.script_of = {"GIS-001": "check_ids.py", "GIS-002": "read_dlus.py", "GIS-008": "check_crs.py",
+                   "GIS-009": "check_topology.py", **{r: "match_plots.py" for r in
+                                                      ("GIS-004", "GIS-005", "GIS-006", "GIS-007", "GIS-010", "GIS-011", "GIS-016")}}
     now = datetime.now(RIYADH).isoformat(timespec="seconds")
     findings, skipped, n = [], [], a.start
     for rr in collect(docs):
+        for sc in rr.get("subchecks_not_run", []) or []:
+            skipped.append({"rule_id": rr["rule_id"], "subcheck": sc["subcheck"], "reason": sc["reason"]})
         if rr.get("result") != "fail":
             if rr.get("result") == "not_run":
                 skipped.append({"rule_id": rr["rule_id"], "reason": rr.get("reason")})
