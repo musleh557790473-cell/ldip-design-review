@@ -17,3 +17,13 @@ DLUS, rule values (`rules_v<N>.json`), or any Golden Set content. `.gitignore` a
 | `tools/check_no_data.py` | Pre-commit guard for rule 5 |
 | `specs-machine/` | Machine copies of spec tables (e.g. SPC-0002 §5 access matrix source) |
 | `tests/` | Pytest suites and synthetic fixtures (no project data) |
+
+## Run environment (cloud run session)
+
+Install before an install check or a review run (D13: ezdwg is pinned so that test runs stay
+comparable; `convert.py` warns `ENGINE_VERSION_UNPINNED` on any other version):
+
+    pip install ezdwg==0.12.9 ezdxf pypdfium2 pdfplumber pytesseract shapely --break-system-packages
+    apt-get install -y tesseract-ocr tesseract-ocr-ara
+
+Python 3.11 or later (suite last run on 3.13.16, session 10).

@@ -12,7 +12,7 @@
 
 | Engine | What it is | Notes |
 |---|---|---|
-| `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`) |
+| `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`). **Pinned to 0.12.9** (D13, owner 5 Oct 2026): results from another version are not comparable; `convert.py` then warns `ENGINE_VERSION_UNPINNED` |
 | `oda` | ODA File Converter, external program | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `unknown` until installed |
 | `accoreconsole` | AutoCAD Core Console, Windows only | `--exe` or env `LDIP_ACCORE_EXE`. Script `DXFOUT … Version 2018, 16 decimals`. Prompt sequence to verify on the review workstation [GAP] |
 

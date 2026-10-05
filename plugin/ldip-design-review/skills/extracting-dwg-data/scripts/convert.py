@@ -15,7 +15,7 @@ hash and DWG version, output hash, duration, return code, entities the engine sk
 Exit: 0 converted · 2 input error or no DXF produced · 3 engine missing, DWG version not supported,
 or timeout. The only external program called is the named converter (SPC-0006 §2.3.5).
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import argparse
 import json
@@ -36,6 +36,7 @@ from dwg_common import (  # noqa: E402
 ACADVER = {"AC1009": "R12", "AC1012": "R13", "AC1014": "R14", "AC1015": "R2000", "AC1018": "R2004",
            "AC1021": "R2007", "AC1024": "R2010", "AC1027": "R2013", "AC1032": "R2018"}
 EZDWG_SUPPORTED = ("AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032")
+EZDWG_PINNED = "0.12.9"   # D13 [AGREED] 5 Oct 2026: run environment pins ezdwg to this version
 
 
 def dwg_version(path):
@@ -53,6 +54,11 @@ def run_ezdwg(dwg, out_tmp, log):
     except ImportError as exc:
         raise DwgError(EXIT_DEPENDENCY, "ezdwg is not installed") from exc
     log["engine_version"] = version("ezdwg")
+    if log["engine_version"] != EZDWG_PINNED:
+        # D13: warn only; the conversion still runs (owner decision 5 Oct 2026).
+        log["warnings"].append({"code": "ENGINE_VERSION_UNPINNED",
+                                "detail": f"ezdwg {log['engine_version']} installed; pinned {EZDWG_PINNED} (D13) "
+                                          "- results not comparable with pinned runs"})
     if log["input"]["acadver"] not in EZDWG_SUPPORTED:
         raise DwgError(EXIT_DEPENDENCY, f"DWG {log['input']['acadver']} not supported by ezdwg (R2000–R2018)")
     # Keep dimensions as DIMENSION entities (override flags, brief §5.5) and inserts as INSERTs.

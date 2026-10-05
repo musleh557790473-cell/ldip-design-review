@@ -2,7 +2,7 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.1.1"
+  version: "0.1.2"
   spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1"
 ---
 
@@ -13,8 +13,9 @@ package and GIS agents read. It records what the drawing contains; it never judg
 never raises a finding. The scripts do the work: run them, read their one-line results, and do not
 read their source.
 
-Packages: Python 3.11+, `ezdxf`, `jsonschema`; engine `ezdwg`, or ODA File Converter / AutoCAD
-Core Console as external programs.
+Packages: Python 3.11+, `ezdxf`, `jsonschema`; engine `ezdwg==0.12.9` (pinned, D13), or ODA File
+Converter / AutoCAD Core Console as external programs. Another ezdwg version still converts, but
+`convert.py` adds the warning `ENGINE_VERSION_UNPINNED` (results not comparable with pinned runs).
 
 ## Hard rules
 
