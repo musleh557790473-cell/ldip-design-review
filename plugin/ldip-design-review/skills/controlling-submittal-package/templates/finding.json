@@ -1,0 +1,59 @@
+{
+ "schema_version": "1.0",
+ "finding_id": "<SITE>-<sub>-<yyyymmddThhmm>/INT-001",
+ "stage": "candidate",
+ "run_id": "<run-id>",
+ "site": "<QRWN|NMAR|NRJS>",
+ "sub_id": "<sub-id>",
+ "agent": "INT",
+ "agent_versions": {
+  "controlling-submittal-package": "<version>"
+ },
+ "title": "<rule_id> <rule title>: <pattern>",
+ "statement": "<pattern message>. <count> occurrence(s) ... Observed: <extracts>. Requirement (<rule_id>): <rule statement>",
+ "issue_type": "<rule issue_type>",
+ "location": {
+  "document_no": "<Parsons number>",
+  "file_path": "submittals/<SITE>/<sub-id>/<file>",
+  "file_sha256": "<sha256>",
+  "table": {
+   "sheet": "<sheet>",
+   "cells": [
+    "<A1>"
+   ]
+  },
+  "plot_ids": [
+   "<id>"
+  ]
+ },
+ "severity": "<rule severity_default>",
+ "confidence": "High",
+ "evidence": [
+  {
+   "evidence_id": "E01",
+   "tier": "deterministic",
+   "source_type": "<xlsx_cell|csv_cell>",
+   "extract": "<cell=value; ...>",
+   "measured_value": 0,
+   "unit": "occurrences",
+   "script": {
+    "name": "controlling-submittal-package/scripts/<script>.py",
+    "version": "<version>",
+    "exit_code": 0
+   }
+  }
+ ],
+ "reference": {
+  "rule_id": "GIS-nnn",
+  "rulebook_version": "<v>",
+  "source_doc": "LDIP Rulebook <v> (AICC-BIM-SPC-0004)",
+  "clause": "<rule_id>: <title>",
+  "tolerance": null
+ },
+ "proposed_status": "<min(default_status[source_type], cap)>",
+ "owner": {
+  "role": "Lead GIS",
+  "name": null
+ },
+ "created_at": "<ISO 8601 +03:00>"
+}

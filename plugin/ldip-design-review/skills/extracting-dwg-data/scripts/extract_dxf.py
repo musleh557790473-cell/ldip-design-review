@@ -14,7 +14,7 @@ folder used to decide whether xrefs, images and fonts resolve; without it `resol
 Exit: 0 written · 2 input error (missing or unreadable DXF, log not ok) · 3 ezdxf missing.
 No network, no shell calls.
 """
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 
 import argparse
 import json
@@ -176,6 +176,23 @@ def resolved(p, base):
     return cand.is_file() or (Path(base) / cand.name).is_file() or (Path(base) / cand).is_file()
 
 
+# SHX fonts installed with every AutoCAD (Fonts folder): never "missing" from a package (fix 12 Oct 2026:
+# 'txt' on style Standard was reported as unresolved on all Namar sheets).
+AUTOCAD_SHX = {"txt", "simplex", "complex", "italic", "monotxt", "romans", "romand", "romanc", "romant", "scripts",
+               "scriptc", "italicc", "italict", "greeks", "greekc", "gothice", "gothicg", "gothici", "syastro",
+               "symap", "symath", "symeteo", "symusic", "isocp", "isocp2", "isocp3", "isoct", "isoct2", "isoct3",
+               "isocpeur", "isoct2", "gdt", "amgdt", "ltypeshp", "bigfont", "chineset", "extfont", "extfont2",
+               "gbcbig", "gbenor", "gbeitc", "@extfont2", "whgdtxt", "whgtxt", "whtgtxt", "whtmtxt"}
+
+
+def font_resolved(f, base):
+    stem = Path(str(f).replace("\\", "/")).name.lower()
+    stem = stem[:-4] if stem.endswith(".shx") else stem
+    if stem in AUTOCAD_SHX:
+        return True
+    return resolved(f, base)
+
+
 def title_block(inserts):
     """Pick the insert with most attributes; map tags by name. [GAP K5] until Parsons zones confirmed."""
     cands = [i for i in inserts if i["attributes"]]
@@ -313,7 +330,7 @@ def extract(a):
         f = st.dxf.get("font", "")
         if f:
             fonts.append({"style": st.dxf.name, "font": f, "bigfont": st.dxf.get("bigfont", "") or None,
-                          "resolved": resolved(f, base)})
+                          "resolved": font_resolved(f, base)})
 
     lay_out = []
     for lo in sorted(layouts, key=lambda x: (x.dxf.get("taborder", 0), x.name)):
@@ -329,6 +346,8 @@ def extract(a):
     if tb is not None:
         warnings.append({"code": "TITLE_BLOCK_HEURISTIC",
                          "detail": "title-block fields read by attribute tag names; Parsons layout not confirmed (K5)"})
+    elif any(w.get("code") == "TITLE_BLOCK_ATTRIBS_UNDECODED" for w in conv.get("warnings", [])):
+        pass  # K5-2: attributes exist but the engine could not decode them; the convert-log warning stands
     else:
         warnings.append({"code": "TITLE_BLOCK_NOT_FOUND", "detail": "no block insert with attributes found"})
 

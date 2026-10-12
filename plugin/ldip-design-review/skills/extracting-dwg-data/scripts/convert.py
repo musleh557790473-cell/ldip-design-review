@@ -15,11 +15,12 @@ hash and DWG version, output hash, duration, return code, entities the engine sk
 Exit: 0 converted · 2 input error or no DXF produced · 3 engine missing, DWG version not supported,
 or timeout. The only external program called is the named converter (SPC-0006 §2.3.5).
 """
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,7 +71,48 @@ def run_ezdwg(dwg, out_tmp, log):
         log["warnings"].append({"code": "ENGINE_SKIPPED_ENTITIES",
                                 "detail": f"ezdwg skipped {res.skipped_entities} of {res.total_entities} entities: "
                                           + ", ".join(f"{k} {v}" for k, v in sorted(res.skipped_by_type.items()))})
+    attrib_check(ezdwg, dwg, log)
     log["returncode"] = 0
+
+
+TAG_RE = re.compile(r"^[A-Za-z0-9_.#\\-]{1,255}$")
+# K5 profile (Namar 30% package, 11 Oct 2026): paper-space block holding the Parsons title-block values.
+TB_ATTRIB_BLOCKS = ("Ladun - Qairwan ATT",)
+
+
+def attrib_check(ezdwg, dwg, log):
+    """K5-2 (owner approved 11 Oct 2026): title-block attributes ezdwg cannot decode.
+
+    Parsons title-block values are attributes of a paper-space block (TB_ATTRIB_BLOCKS). On AC1032 files
+    ezdwg 0.12.9 decodes them as garbled text or not at all, and none reach the DXF. Counted as
+    undecoded: an attribute whose tag is not plain letters / digits / _ . # -, and a known title-block
+    insert without any readable attribute."""
+    try:
+        rows = ezdwg.raw.decode_attrib_entities(str(dwg))
+        d = ezdwg.read(str(dwg))
+        inserts = {}
+        for space in (d.modelspace(), d.paperspace()):
+            for e in space.iter_entities():
+                if e.dxftype == "INSERT":
+                    inserts[e.handle] = e.dxf.get("name")
+    except Exception as exc:  # the check is informative only
+        log["attributes"] = {"checked": False, "reason": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        return
+    def owner(r):
+        return r[-1][1] if isinstance(r[-1], (tuple, list)) and len(r[-1]) > 1 else None
+    bad = [r for r in rows if not (isinstance(r[2], str) and TAG_RE.match(r[2]))]
+    good_owners = {owner(r) for r in rows if r not in bad}
+    tb_missing = [h for h, n in inserts.items() if n in TB_ATTRIB_BLOCKS and h not in good_owners]
+    blocks = sorted({inserts[owner(r)] for r in bad if inserts.get(owner(r))} | {inserts[h] for h in tb_missing})
+    log["attributes"] = {"checked": True, "total": len(rows), "undecoded": len(bad),
+                         "title_block_inserts_unread": len(tb_missing), "blocks": blocks}
+    if bad or tb_missing:
+        log["warnings"].append({"code": "TITLE_BLOCK_ATTRIBS_UNDECODED",
+                                "detail": f"ezdwg could not decode {len(bad)} of {len(rows)} block attribute(s); "
+                                          f"{len(tb_missing)} title-block insert(s) without readable attributes"
+                                          + (f" (blocks: {', '.join(blocks[:5])})" if blocks else "")
+                                          + "; title-block values are not in the DXF - use the oda or "
+                                            "accoreconsole engine (K2)"})
 
 
 def find_exe(arg, env, name):

@@ -7,7 +7,7 @@ description: >-
   for a given page and box. Use when an LDIP submittal contains PDFs, or when a
   finding needs a verbatim text crop as evidence.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.2"
 ---
 
@@ -29,8 +29,9 @@ reader (skill 18). PyMuPDF is not used (licence review open).
    `findings/<run>/evidence/verifier/`.
 2. A file that fails (exit other than 0) is not retried: continue with the next file;
    `write_manifest.py` records it as `failed`. Never write a `.pdf.json` by hand.
-3. Title block and callouts are not read yet (warnings `TITLE_BLOCK_ZONE_UNCONFIRMED`,
-   `CALLOUT_STYLE_UNKNOWN`). Do not read them yourself from the text spans.
+3. The title block is read by the script from the Parsons label layout (`references/title_blocks.md`);
+   a page without one gets `TITLE_BLOCK_NOT_FOUND`. Callouts are not read yet (`CALLOUT_STYLE_UNKNOWN`).
+   Do not read either yourself from the text spans.
 4. OCR text (`ocr_spans`, `source_type: pdf_ocr`) is Probable evidence at most. The skill reads text
    in pictures, never their shapes: plot boundaries, road edges or areas drawn only as a picture are not
    extracted — do not describe or measure them. Colours in

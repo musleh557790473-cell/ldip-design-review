@@ -82,7 +82,7 @@ def test_extract_vector_and_scanned(tmp_path, pdf):
     assert any(c["colour"].startswith("(1.000,0.000,0.000") for c in p1["colours_used"])
     assert doc["source"]["document_no"] == DOC and doc["title_block"] is None
     codes = {w["code"] for w in doc["warnings"]}
-    assert {"TITLE_BLOCK_ZONE_UNCONFIRMED", "CALLOUT_STYLE_UNKNOWN", "SCANNED_PAGES"} <= codes
+    assert {"TITLE_BLOCK_NOT_FOUND", "CALLOUT_STYLE_UNKNOWN", "SCANNED_PAGES"} <= codes
     rc, v = run("validate_ingestion.py", "--files", out, "--root", tmp_path, base=SK1)
     assert rc == 0, v
 
@@ -397,3 +397,63 @@ def test_ocr_picture_region_in_vector_page(tmp_path):
     assert "PARCEL" in words and "5911" in words and "OVERLAY" not in words
     assert all(s_["region"] == "image" and 600 <= s_["bbox"][0] <= 1000 for s_ in sp)
     assert run("validate_ingestion.py", "--files", out, base=SK1)[0] == 0
+
+
+# ------------------------------------------------------------------ title block (K5-1)
+TB_NO = "LDIP-RCRC-SAP-03-DN-ROD-DWG-10200-001"
+
+
+def make_tb_pdf(path, scale=1.0, rotate=0, number=TB_NO, rev="00"):
+    """Parsons-like title block: labels and values at the bottom right of an A1 sheet (scaled for A0)."""
+    w, h = 2384 * scale, 1684 * scale
+    c = canvas.Canvas(str(path), pagesize=(w, h))
+    if rotate:
+        c.setPageRotation(rotate)
+
+    def put(x, top, text, size=5):
+        c.setFont("Helvetica", size * scale)
+        c.drawString(x * scale, h - (top + size) * scale, text)
+    put(400, 400, "ROAD PLAN BODY TEXT Drawing No.: should not be read")
+    put(1966, 1240, "Purpose of Issue:")
+    put(2081, 1248, "ISSUED FOR APPROVAL", 10)
+    put(1966, 1269, "Client:")
+    put(1966, 1537, "Drawing Title:")
+    put(2111, 1548, "ROAD LAYOUT", 10)
+    for x, lab in ((1966, "Scale at A1:"), (2065, "Date:"), (2164, "Revision:"), (2263, "Sheet:")):
+        put(x, 1609, lab)
+    for x, val in ((2010, "1:1000M"), (2090, "SEPT. 2026"), (2218, rev), (2296, "01 OF 05")):
+        put(x, 1614, val, 8)
+    put(1966, 1632, "Drawing No.:")
+    put(2054, 1638, number, 10)
+    c.showPage()
+    c.save()
+    return path
+
+
+@pytest.mark.parametrize("scale,rotate", [(1.0, 0), (1.4135, 0), (1.0, 90)])
+def test_title_block_label_anchored(tmp_path, scale, rotate):
+    pdf_path = make_tb_pdf(tmp_path / f"{TB_NO}-00.pdf", scale=scale, rotate=rotate)
+    rc, res, out = extract(tmp_path, pdf_path)
+    assert rc == 0
+    doc = json.loads(out.read_text())
+    tb = doc["title_block"]
+    codes = {w["code"] for w in doc["warnings"]}
+    if rotate:
+        # a page rotated after drawing puts the block elsewhere on the displayed page: not read
+        assert tb is None and "TITLE_BLOCK_NOT_FOUND" in codes
+        return
+    assert tb["document_no"] == TB_NO and tb["revision"] == "00" and tb["title"] == "ROAD LAYOUT"
+    assert tb["sheet"] == "01 OF 05" and tb["date"] == "SEPT. 2026" and tb["status"] == "ISSUED FOR APPROVAL"
+    assert tb["scale"] == "1:1000M" and tb["fields"]["document_no"]["bbox"] is not None
+    assert doc["content"]["pages"][0]["title_block"]["document_no"] == TB_NO
+    assert "TITLE_BLOCK_NOT_FOUND" not in codes and "TITLE_BLOCK_ZONE_UNCONFIRMED" not in codes
+    rc, v = run("validate_ingestion.py", "--files", out, "--root", tmp_path, base=SK1)
+    assert rc == 0, v
+
+
+def test_title_block_empty_value_warns(tmp_path):
+    pdf_path = make_tb_pdf(tmp_path / f"{TB_NO}-00.pdf", rev="")
+    _, _, out = extract(tmp_path, pdf_path)
+    doc = json.loads(out.read_text())
+    assert doc["title_block"]["revision"] is None
+    assert any(w["code"] == "TITLE_BLOCK_FIELD_EMPTY" and "revision" in w["detail"] for w in doc["warnings"])

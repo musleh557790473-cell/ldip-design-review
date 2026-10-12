@@ -58,14 +58,21 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
   `text_differs` is true if it differs from the measurement by more than 0.05 %.
 - **Warnings:** `UNITS_NOT_METRES`, `CRS_NOT_DECLARED`, `CRS_NOT_32638`, `EXTENTS_NOT_SET`,
   `DXF_RECOVERED`, `TITLE_BLOCK_HEURISTIC`, `TITLE_BLOCK_NOT_FOUND`, `AECC_DETECTION_LIMITED`, and the
-  converter's `ENGINE_SKIPPED_ENTITIES`.
+  converter's `ENGINE_SKIPPED_ENTITIES` and `TITLE_BLOCK_ATTRIBS_UNDECODED` (K5-2: the DWG holds block
+  attributes ezdwg cannot decode, or a known Parsons title-block insert ("Ladun - Qairwan ATT", K5 profile)
+  without readable attributes; the convert log `attributes` gives the counts and the blocks.
+  `TITLE_BLOCK_NOT_FOUND` is then not added, and the title block is `null`).
+- **Fonts:** SHX fonts installed with every AutoCAD (`txt`, `simplex`, `romans`, `isocp` …, list in
+  `extract_dxf.py` `AUTOCAD_SHX`) count as resolved; any other font must be in the package (PKG-011).
 - **Integrity:** the extractor refuses (exit 2) when the DWG hash differs from the one in the converter
   log, so a DXF can never be attached to the wrong DWG.
 
 ## 5. Known limits
 
-- Parsons title-block zones and tag names are not confirmed (K5); title-block values are Medium
-  confidence at best until then.
+- Parsons sheets (Namar 30%, AC1032) hold the title-block values as attributes of the paper-space block
+  "Ladun - Qairwan ATT"; ezdwg 0.12.9 does not decode them, so the DWG title block is read only with the
+  oda or accoreconsole engine (K2). Tag names are not known until then; values read by tag name are
+  Medium confidence at best (`TITLE_BLOCK_HEURISTIC`). The PDF title block is read by skill 2 (K5-1).
 - Blocks inside blocks are not expanded; attributes are read from the top-level inserts only.
 - 3D polylines, meshes, hatches and Civil 3D objects themselves are not extracted; Civil 3D data comes
   by LandXML export (brief §9.4).

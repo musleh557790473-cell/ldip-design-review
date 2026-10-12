@@ -286,3 +286,49 @@ def test_aecc_proxy_entity_makes_native(tmp_path):
     assert a["proxy_entities_by_class"] == {"AECC_ALIGNMENT": 1} and a["aecc_proxy_entity_count"] == 1
     assert a["civil3d_native"] is True and a["saved_in_civil3d"] is False
     assert run("validate_ingestion.py", "--files", b / "e.dwg.json")[0] == 0
+
+
+# ------------------------------------------------------------------ K5-2 attribute check
+def _fake_ezdwg(rows, inserts):
+    import types
+
+    class E:
+        def __init__(self, h, n):
+            self.dxftype, self.handle, self.dxf = "INSERT", h, {"name": n}
+
+    class Sp:
+        def __init__(self, es):
+            self.es = es
+
+        def iter_entities(self):
+            return iter(self.es)
+
+    doc = types.SimpleNamespace(modelspace=lambda: Sp([]), paperspace=lambda: Sp([E(h, n) for h, n in inserts.items()]))
+    return types.SimpleNamespace(raw=types.SimpleNamespace(decode_attrib_entities=lambda p: rows),
+                                 read=lambda p: doc)
+
+
+@pytest.mark.parametrize("rows,inserts,warn", [
+    ([(1, "x", "Āࢀ", None, None, None, None, None, None, 0, False, (5, 10))], {10: "Ladun - Qairwan ATT"}, True),
+    ([], {10: "Ladun - Qairwan ATT"}, True),
+    ([(1, "LDIP-1", "DWG_NO", None, None, None, None, None, None, 0, False, (5, 10))], {10: "Ladun - Qairwan ATT"}, False),
+    ([], {10: "Some Logo"}, False),
+])
+def test_attrib_check(rows, inserts, warn):
+    sys.path.insert(0, str(SC))
+    import convert
+    log = {"warnings": []}
+    convert.attrib_check(_fake_ezdwg(rows, inserts), "x.dwg", log)
+    assert log["attributes"]["checked"]
+    assert any(w["code"] == "TITLE_BLOCK_ATTRIBS_UNDECODED" for w in log["warnings"]) is warn
+    if warn:
+        assert log["attributes"]["blocks"] == ["Ladun - Qairwan ATT"]
+
+
+def test_autocad_builtin_fonts_are_not_missing(tmp_path):
+    sys.path.insert(0, str(SC))
+    import extract_dxf
+    assert extract_dxf.font_resolved("txt", tmp_path) is True
+    assert extract_dxf.font_resolved("ROMANS.SHX", tmp_path) is True
+    assert extract_dxf.font_resolved("parsons_custom.shx", tmp_path) is False
+    assert extract_dxf.font_resolved("txt", None) is True

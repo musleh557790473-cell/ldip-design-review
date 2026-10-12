@@ -4,8 +4,9 @@
 Per page: displayed size (pt), rotation, vector text words with bbox (font and size not reported:
 null), character count, object count, largest-image cover and all-images raster ratio, scanned flag
 (pdf_common SCAN_* rule), colours used (recorded only — never sole evidence, brief §5.5; drawing
-colours skipped on pages above LARGE_PAGE_OBJECTS). Title block and callouts are not read until the Parsons zone / style is confirmed (K5):
-`title_block` = null with TITLE_BLOCK_ZONE_UNCONFIRMED, `callouts` = [] with CALLOUT_STYLE_UNKNOWN.
+colours skipped on pages above LARGE_PAGE_OBJECTS). Title block: read by title_block.py from the
+Parsons label → value layout (K5-1, 11 Oct 2026; per page and the first one at top level), else null
+with TITLE_BLOCK_NOT_FOUND. Callouts are not read: `callouts` = [] with CALLOUT_STYLE_UNKNOWN.
 A page that cannot be read is recorded with its error and a PAGE_UNREADABLE warning (not fatal).
 OCR of scanned pages is a separate step (ocr_tiles.py).
 
@@ -15,7 +16,7 @@ box origin and /Rotate applied).
 Usage: python extract_pdf.py --pdf <file.pdf> --out <batch>/<file.pdf>.json [--source-path <rel path>]
 Exit: 0 written · 2 input error (missing, not a PDF, encrypted, path > 250) · 3 missing package.
 No network, no shell calls."""
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import collections
@@ -25,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from title_block import read_document  # noqa: E402
 from pdf_common import (DOCNO_RE, EXIT_INPUT, EXIT_OK, LARGE_PAGE_OBJECTS, MAX_REGIONS, REGION_MIN_SHARE,  # noqa: E402
                         REGION_MIN_SIDE_PT, SCAN_MAX_CHARS, SCAN_MIN_RASTER, PdfError, atomic_write_json,
                         box_to_display, check_path, emit, merge_regions, need, r2, sha256_file)
@@ -148,7 +150,7 @@ def extract(pdf_path, source_path):
             except PdfError:
                 raise
             except Exception as exc:  # damaged page: record and continue (§4.2.6 T2)
-                pages.append({"page": i + 1, "width_pt": None, "height_pt": None, "rotation": 0, "char_count": 0,
+                pages.append({"page": i + 1, "title_block": None, "width_pt": None, "height_pt": None, "rotation": 0, "char_count": 0,
                               "image_cover": 0.0, "raster_ratio": 0.0, "scanned": False, "spans": [], "ocr_spans": [],
                               "image_count": 0, "image_regions": [],
                               "colours_used": [], "objects": 0, "colours_complete": False,
@@ -169,8 +171,8 @@ def extract(pdf_path, source_path):
         warnings.append({"code": "LARGE_PAGE", "detail": f"page(s) {', '.join(map(str, large[:30]))} hold more than "
                          f"{LARGE_PAGE_OBJECTS:,} objects: drawing colours not read (text colours are); the Verifier's "
                          "second reader is not used on them"})
-    warnings.append({"code": "TITLE_BLOCK_ZONE_UNCONFIRMED",
-                     "detail": "Parsons title-block zones not yet confirmed (K5); title block not read"})
+    tb, tb_warn = read_document(pages)
+    warnings += tb_warn
     warnings.append({"code": "CALLOUT_STYLE_UNKNOWN", "detail": "Parsons sheet / detail callout style not yet known; callouts not read"})
     stem = Path(source_path).stem
     from pypdfium2 import version as pv
@@ -181,7 +183,7 @@ def extract(pdf_path, source_path):
         "extractor": {"skill": "extracting-pdf-drawings", "script": "extract_pdf.py", "version": __version__,
                       "converter": {"name": "pypdfium2", "version": f"{pv.PYPDFIUM_INFO} (PDFium {pv.PDFIUM_INFO})"}},
         "crs": {"declared": None, "units": "unknown", "insunits": None},
-        "title_block": None,
+        "title_block": tb,
         "content": {"pages": pages, "page_count": len(pages), "callouts": [], "ocr": None,
                     "scanned_rule": {"max_chars": SCAN_MAX_CHARS, "min_raster_ratio": SCAN_MIN_RASTER}},
         "warnings": warnings,

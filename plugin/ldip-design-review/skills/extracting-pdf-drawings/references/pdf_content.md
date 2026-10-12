@@ -15,8 +15,13 @@ Contents: 1 Fields · 2 Scanned-page rule · 3 OCR · 4 Crops · 5 Known limits 
 | `ocr` | `null`, or engine, version, language, DPI, tile size, overlap and pages after `ocr_tiles.py` |
 | `scanned_rule` | The two values used for the `scanned` flag |
 
-`title_block` is `null` with `TITLE_BLOCK_ZONE_UNCONFIRMED` until the Parsons zone per sheet size is
-confirmed (K5); it will then be read from `title_blocks.md`.
+`title_block` (top level) is the title block of the first page that has one, read by `title_block.py`
+from the Parsons label layout (`title_blocks.md`): `document_no`, `revision`, `title`, `date`, `status`
+(purpose of issue), `sheet`, `scale`, `project_no`, `designed`, `drawn`, `checked`, `approved`,
+`fields` (value, value `bbox`, `label_bbox` per field) and `source_ref`. Each page also carries its own
+`title_block`. `null` with `TITLE_BLOCK_NOT_FOUND` when no page has the "Drawing No.:" label (cover sheet,
+scanned page, other template). `TITLE_BLOCK_FIELD_EMPTY`: a label with no value under it;
+`TITLE_BLOCK_MULTIPLE`: pages carry different drawing numbers.
 
 ## 2 Scanned-page rule
 

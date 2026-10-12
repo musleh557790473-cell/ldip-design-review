@@ -1,0 +1,69 @@
+{
+ "skill": "controlling-submittal-package",
+ "note": "Data paths only; files live in LDIP_Review or the owner's folders (never in Git, brief §10.2). Expectations from SPC-0006 §4.3.5 (T2 updated to the 5 Oct 2026 MIDP, owner 11 Oct 2026). Run on sonnet and opus (SPC-0006 B7).",
+ "evals": [
+  {
+   "id": "T2-MIDP-self",
+   "query": "Check the numbering of the current Parsons MIDPs against the LDIP numbering rules and give me the findings and a readable report.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "rulebook/sources/midp/2026-10-05/LDIP-RCRC-SAP-01-GN-GEN-LST-00001-001.xlsm",
+    "rulebook/sources/midp/2026-10-05/LDIP-RCRC-SAP-03-DN-GEN-LST-00001-001.xlsm"
+   ],
+   "expected": [
+    "read_midp.py reads 5,194 rows (Common 12, Al Qairawan 3,162, Al Narjis 712, Dahiyat Namar 1,308)",
+    "check_package.py run with --midp-self; 17 candidates, one per rule + pattern + sheet",
+    "PKG-001: 5,119 drawing/model numbers with 9 fields (3 sheet findings)",
+    "PKG-002: 5,148 discipline hits; package 00 (6); doc types SDL, SCD",
+    "PKG-004: revision field '001'/'002' on 75 document numbers (Probable, advisory cap)",
+    "PKG-005: both MIDPs: file name LST vs Document Reference GDL",
+    "no PKG-006/007/008 finding on the MIDP carrier; report_xlsx.py writes the DRAFT workbook"
+   ]
+  },
+  {
+   "id": "T3-NMAR-30pct",
+   "query": "Check the Namar 30% Concept Design submission folder against the MIDP and the drawing list.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "submittals/NMAR/<sub-id>/",
+    "rulebook/sources/midp/2026-10-05/LDIP-RCRC-SAP-03-DN-GEN-LST-00001-001.xlsm"
+   ],
+   "expected": [
+    "inventory.py then build_register.py; register rows and DWG/PDF pairing reported",
+    "match_midp.py --stage '30% Concept Design': match levels reported (exact / normalised / ambiguous / unmatched), none resolved by hand",
+    "stage table reported as information only, no finding from it",
+    "PKG-008 findings cite the MIDP flag cells; PKG-007 not_run without a list",
+    "[GAP] expectations to be set from the real package (transmittal file, K4)"
+   ]
+  },
+  {
+   "id": "T4-legacy",
+   "query": "Run the package checks on the two masterplan schedule files.",
+   "files": [
+    "rulebook/rules_v0.json",
+    "submittals/QRWN/masterplan-schedule/LDIP-RCRC-SAP-01-QRWN-MPL-SCH-00001.xlsx",
+    "submittals/NMAR/masterplan-schedule/LDIP-RCRC-SAP-02-NMAR-MPL-SCH-00001.xlsx"
+   ],
+   "expected": [
+    "every finding has severity Observation (legacy_numbers)",
+    "QRWN: PKG-001 (8 fields), PKG-002 section QRWN + discipline MPL, PKG-004 revision missing, PKG-006 section",
+    "NMAR: as QRWN plus PKG-002 package 02",
+    "no Minor or Major finding"
+   ]
+  },
+  {
+   "id": "T5-midp-diff",
+   "query": "Parsons sent an updated MIDP; what changed against the previous one?",
+   "files": [
+    "rulebook/sources/midp/2026-09-28/",
+    "rulebook/sources/midp/2026-10-05/"
+   ],
+   "expected": [
+    "read_midp.py on both versions, then diff_midp.py",
+    "rows 5,379 -> 5,194; 139 renumbered (DIG->TEL 84, DIG->ICT, FIR->FLS, sequence 10400->10100 …)",
+    "stage columns 10 -> 7 with new names; Author and Date Last Updated changed",
+    "facts only: no finding raised from the comparison"
+   ]
+  }
+ ]
+}
