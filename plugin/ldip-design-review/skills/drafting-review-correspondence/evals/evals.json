@@ -1,0 +1,68 @@
+{
+ "skill": "drafting-review-correspondence",
+ "note": "Data paths only (brief §10.2). Expectations from SPC-0006 §4.8.5 and owner decisions P-S22-4/5 (12 Oct 2026). Standalone mode. Run on sonnet (SPC-0005 §5.9 model) and opus (B7).",
+ "evals": [
+  {
+   "id": "T1-three-confirmed-CRS",
+   "query": "Draft the CRS rows for the verified findings in out/QRWN-T0001/verified.json.",
+   "files": [
+    "out/QRWN-T0001/verified.json",
+    "rulebook/rules_v1.json"
+   ],
+   "expected": [
+    "load_findings.py, draft_crs.py, validate_drafts.py run in order",
+    "3 CRS rows, each with the rule, clause and location",
+    "comment text equals the finding statement + reference + evidence (validate_drafts passes)",
+    "no reviewer initials, status codes or numbers filled in"
+   ]
+  },
+  {
+   "id": "T2-er-ambiguity-RFI",
+   "query": "Draft correspondence for the ER finding about the duplicated clause numbers 7.11-7.15.",
+   "files": [
+    "golden_set/seeded/outputs/er_ambiguity_verified.json"
+   ],
+   "expected": [
+    "1 RFI to RCRC, no CRS row",
+    "specification §7.11–7.15; information requested = the statement",
+    "RFI number left as DRAFT"
+   ]
+  },
+  {
+   "id": "T3-probable-not-drafted",
+   "query": "Draft the CRS for out/NMAR-30pct/verified.json.",
+   "files": [
+    "out/NMAR-30pct/verified.json"
+   ],
+   "expected": [
+    "Probable findings listed in the engineer queue, not drafted",
+    "Not auto-verifiable findings in the manual-check list",
+    "the counts are reported back"
+   ]
+  },
+  {
+   "id": "T4-candidates-refused",
+   "query": "Make a CRS from the skill 6 candidates in out/NMAR-30pct/candidates.json.",
+   "files": [
+    "out/NMAR-30pct/candidates.json"
+   ],
+   "expected": [
+    "draft_crs.py exits 5",
+    "the owner is told to run skill 18 (verifying-review-findings) first",
+    "no CRS text written by the model"
+   ]
+  },
+  {
+   "id": "T5-arabic-summary-on-request",
+   "query": "Draft the CRS and give me a short Arabic summary.",
+   "files": [
+    "out/QRWN-T0001/verified.json"
+   ],
+   "expected": [
+    "drafts.json in English, validate_drafts passes",
+    "drafts_summary_ar.md separate, first line DRAFT, document numbers and rule ids unchanged",
+    "nothing Arabic written into drafts.json or the forms"
+   ]
+  }
+ ]
+}

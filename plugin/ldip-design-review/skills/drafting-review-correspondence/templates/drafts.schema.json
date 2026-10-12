@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/drafting-review-correspondence/drafts.schema.json",
+  "title": "LDIP draft correspondence (skill 22, standalone) — DRAFT, never issued",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["drafts_version", "marking", "plugin_version", "review_no", "header_overrides", "view", "crs", "rfi",
+               "engineer_queue", "manual_check", "not_drafted", "counts", "meta"],
+  "properties": {
+    "drafts_version": {"const": "1.0"},
+    "marking": {"type": "string", "pattern": "^DRAFT — not for issue until approved at the Human Review Gate"},
+    "plugin_version": {"type": "string"},
+    "review_no": {"type": "string", "minLength": 1},
+    "header_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
+    "view": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+             "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}},
+    "crs": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false, "required": ["site", "sub_id", "run_ids", "header", "rows"],
+      "properties": {
+        "site": {"enum": ["QRWN", "NMAR", "NRJS"]},
+        "sub_id": {"type": "string"},
+        "run_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "header": {"type": "object", "additionalProperties": {"type": "string"},
+                   "required": ["program", "project", "section", "sub_section", "crs_ref", "subject", "document_no",
+                                "reviewer_org", "contractor"]},
+        "rows": {"type": "array", "minItems": 1, "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["no", "finding_id", "rule_id", "location", "comment", "review_no", "comment_status", "severity",
+                       "status", "route_basis", "eot_assessment"],
+          "properties": {
+            "no": {"type": "integer", "minimum": 1},
+            "finding_id": {"type": "string"},
+            "rule_id": {"type": ["string", "null"]},
+            "location": {"type": "string", "minLength": 1},
+            "comment": {"type": "string", "minLength": 10},
+            "review_no": {"type": "string"},
+            "comment_status": {"const": "Open"},
+            "severity": {"enum": ["Critical", "Major", "Minor", "Observation"]},
+            "status": {"enum": ["Confirmed", "Missing information"]},
+            "route_basis": {"type": "string"},
+            "eot_assessment": {"type": "boolean"}}}}}}},
+    "rfi": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["no", "finding_id", "site", "sub_id", "rfi_ref", "rev_no", "discipline", "subject", "drawing_nos",
+                   "document", "specification", "location", "information_requested", "attachments"],
+      "properties": {
+        "no": {"type": "integer", "minimum": 1}, "finding_id": {"type": "string"},
+        "site": {"enum": ["QRWN", "NMAR", "NRJS"]}, "sub_id": {"type": "string"},
+        "rfi_ref": {"type": "string"}, "rev_no": {"type": "string"}, "discipline": {"type": "string"},
+        "subject": {"type": "string", "minLength": 5}, "drawing_nos": {"type": "string"},
+        "document": {"type": "string"}, "specification": {"type": "string"}, "location": {"type": "string"},
+        "information_requested": {"type": "string", "minLength": 10},
+        "attachments": {"type": "array", "items": {"type": "string"}}}}},
+    "engineer_queue": {"type": "array", "items": {"type": "object", "required": ["finding_id"]}},
+    "manual_check": {"type": "array", "items": {"type": "object", "required": ["finding_id"]}},
+    "not_drafted": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false, "required": ["finding_id", "route", "reason"],
+      "properties": {"finding_id": {"type": "string"}, "route": {"type": "string"}, "reason": {"type": "string"}}}},
+    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "meta": {"type": "object"}
+  }
+}

@@ -1,0 +1,72 @@
+{
+ "skill": "generating-review-reports",
+ "note": "Data paths only (brief §10.2). Expectations from SPC-0006 §4.10.4 and owner decisions P-S22-1…10 (12 Oct 2026). Standalone mode. Run on sonnet and opus (B7).",
+ "evals": [
+  {
+   "id": "T1-no-findings",
+   "query": "Make the report for a run with no findings; results in out/QRWN-T0002/.",
+   "files": [
+    "out/QRWN-T0002/verified.json",
+    "out/QRWN-T0002/schedule.json",
+    "out/QRWN-T0002/rules_GIS.json"
+   ],
+   "expected": [
+    "report states No findings",
+    "rules run and rules not run listed with reasons",
+    "check_report.py passes"
+   ]
+  },
+  {
+   "id": "T2-QRWN-counts",
+   "query": "Report the verified QRWN findings in out/QRWN-T0001/verified.json.",
+   "files": [
+    "out/QRWN-T0001/verified.json"
+   ],
+   "expected": [
+    "8 findings: Confirmed Major 1, Minor 7 (SPC-0004 §8.1)",
+    "check_report.py passes",
+    "DRAFT line on every page and sheet"
+   ]
+  },
+  {
+   "id": "T3-edited-count",
+   "query": "Check the report out/QRWN-T0001/report.md (one count was edited by hand).",
+   "files": [
+    "golden_set/seeded/outputs/report_edited.md",
+    "out/QRWN-T0001/report.xlsx",
+    "out/QRWN-T0001/findings_view.json"
+   ],
+   "expected": [
+    "check_report.py fails with the differing cell named",
+    "the report is not fixed by hand"
+   ]
+  },
+  {
+   "id": "T4-candidates-report",
+   "query": "Give me a readable report of the skill 6 candidates for the Namar 30% package.",
+   "files": [
+    "out/NMAR-30pct/candidates.json",
+    "out/NMAR-30pct/pkg_results.json"
+   ],
+   "expected": [
+    "every finding in the row Unverified (candidate); no route",
+    "rules not run listed from pkg_results.json",
+    "advice to run skill 18 before any CRS"
+   ]
+  },
+  {
+   "id": "T5-render-forms",
+   "query": "Put the drafts into our CRS and RFI forms.",
+   "files": [
+    "out/QRWN-T0001/drafts.json",
+    "rulebook/sources/templates/CRS-form.xlsx",
+    "rulebook/sources/templates/RFI-form.docx"
+   ],
+   "expected": [
+    "render_templates.py writes CRS-QRWN-T0001-DRAFT.xlsx and the RFI files to another folder",
+    "sample values of the forms cleared; DRAFT line visible",
+    "the forms themselves unchanged"
+   ]
+  }
+ ]
+}
