@@ -1,0 +1,50 @@
+{
+ "template_version": "1.1",
+ "source": {
+  "path": "submittals/<SITE>/<sub-id>/<file>.xml",
+  "sha256": "<sha256>",
+  "bytes": 0,
+  "document_no": null,
+  "revision": null,
+  "file_type": "landxml",
+  "provenance": "<parsons|employer|aicc_export>"
+ },
+ "extractor": {
+  "skill": "parsing-landxml",
+  "script": "parse_landxml.py",
+  "version": "<version>",
+  "converter": {
+   "name": null,
+   "version": null
+  }
+ },
+ "crs": {
+  "declared": "EPSG:32638",
+  "units": "m",
+  "insunits": null
+ },
+ "title_block": null,
+ "content": {
+  "header": {},
+  "carriers": [],
+  "alignments": [],
+  "profiles": [],
+  "surfaces": [
+   {
+    "name": "<name>",
+    "tin_file": "<stem>.surface-1.json",
+    "tin_sha256": "<sha256>"
+   }
+  ],
+  "inventory": {}
+ },
+ "warnings": [
+  {
+   "code": "<CODE>",
+   "detail": "<text>"
+  }
+ ],
+ "meta": {
+  "extracted_at": "<ISO 8601 +03:00>"
+ }
+}

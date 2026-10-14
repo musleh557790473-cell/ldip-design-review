@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2" date="2026-10-14" time="12:00:00">
+ <Units><Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="milliBars" angularUnit="decimal degrees" directionUnit="decimal degrees"/></Units>
+ <CoordinateSystem epsgCode="32638" desc="UTM-WGS 1984 datum, Zone 38 North (synthetic test)"/>
+ <Project name="SYNTHETIC-T5"/>
+ <Application name="make_synthetic.py" version="0.1.0" manufacturer="AICC BIM Office (test data)"/>
+ <Alignments>
+  <Alignment name="SYN-A" desc="synthetic line-arc-spiral-line" staStart="0" length="328.539816">
+   <CoordGeom>
+    <Line length="100.000000"><Start>2747500.000000 657000.000000</Start><End>2747500.000000 657100.000000</End></Line>
+    <Curve rot="cw" crvType="arc" radius="150.000000" length="78.539816"><Start>2747500.000000 657100.000000</Start><Center>2747350.000000 657100.000000</Center><End>2747479.903811 657175.000000</End><PI>2747500.000000 657140.192379</PI></Curve>
+    <Spiral rot="cw" spiType="clothoid" length="50.000000" radiusStart="150.000000" radiusEnd="INF"><Start>2747479.903811 657175.000000</Start><PI>2747471.548368 657189.472051</PI><End>2747450.292674 657215.212116</End></Spiral>
+    <Line length="100.000000"><Start>2747450.292674 657215.212116</Start><End>2747386.618486 657292.319818</End></Line>
+   </CoordGeom>
+   <Profile name="SYN-A">
+    <ProfAlign name="SYN-A-FG" desc="design">
+     <PVI>0.000000 680.000000</PVI>
+     <ParaCurve length="60.000000">150.000000 683.000000</ParaCurve>
+     <PVI>328.539816 680.321903</PVI>
+    </ProfAlign>
+    <ProfSurf name="SYN-A-EG" desc="existing ground"><PntList2D>0 679.5 100 680.4 200 681.1 328.540 680.0</PntList2D></ProfSurf>
+   </Profile>
+  </Alignment>
+ </Alignments>
+</LandXML>

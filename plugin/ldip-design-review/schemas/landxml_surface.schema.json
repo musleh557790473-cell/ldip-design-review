@@ -1,0 +1,115 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://aicc.local/ldip/landxml_surface.schema.json",
+ "title": "LDIP LandXML surface side file (<stem>.surface-<n>.json) \u2014 SPC-0006 Rev C \u00a74.12.3 output 2",
+ "description": "Full TIN of one LandXML surface, written by parse_landxml.py: points [id, E, N, Z] in file order (EPSG:32638 m, 0.001 m), visible faces with all points present (point ids), breaklines [E, N, Z]. Referenced from the main ingestion file by content.surfaces[].tin_file and tin_sha256.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "template",
+  "surface",
+  "index",
+  "points",
+  "faces",
+  "breaklines"
+ ],
+ "properties": {
+  "template": {
+   "const": "landxml-surface-1.0"
+  },
+  "surface": {
+   "type": "string"
+  },
+  "index": {
+   "type": "integer",
+   "minimum": 1
+  },
+  "points": {
+   "type": "array",
+   "items": {
+    "type": "array",
+    "prefixItems": [
+     {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     {
+      "type": "number"
+     },
+     {
+      "type": "number"
+     },
+     {
+      "type": "number"
+     }
+    ],
+    "items": false,
+    "minItems": 4
+   }
+  },
+  "faces": {
+   "type": "array",
+   "items": {
+    "type": "array",
+    "items": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "minItems": 3,
+    "maxItems": 3
+   }
+  },
+  "breaklines": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "brk_type",
+     "desc",
+     "points"
+    ],
+    "properties": {
+     "brk_type": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "desc": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "points": {
+      "type": "array",
+      "items": {
+       "type": "array",
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       ],
+       "items": false,
+       "minItems": 3
+      }
+     }
+    }
+   }
+  }
+ }
+}

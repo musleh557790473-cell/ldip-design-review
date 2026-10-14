@@ -1,0 +1,73 @@
+{
+ "skill": "parsing-landxml",
+ "note": "Data paths only; real files stay in golden_set/inputs/ or the owner's folders, never in Git (SPC-0006 §2.6). Seeded copies (T4) are made in scratch only. T5 data is synthetic (make_synthetic.py, no project data). Expectations from SPC-0006 Rev C §4.12.12. Run on sonnet and opus (B7).",
+ "evals": [
+  {
+   "id": "T1-RCRC-QRWN-survey-surface",
+   "query": "Parse the RCRC Al-Qairawan survey LandXML (Employer data) into the ingestion JSON and validate it.",
+   "files": [
+    "golden_set/inputs/RCRC-AL QAIRAWAN-TOPOGRPAHIC SURVEY-REV 00-15-09-2025.xml"
+   ],
+   "source_in_owner_folder": "TAWAZUN PROGRAM/Ongoing/RCRC/Survey/04- CIVIL 3D SURFACE IN .XML/RCRC-AL QAIRAWAN-TOPOGRPAHIC SURVEY-REV 00-15-09-2025.xml",
+   "sha256": "9b1d8114d96908634ebb211336d53bb822e00687a7b9e0a11c1abf2f0feb8951",
+   "expected": [
+    "--provenance employer; parse then validate_ingestion, exit 0, no warnings",
+    "LandXML 1.2; Civil 3D 2026; crs.declared EPSG:32638; crs.units m",
+    "carriers [landxml_surface]; no alignments, no profiles",
+    "surface EGL (TIN): 57,283 points; 114,430 faces (797 invisible); 1,044 breaklines (20,498 points)",
+    "extents E 656,967.841-660,416.117, N 2,747,067.941-2,749,178.134; Z 674.101-701.508",
+    "computed areas = declared: 2D 4,167,656.17 m2, 3D 4,198,207.89 m2 (difference 0.00)",
+    "one side file; tin_sha256 matches"
+   ]
+  },
+  {
+   "id": "T2-axis-order",
+   "query": "Show how point id 2 of the RCRC survey surface was written.",
+   "files": [
+    "golden_set/inputs/RCRC-AL QAIRAWAN-TOPOGRPAHIC SURVEY-REV 00-15-09-2025.xml"
+   ],
+   "expected": [
+    "side file point 2 = E 657,082.514, N 2,747,252.764, Z 680.765 (file text is N E Z)",
+    "no AXIS_ORDER_SUSPECT warning"
+   ]
+  },
+  {
+   "id": "T3-real-alignment-profile",
+   "status": "waiting [GAP: brief Rev G §11 item 25]",
+   "query": "Parse the Parsons alignment / profile LandXML of the first DD package.",
+   "files": [],
+   "expected": [
+    "alignment count, minimum radius and per-curve K equal the Civil 3D reports of that file (answer values from Civil 3D / AICC, not from the skill)"
+   ]
+  },
+  {
+   "id": "T4-seeded",
+   "query": "Parse the three seeded copies of the RCRC survey surface: (a) DOCTYPE with an external entity, (b) one face pointing to a missing point id, (c) N and E swapped in every point.",
+   "files": [
+    "<scratch>/a.xml",
+    "<scratch>/b.xml",
+    "<scratch>/c.xml"
+   ],
+   "expected": [
+    "(a) exit 2, nothing written",
+    "(b) FACE_MISSING_POINT, faces_excluded_missing_point 1, areas lower by that triangle",
+    "(c) AXIS_ORDER_SUSPECT"
+   ]
+  },
+  {
+   "id": "T5-synthetic-alignment-profile",
+   "query": "Parse the synthetic LandXML and report the minimum radius and the K value of the crest curve.",
+   "files": [
+    "evals/synthetic_t5.xml"
+   ],
+   "make": "python evals/make_synthetic.py --out evals/synthetic_t5.xml",
+   "expected": [
+    "--provenance parsons (test only); no warnings",
+    "carriers [landxml_alignment, landxml_profile]",
+    "element counts line 2, arc 1, spiral 1; min_radius 150.000",
+    "curve: A 3.5 %, K 17.14, crest",
+    "no continuity gaps"
+   ]
+  }
+ ]
+}

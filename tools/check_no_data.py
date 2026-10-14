@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Pre-commit guard (brief §10.2, project rule 5). Fails if a staged or tracked file
 looks like project data. Usage: python tools/check_no_data.py [--all]"""
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 import re, subprocess, sys
 from pathlib import Path
 
 BLOCK_EXT = {".dwg", ".dxf", ".dwf", ".dwfx", ".pdf", ".xlsx", ".xls", ".xlsm", ".csv", ".doc",
              ".docx", ".zip", ".rar", ".7z", ".shp", ".shx", ".dbf", ".ifc", ".rvt", ".imx",
-             ".png", ".jpg", ".tif", ".tiff"}
+             ".png", ".jpg", ".tif", ".tiff", ".xml", ".landxml", ".pnt", ".tri"}
+# LandXML (skill 3) is .xml: only generated synthetic eval files are allowed (SPC-0006 Rev C §4.12.12 T5).
+SYNTHETIC_OK = re.compile(r"^plugin/[^/]+/skills/[^/]+/evals/synthetic_[a-z0-9_]+\.xml$")
 BLOCK_NAME = re.compile(r"(rules_v\d+\.json$|DLUS|answer_key|golden_set/|submittals/|LDIP-RCRC-SAP-)", re.I)
 # Skill scripts named in SPC-0006 (e.g. read_dlus.py) are code, not data: the DLUS name test skips them.
 CODE_OK = re.compile(r"^plugin/[^/]+/skills/[^/]+/scripts/[a-z0-9_]+\.py$")
@@ -22,7 +24,7 @@ def main():
     bad = []
     for f in files("--all" in sys.argv):
         p = Path(f)
-        if p.suffix.lower() in BLOCK_EXT:
+        if p.suffix.lower() in BLOCK_EXT and not SYNTHETIC_OK.match(f):
             bad.append((f, "data file type"))
         elif BLOCK_NAME.search(f) and not (CODE_OK.match(f) and not re.search(r"rules_v\d|LDIP-RCRC-SAP-", f, re.I)):
             bad.append((f, "project-data name pattern"))

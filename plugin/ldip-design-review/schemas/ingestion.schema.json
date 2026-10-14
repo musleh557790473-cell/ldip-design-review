@@ -1,8 +1,8 @@
 {
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://aicc.local/ldip/ingestion.schema.json",
- "title": "LDIP common ingestion file (*.dwg.json, *.pdf.json) \u2014 SPC-0006 Rev B \u00a72.4, \u00a74.1.4",
- "description": "template_version 1.0. DWG content per \u00a74.1.4 (skill 1); PDF content per \u00a74.2.4 (skill 2 extracting-pdf-drawings 0.1.0); PDF title block per K5-1 (11 Oct 2026, optional fields added).",
+ "title": "LDIP common ingestion file (*.dwg.json, *.pdf.json, *.xml.json) \u2014 SPC-0006 Rev B \u00a72.4, \u00a74.1.4; Rev C \u00a72.4.2, \u00a74.12",
+ "description": "template_version 1.0 for DWG (skill 1) and PDF (skill 2); 1.1 for LandXML (skill 3 parsing-landxml, SPC-0006 Rev C \u00a72.4.2 I1\u2013I6, additive). DWG content per \u00a74.1.4; PDF content per \u00a74.2.4; PDF title block per K5-1 (11 Oct 2026, optional fields added); LandXML content per Rev C \u00a74.12.5.",
  "type": "object",
  "required": [
   "template_version",
@@ -17,7 +17,10 @@
  "additionalProperties": false,
  "properties": {
   "template_version": {
-   "const": "1.0"
+   "enum": [
+    "1.0",
+    "1.1"
+   ]
   },
   "source": {
    "type": "object",
@@ -50,8 +53,17 @@
     "file_type": {
      "enum": [
       "dwg",
-      "pdf"
+      "pdf",
+      "landxml"
      ]
+    },
+    "provenance": {
+     "enum": [
+      "parsons",
+      "employer",
+      "aicc_export"
+     ],
+     "description": "Rev C I3 / brief Rev G \u00a71.5: set by the caller, never guessed from content. Required for landxml."
     }
    },
    "required": [
@@ -70,7 +82,8 @@
     "skill": {
      "enum": [
       "extracting-dwg-data",
-      "extracting-pdf-drawings"
+      "extracting-pdf-drawings",
+      "parsing-landxml"
      ]
     },
     "script": {
@@ -121,11 +134,9 @@
      "pattern": "^EPSG:[0-9]{4,5}$"
     },
     "units": {
-     "enum": [
-      "m",
-      "mm",
-      "unknown"
-     ]
+     "type": "string",
+     "minLength": 1,
+     "description": "dwg / pdf: m | mm | unknown (enforced below); landxml: m, mm, or the LandXML linearUnit as read (Rev C I4)"
     },
     "insunits": {
      "type": [
@@ -858,6 +869,20 @@
         "const": "extracting-dwg-data"
        }
       }
+     },
+     "template_version": {
+      "const": "1.0"
+     },
+     "crs": {
+      "properties": {
+       "units": {
+        "enum": [
+         "m",
+         "mm",
+         "unknown"
+        ]
+       }
+      }
      }
     }
    }
@@ -1196,6 +1221,1073 @@
       "properties": {
        "skill": {
         "const": "extracting-pdf-drawings"
+       }
+      }
+     },
+     "template_version": {
+      "const": "1.0"
+     },
+     "crs": {
+      "properties": {
+       "units": {
+        "enum": [
+         "m",
+         "mm",
+         "unknown"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "source": {
+      "properties": {
+       "file_type": {
+        "const": "landxml"
+       }
+      }
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "template_version": {
+      "const": "1.1"
+     },
+     "source": {
+      "required": [
+       "provenance"
+      ]
+     },
+     "extractor": {
+      "properties": {
+       "skill": {
+        "const": "parsing-landxml"
+       },
+       "converter": {
+        "properties": {
+         "name": {
+          "type": "null"
+         },
+         "version": {
+          "type": "null"
+         }
+        }
+       }
+      }
+     },
+     "crs": {
+      "properties": {
+       "insunits": {
+        "type": "null"
+       }
+      }
+     },
+     "title_block": {
+      "type": "null"
+     },
+     "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "header",
+       "carriers",
+       "alignments",
+       "profiles",
+       "surfaces",
+       "inventory"
+      ],
+      "properties": {
+       "header": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "version",
+         "date",
+         "time",
+         "namespace_version",
+         "units",
+         "coordinate_system",
+         "project_name",
+         "application"
+        ],
+        "properties": {
+         "version": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "date": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "time": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "namespace_version": {
+          "enum": [
+           "1.0",
+           "1.1",
+           "1.2"
+          ]
+         },
+         "units": {
+          "oneOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "system",
+             "linear",
+             "area",
+             "angular",
+             "direction"
+            ],
+            "properties": {
+             "system": {
+              "enum": [
+               "Metric",
+               "Imperial",
+               null
+              ]
+             },
+             "linear": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "area": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "angular": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "direction": {
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            }
+           }
+          ]
+         },
+         "coordinate_system": {
+          "oneOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "epsg_code",
+             "desc",
+             "horizontal_datum",
+             "ogc_wkt_sha256"
+            ],
+            "properties": {
+             "epsg_code": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "desc": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "horizontal_datum": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "ogc_wkt_sha256": {
+              "oneOf": [
+               {
+                "type": "null"
+               },
+               {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+               }
+              ]
+             }
+            }
+           }
+          ]
+         },
+         "project_name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "application": {
+          "oneOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "name",
+             "version",
+             "manufacturer",
+             "time_stamp"
+            ],
+            "properties": {
+             "name": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "version": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "manufacturer": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "time_stamp": {
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            }
+           }
+          ]
+         }
+        }
+       },
+       "carriers": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": {
+         "enum": [
+          "landxml_alignment",
+          "landxml_profile",
+          "landxml_surface"
+         ]
+        }
+       },
+       "alignments": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "name",
+          "desc",
+          "sta_start",
+          "length",
+          "elements",
+          "station_equations",
+          "element_counts",
+          "min_radius",
+          "min_spiral_radius",
+          "continuity_gaps"
+         ],
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "desc": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "sta_start": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "length": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "elements": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "index",
+             "type",
+             "start",
+             "end",
+             "length",
+             "length_computed",
+             "radius",
+             "rot",
+             "spi_type",
+             "radius_start",
+             "radius_end",
+             "center",
+             "pi",
+             "dir_start_deg",
+             "dir_end_deg",
+             "sta_start"
+            ],
+            "properties": {
+             "index": {
+              "type": "integer",
+              "minimum": 1
+             },
+             "type": {
+              "enum": [
+               "line",
+               "arc",
+               "spiral"
+              ]
+             },
+             "start": {
+              "type": "array",
+              "items": {
+               "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+             },
+             "end": {
+              "type": "array",
+              "items": {
+               "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+             },
+             "length": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "length_computed": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "radius": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "rot": {
+              "enum": [
+               "cw",
+               "ccw",
+               null
+              ]
+             },
+             "spi_type": {
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "radius_start": {
+              "oneOf": [
+               {
+                "type": "null"
+               },
+               {
+                "type": "number",
+                "exclusiveMinimum": 0
+               },
+               {
+                "const": "INF"
+               }
+              ]
+             },
+             "radius_end": {
+              "oneOf": [
+               {
+                "type": "null"
+               },
+               {
+                "type": "number",
+                "exclusiveMinimum": 0
+               },
+               {
+                "const": "INF"
+               }
+              ]
+             },
+             "center": {
+              "oneOf": [
+               {
+                "type": "null"
+               },
+               {
+                "type": "array",
+                "items": {
+                 "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 2
+               }
+              ]
+             },
+             "pi": {
+              "oneOf": [
+               {
+                "type": "null"
+               },
+               {
+                "type": "array",
+                "items": {
+                 "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 2
+               }
+              ]
+             },
+             "dir_start_deg": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "dir_end_deg": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "sta_start": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "end_check_m": {
+              "type": "number"
+             }
+            }
+           }
+          },
+          "station_equations": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "sta_back",
+             "sta_ahead",
+             "sta_internal",
+             "desc"
+            ],
+            "properties": {
+             "sta_back": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "sta_ahead": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "sta_internal": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "desc": {
+              "type": [
+               "string",
+               "null"
+              ]
+             }
+            }
+           }
+          },
+          "element_counts": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "line",
+            "arc",
+            "spiral"
+           ],
+           "properties": {
+            "line": {
+             "type": "integer",
+             "minimum": 0
+            },
+            "arc": {
+             "type": "integer",
+             "minimum": 0
+            },
+            "spiral": {
+             "type": "integer",
+             "minimum": 0
+            }
+           }
+          },
+          "min_radius": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "min_spiral_radius": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "continuity_gaps": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "after_element",
+             "gap_m"
+            ],
+            "properties": {
+             "after_element": {
+              "type": "integer",
+              "minimum": 1
+             },
+             "gap_m": {
+              "type": "number"
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       "profiles": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "alignment",
+          "name",
+          "desc",
+          "kind",
+          "pvis",
+          "tangents",
+          "curves",
+          "points",
+          "sta_range",
+          "elev_range"
+         ],
+         "properties": {
+          "alignment": {
+           "type": "string"
+          },
+          "name": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "desc": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "kind": {
+           "enum": [
+            "design",
+            "existing"
+           ]
+          },
+          "pvis": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "sta",
+             "elev",
+             "type"
+            ],
+            "properties": {
+             "sta": {
+              "type": "number"
+             },
+             "elev": {
+              "type": "number"
+             },
+             "type": {
+              "enum": [
+               "PVI",
+               "ParaCurve",
+               "UnsymParaCurve",
+               "CircCurve"
+              ]
+             }
+            }
+           }
+          },
+          "tangents": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "sta_from",
+             "sta_to",
+             "grade_pct"
+            ],
+            "properties": {
+             "sta_from": {
+              "type": "number"
+             },
+             "sta_to": {
+              "type": "number"
+             },
+             "grade_pct": {
+              "type": "number"
+             }
+            }
+           }
+          },
+          "curves": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+             "type",
+             "pvi_sta",
+             "pvi_elev",
+             "length",
+             "radius",
+             "g_in_pct",
+             "g_out_pct",
+             "a_pct",
+             "k",
+             "curve"
+            ],
+            "properties": {
+             "type": {
+              "enum": [
+               "ParaCurve",
+               "UnsymParaCurve",
+               "CircCurve"
+              ]
+             },
+             "pvi_sta": {
+              "type": "number"
+             },
+             "pvi_elev": {
+              "type": "number"
+             },
+             "length": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "radius": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "g_in_pct": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "g_out_pct": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "a_pct": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "k": {
+              "type": [
+               "number",
+               "null"
+              ]
+             },
+             "curve": {
+              "enum": [
+               "crest",
+               "sag",
+               null
+              ]
+             }
+            }
+           }
+          },
+          "points": {
+           "type": [
+            "integer",
+            "null"
+           ],
+           "minimum": 0
+          },
+          "sta_range": {
+           "oneOf": [
+            {
+             "type": "null"
+            },
+            {
+             "type": "array",
+             "items": {
+              "type": "number"
+             },
+             "minItems": 2,
+             "maxItems": 2
+            }
+           ]
+          },
+          "elev_range": {
+           "oneOf": [
+            {
+             "type": "null"
+            },
+            {
+             "type": "array",
+             "items": {
+              "type": "number"
+             },
+             "minItems": 2,
+             "maxItems": 2
+            }
+           ]
+          }
+         }
+        }
+       },
+       "surfaces": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "name",
+          "desc",
+          "surf_type",
+          "declared",
+          "computed",
+          "declared_vs_computed",
+          "tin_built",
+          "counts",
+          "extents",
+          "tin_file",
+          "tin_sha256"
+         ],
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "desc": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "surf_type": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "declared": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "area_2d",
+            "area_3d",
+            "elev_min",
+            "elev_max"
+           ],
+           "properties": {
+            "area_2d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "area_3d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_min": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_max": {
+             "type": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          },
+          "computed": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "area_2d",
+            "area_3d",
+            "elev_min",
+            "elev_max"
+           ],
+           "properties": {
+            "area_2d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "area_3d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_min": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_max": {
+             "type": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          },
+          "declared_vs_computed": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "area_2d",
+            "area_3d",
+            "elev_min",
+            "elev_max"
+           ],
+           "properties": {
+            "area_2d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "area_3d": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_min": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "elev_max": {
+             "type": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          },
+          "tin_built": {
+           "type": "boolean"
+          },
+          "counts": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "points",
+            "faces",
+            "faces_visible",
+            "faces_invisible",
+            "faces_excluded_missing_point",
+            "breaklines",
+            "breakline_points",
+            "boundaries",
+            "duplicate_point_ids"
+           ],
+           "properties": {
+            "points": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "faces": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "faces_visible": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "faces_invisible": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "faces_excluded_missing_point": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "breaklines": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "breakline_points": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "boundaries": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            },
+            "duplicate_point_ids": {
+             "type": [
+              "integer",
+              "null"
+             ],
+             "minimum": 0
+            }
+           }
+          },
+          "extents": {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "e_min",
+            "e_max",
+            "n_min",
+            "n_max"
+           ],
+           "properties": {
+            "e_min": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "e_max": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "n_min": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "n_max": {
+             "type": [
+              "number",
+              "null"
+             ]
+            }
+           }
+          },
+          "tin_file": {
+           "type": "string",
+           "pattern": "^.+\\.surface-[0-9]+\\.json$",
+           "maxLength": 250
+          },
+          "tin_sha256": {
+           "type": "string",
+           "pattern": "^[0-9a-f]{64}$"
+          }
+         }
+        }
+       },
+       "inventory": {
+        "type": "object",
+        "additionalProperties": {
+         "type": "integer",
+         "minimum": 1
+        }
        }
       }
      }
