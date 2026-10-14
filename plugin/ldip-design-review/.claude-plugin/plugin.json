@@ -1,6 +1,6 @@
 {
   "name": "ldip-design-review",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "LDIP design review (AICC JV): reviews Parsons DWG/PDF submittals with sub-agents and produces draft findings for the Human Review Gate. Nothing is issued without human approval.",
   "author": { "name": "Musleh Bazamol — AICC BIM Office" },
   "license": "UNLICENSED",
