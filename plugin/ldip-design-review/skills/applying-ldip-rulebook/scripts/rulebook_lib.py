@@ -1,11 +1,14 @@
-"""Core of skill 8 `applying-ldip-rulebook` (SPC-0006 Rev B §4.5; SPC-0004 Rev C §3–§4).
+"""Core of skill 8 `applying-ldip-rulebook` (SPC-0006 Rev B §4.5; SPC-0004 Rev E §3–§4).
 
 One implementation, used by the skill's command-line scripts and by the plugin's
 format_check.py (FC5), so the rule-state cap is never coded twice (owner, 30 Sep 2026).
 
 The module never edits a rulebook or a value (SPC-0004 §4.4). No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+# 0.2.0 (SPC-0004 Rev E, I11): schema 1.1 (ROD / EWK / COR rules, applicability, keyed and advisory parameters,
+# target state, tolerances, required inputs, stage map); lint L5-L12; advisory parameters capped at Probable
+# (Rev E §4.7) in get_rules output and in FC5 when a finding names its parameter (SPC-0003 Rev E §4.8).
 
 import json
 from pathlib import Path
@@ -21,6 +24,8 @@ CAP_RANK = {"active": 3, "advisory": 2}
 # Missing information ranks with Confirmed (brief §5.1); agreed by the owner, 30 Sep 2026.
 STATUS_RANK = {"Confirmed": 3, "Missing information": 3, "Probable": 2, "Not auto-verifiable": 1}
 APPROVED_SOURCE = ("approved", "internal_agreed")
+ROAD_GROUPS = ("ROD", "EWK", "COR")
+SKILL_NOT_BUILT = "skill not built"
 
 
 class RulebookError(Exception):
@@ -56,6 +61,11 @@ def lint_errors(book):
     errs = []
     sources = {s.get("source_id"): s for s in book.get("sources", []) if isinstance(s, dict)}
     code_lists = book.get("code_lists", {}) if isinstance(book.get("code_lists"), dict) else {}
+    tolerances = book.get("tolerances", {}) if isinstance(book.get("tolerances"), dict) else {}
+    phases_used = set()
+    for name, t in tolerances.items():
+        if isinstance(t, dict) and t.get("source_id") and t["source_id"] not in sources:
+            errs.append(f"L4 tolerances.{name}: unknown source {t['source_id']}")
     seen = set()
     for r in book.get("rules", []):
         if not isinstance(r, dict):
@@ -73,6 +83,9 @@ def lint_errors(book):
             sid = p.get("source_id") if isinstance(p, dict) else None
             if sid and sid not in sources:
                 errs.append(f"L4 {rid}.{name}: unknown source {sid}")
+        for ri in r.get("required_inputs", []) or []:
+            if isinstance(ri, dict) and ri.get("source_id") and ri["source_id"] not in sources:
+                errs.append(f"L4 {rid}.required_inputs[{ri.get('item')}]: unknown source {ri['source_id']}")
         for c in r.get("code_lists", []) or []:
             if c not in code_lists:
                 errs.append(f"L4 {rid}: unknown code list {c}")
@@ -100,6 +113,74 @@ def lint_errors(book):
         # state_reason required for non-active rules
         if r.get("state") != "active" and len(str(r.get("state_reason", ""))) < 10:
             errs.append(f"L1 {rid}: missing state_reason for a {r.get('state')} rule")
+        errs += _lint_rev_e(r, rid, params, sources, tolerances, phases_used)
+    errs += _lint_stage_map(book.get("stage_map"), phases_used)
+    return errs
+
+
+def _lint_rev_e(r, rid, params, sources, tolerances, phases_used):
+    """SPC-0004 Rev E §4.9: L5-L11 for one rule; collects the phases used for L12."""
+    errs, state, road = [], r.get("state"), r.get("group") in ROAD_GROUPS
+    pdicts = {n: p for n, p in params.items() if isinstance(p, dict)}
+    for name, p in pdicts.items():                                   # L5 advisory parameters AGREED only
+        if p.get("enforcement") == "advisory" and p.get("tag") != "AGREED":
+            errs.append(f"L5 {rid}.{name}: advisory parameter must be AGREED (is {p.get('tag')})")
+    if state == "inactive" and str(r.get("state_reason", "")).lower().startswith(SKILL_NOT_BUILT) \
+            and not r.get("target_state"):                           # L6
+        errs.append(f"L6 {rid}: inactive ('skill not built') without target_state")
+    if road:                                                          # L7
+        for name, p in pdicts.items():
+            if p.get("tag") != "GAP" and not p.get("clause"):
+                errs.append(f"L7 {rid}.{name}: no clause")
+    for name, p in pdicts.items():                                   # L8
+        ref = p.get("tolerance_ref")
+        if not ref:
+            continue
+        t = tolerances.get(ref)
+        if t is None:
+            errs.append(f"L8 {rid}.{name}: unknown tolerance '{ref}'")
+        elif t.get("tag") in ("PROPOSED", "GAP") and state == "active":
+            errs.append(f"L8 {rid}.{name}: tolerance '{ref}' is {t.get('tag')} in an active rule")
+    appl = r.get("applicability") or {}
+    for name, p in pdicts.items():                                   # L9
+        if not p.get("keyed_by") or p.get("tag") == "GAP":
+            continue
+        val = p.get("value")
+        if not isinstance(val, dict):
+            errs.append(f"L9 {rid}.{name}: keyed_by set but value is not an object")
+        elif len(p["keyed_by"]) == 1:
+            want = appl.get(p["keyed_by"][0])
+            if want and "all" not in want:
+                missing = [w for w in want if str(w) not in {str(k) for k in val}]
+                if missing:
+                    errs.append(f"L9 {rid}.{name}: no value for {p['keyed_by'][0]} {missing}")
+    if road and not r.get("required_inputs"):                        # L10
+        errs.append(f"L10 {rid}: no required_inputs")
+    if r.get("check_type") == "presence":                            # L11
+        cited = [p for p in pdicts.values() if p.get("tag") != "GAP"]
+        tiers = {(sources.get(p.get("source_id")) or {}).get("tier") for p in cited}
+        if not tiers & {"1", "2"}:
+            errs.append(f"L11 {rid}: presence rule cites no tier-1 or tier-2 source")
+        elif "1" not in tiers and any(p.get("enforcement", "binding") != "advisory" for p in cited):
+            errs.append(f"L11 {rid}: presence rule cites tier 2 only but is not advisory")
+    for x in [r] + list(pdicts.values()) + list(r.get("required_inputs") or []):
+        if isinstance(x, dict) and x.get("required_from_phase"):
+            phases_used.add(x["required_from_phase"])
+    return errs
+
+
+def _lint_stage_map(stage_map, phases_used):
+    """L12: a stage map covering every phase used; DD entries carry their MIDP milestone (Rev E §5.14A)."""
+    if not phases_used:
+        return []
+    if not isinstance(stage_map, dict) or not stage_map:
+        return [f"L12 rules use phases {sorted(phases_used)} but stage_map is missing"]
+    errs = []
+    mapped = {v.get("phase") for v in stage_map.values() if isinstance(v, dict)}
+    errs += [f"L12 phase {ph} used but no stage_map entry maps to it" for ph in sorted(phases_used - mapped)]
+    if "DD" in phases_used and any(isinstance(v, dict) and v.get("phase") == "DD" and v.get("milestone") is None
+                                   for v in stage_map.values()):
+        errs.append("L12 a DD stage_map entry has no milestone (Rev E §5.14A)")
     return errs
 
 
@@ -122,6 +203,28 @@ def state_counts(book):
 
 
 # ------------------------------------------------------------------ queries
+def param_cap(rule_state, p):
+    """Cap of one parameter's sub-check: the rule cap, lowered to Probable for an advisory parameter (Rev E §4.7)."""
+    cap = CAP[rule_state]
+    if isinstance(p, dict) and p.get("enforcement") == "advisory" and CAP_RANK.get("advisory", 0) < CAP_RANK[rule_state]:
+        cap = CAP["advisory"]
+    return cap
+
+
+def _resolved_params(book, r):
+    out = {}
+    tol = book.get("tolerances") or {}
+    for name, p in r["parameters"].items():
+        q = dict(p)
+        if r["state"] in CAP:
+            q["cap"] = param_cap(r["state"], p)
+        if p.get("tolerance_ref") in tol:
+            t = tol[p["tolerance_ref"]]
+            q["tolerance"] = {"value": t.get("value"), "unit": t.get("unit"), "tag": t.get("tag")}
+        out[name] = q
+    return out
+
+
 def rules_for_agent(book, agent, states=("active", "advisory"), skill=None):
     """Rules an agent may run, each with its cap; inactive rules returned separately for rules_skipped."""
     run, skipped = [], []
@@ -129,21 +232,32 @@ def rules_for_agent(book, agent, states=("active", "advisory"), skill=None):
         if r["agent"] != agent or (skill and r["skill"] != skill):
             continue
         if r["state"] == "inactive":
-            skipped.append({"rule_id": r["rule_id"], "reason": f"inactive: {r['state_reason']}"})
+            s = {"rule_id": r["rule_id"], "reason": f"inactive: {r['state_reason']}"}
+            if r.get("target_state"):
+                s["target_state"] = r["target_state"]
+            skipped.append(s)
             continue
         if r["state"] not in states:
             continue
         gaps = sorted(n for n, p in r["parameters"].items() if p["tag"] == "GAP")
-        run.append({
+        item = {
             "rule_id": r["rule_id"], "title": r["title"], "skill": r["skill"], "state": r["state"],
             "cap": CAP[r["state"]], "statement": r["statement"], "method": r["method"], "inputs": r["inputs"],
-            "parameters": r["parameters"], "skip_subchecks_for": gaps,
+            "parameters": _resolved_params(book, r), "skip_subchecks_for": gaps,
+            "advisory_parameters": sorted(n for n, p in r["parameters"].items() if p.get("enforcement") == "advisory"),
             "code_lists": {c: book["code_lists"][c]["values"] for c in r.get("code_lists", [])},
             "severity_default": r["severity_default"], "issue_type": r["issue_type"],
             "default_status": r["default_status"], "exclusions": r.get("exclusions", []),
             "owner_role": r["owner_role"],
-        })
-    return {"rulebook_version": book["rulebook_version"], "agent": agent, "rules": run, "rules_skipped": skipped}
+        }
+        for k in ("check_type", "applicability", "required_inputs", "required_from_phase", "decision_ref"):
+            if k in r:
+                item[k] = r[k]
+        run.append(item)
+    res = {"rulebook_version": book["rulebook_version"], "agent": agent, "rules": run, "rules_skipped": skipped}
+    if book.get("stage_map"):
+        res["stage_map"] = book["stage_map"]
+    return res
 
 
 def lookup_code(book, list_name, value):
@@ -159,7 +273,13 @@ def lookup_param(book, rule_id, name):
         if r["rule_id"] == rule_id:
             if name not in r["parameters"]:
                 raise RulebookError(EXIT_INPUT, f"rule {rule_id} has no parameter '{name}'")
-            return {"rule_id": rule_id, "parameter": name, **r["parameters"][name], "rule_state": r["state"]}
+            p = r["parameters"][name]
+            res = {"rule_id": rule_id, "parameter": name, **p, "rule_state": r["state"]}
+            if r["state"] in CAP:
+                res["cap"] = param_cap(r["state"], p)
+            if p.get("tolerance_ref") in (book.get("tolerances") or {}):
+                res["tolerance"] = book["tolerances"][p["tolerance_ref"]]
+            return res
     raise RulebookError(EXIT_INPUT, f"unknown rule '{rule_id}'")
 
 
@@ -195,6 +315,17 @@ def cap_errors(findings, rules_by_id, rulebook_version=None):
                          "message": f"rule {rid} is inactive and shall not be run (SPC-0004 §4.1)"})
             continue
         cap = CAP_RANK.get(state)
+        label = f"{state} rule {rid}"
+        pname = ref.get("parameter")
+        if pname:
+            p = (rule.get("parameters") or {}).get(pname)
+            if p is None:
+                errs.append({"index": i, "path": f"/{i}/reference/parameter",
+                             "message": f"rule {rid} has no parameter '{pname}'"})
+                continue
+            if cap is not None and p.get("enforcement") == "advisory":
+                cap = min(cap, CAP_RANK["advisory"])
+                label = f"advisory parameter {rid}.{pname} (Probable)"
         if st and cap is not None and STATUS_RANK.get(st, 0) > cap:
-            errs.append({"index": i, "path": f"/{i}/{spath}", "message": f"status '{st}' exceeds the cap of {state} rule {rid}"})
+            errs.append({"index": i, "path": f"/{i}/{spath}", "message": f"status '{st}' exceeds the cap of {label}"})
     return errs

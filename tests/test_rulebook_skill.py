@@ -190,3 +190,147 @@ def test_skill_frontmatter_best_practice():
     assert fm["description"].startswith("LDIP design review (AICC JV):") and len(fm["description"]) <= 1024
     assert "claude" not in fm["name"] and "anthropic" not in fm["name"]
     assert len(text.splitlines()) < 500
+
+
+# ---------------------------------------------------------------- schema 1.1 (SPC-0004 Rev E; skill 8 0.2.0, I11)
+def p11(value, **kw):
+    d = {"value": value, "tag": "AGREED", "source_id": "SRC-01", "clause": "§7 p.1", "blocking": False}
+    d.update(kw)
+    return d
+
+
+def road_rule(rid, state="active", params=None, **kw):
+    r = rule(rid, state, params or {"g_max": p11(6.0, unit="%", tolerance_ref="grade_pct")})
+    r.update({"agent": "COO" if rid.startswith("COR") else "RDE",
+              "skill": "coordinating-utility-corridors" if rid.startswith("COR") else "reviewing-road-design",
+              "owner_role": "IM / CM" if rid.startswith("COR") else "DMR", "inputs": ["landxml_profile"],
+              "issue_type": "design_error", "check_type": "value",
+              "required_inputs": [{"item": "C4 alignment data", "carrier": ["landxml_profile"], "required_from_phase": "DD"}]})
+    r.update(kw)
+    return r
+
+
+def book11(status="approved"):
+    b = book(status)
+    b["rulebook_schema_version"] = "1.1"
+    b["sources"][0]["tier"] = "1"
+    b["sources"].append({"source_id": "SRC-03", "title": "Tier-2 code", "status": "approved", "tier": "2"})
+    b["tolerances"] = {"grade_pct": p11(0.05, unit="%"), "width_m": p11(0.05, unit="m")}
+    b["stage_map"] = {"30% Concept Design": {"phase": "PD", "milestone": None},
+                      "60%": {"phase": "DD", "milestone": 60}, "IFC": {"phase": "FD", "milestone": None}}
+    b["rules"] += [
+        road_rule("ROD-001", params={"row_min": p11(16.0, unit="m", tolerance_ref="width_m"),
+                                     "row_max": p11(20.0, unit="m", enforcement="advisory")},
+                  applicability={"street_class": ["local_access"]}),
+        road_rule("ROD-002", params={"k": p11({"30": 2, "40": 4}, keyed_by=["design_speed_kmh"])},
+                  applicability={"street_class": ["all"], "design_speed_kmh": [30, 40]}),
+        road_rule("ROD-101", "inactive", params={"required_element": p11("sidewalks both sides")},
+                  check_type="presence", issue_type="missing_information", required_from_phase="PD",
+                  state_reason="skill not built — reviewing-road-design (10)", target_state="active"),
+        road_rule("COR-001", "advisory", params={"offset": p11(1.5, unit="m", source_id="SRC-03")}),
+    ]
+    return b
+
+
+def test_v11_loads_and_v10_still_loads(tmp_path):
+    rc, out = run("load_rules.py", write(tmp_path, book11()))
+    assert rc == 0 and out["states"] == {"active": 4, "advisory": 2, "inactive": 2}, out
+    assert run("load_rules.py", write(tmp_path, book(), "v10.json"))[0] == 0
+
+
+def test_v11_get_rules_param_caps_tolerance_stage_map(tmp_path):
+    p = write(tmp_path, book11())
+    rc, out = run("get_rules.py", "--rulebook", p, "--agent", "RDE")
+    assert rc == 0
+    r1 = next(r for r in out["rules"] if r["rule_id"] == "ROD-001")
+    assert r1["cap"] == "Confirmed" and r1["advisory_parameters"] == ["row_max"]
+    assert r1["parameters"]["row_min"]["cap"] == "Confirmed" and r1["parameters"]["row_max"]["cap"] == "Probable"
+    assert r1["parameters"]["row_min"]["tolerance"] == {"value": 0.05, "unit": "m", "tag": "AGREED"}
+    assert r1["applicability"] == {"street_class": ["local_access"]} and r1["required_inputs"][0]["required_from_phase"] == "DD"
+    assert out["stage_map"]["60%"] == {"phase": "DD", "milestone": 60}
+    assert out["rules_skipped"] == [{"rule_id": "ROD-101", "reason": "inactive: skill not built — reviewing-road-design (10)",
+                                     "target_state": "active"}]
+    rc, out = run("get_rules.py", "--rulebook", p, "--agent", "COO")
+    assert rc == 0 and [(r["rule_id"], r["cap"], r["parameters"]["offset"]["cap"]) for r in out["rules"]] == [("COR-001", "Probable", "Probable")]
+    rc, res = run("lookup_code.py", "--rulebook", p, "--param", "ROD-001.row_max")
+    assert rc == 0 and res["cap"] == "Probable" and res["enforcement"] == "advisory"
+
+
+def r11(b, rid):
+    return next(r for r in b["rules"] if r["rule_id"] == rid)
+
+
+MUTATIONS_11 = [  # (mutation, expected fragment) — SPC-0004 Rev E §4.9 L5-L12
+    (lambda b: r11(b, "ROD-001")["parameters"]["row_max"].update(tag="PROPOSED"), "L5 ROD-001.row_max"),
+    (lambda b: r11(b, "ROD-101").pop("target_state"), "L6 ROD-101"),
+    (lambda b: r11(b, "ROD-001")["parameters"]["row_min"].pop("clause"), "L7 ROD-001.row_min: no clause"),
+    (lambda b: r11(b, "ROD-001")["parameters"]["row_min"].update(tolerance_ref="nope"), "L8 ROD-001.row_min: unknown tolerance"),
+    (lambda b: r11(b, "ROD-002")["parameters"]["k"]["value"].pop("40"), "L9 ROD-002.k: no value for design_speed_kmh"),
+    (lambda b: r11(b, "COR-001").pop("required_inputs"), "L10 COR-001"),
+    (lambda b: r11(b, "ROD-101")["parameters"]["required_element"].update(source_id="SRC-03"), "L11 ROD-101"),
+    (lambda b: b.pop("stage_map"), "L12"),
+    (lambda b: b["stage_map"]["60%"].update(milestone=None), "L12 a DD stage_map entry has no milestone"),
+    (lambda b: b["stage_map"].pop("30% Concept Design"), "L12 phase PD used"),
+    (lambda b: r11(b, "ROD-001").update(agent="CRD"), "schema"),
+]
+
+
+@pytest.mark.parametrize("mut,frag", MUTATIONS_11, ids=[f"m11_{i}" for i in range(len(MUTATIONS_11))])
+def test_v11_mutations_refused_for_intended_reason(tmp_path, mut, frag):
+    b = book11()
+    mut(b)
+    rc, out = run("load_rules.py", write(tmp_path, b))
+    assert rc == 5 and any(frag in e for e in out["errors"]), out["errors"]
+
+
+def test_v11_l8_tolerance_proposed_in_active_rule(tmp_path):
+    b = book11()
+    b["tolerances"]["width_m"]["tag"] = "PROPOSED"
+    rc, out = run("load_rules.py", write(tmp_path, b))
+    assert rc == 5 and any(e.startswith("L8 ROD-001.row_min: tolerance 'width_m' is PROPOSED") for e in out["errors"])
+
+
+def pfinding(rule_id, status, parameter=None):
+    f = finding(rule_id, status)
+    if parameter is not None:
+        f["reference"]["parameter"] = parameter
+    return f
+
+
+@pytest.mark.parametrize("fs,ok", [
+    ([pfinding("ROD-001", "Confirmed", "row_min")], True),
+    ([pfinding("ROD-001", "Confirmed")], True),                      # no parameter named: rule cap applies
+    ([pfinding("ROD-001", "Probable", "row_max")], True),
+    ([pfinding("ROD-001", "Confirmed", "row_max")], False),          # advisory parameter -> Probable (Rev E §4.7)
+    ([pfinding("ROD-001", "Missing information", "row_max")], False),
+    ([pfinding("ROD-001", "Probable", "nope")], False),              # unknown parameter
+    ([pfinding("ROD-101", "Missing information")], False),           # inactive
+])
+def test_v11_check_cap_parameter(tmp_path, fs, ok):
+    rc, out = run("check_cap.py", "--findings", write(tmp_path, fs, "f.json"), "--rulebook", write(tmp_path, book11()))
+    assert rc == 0 and (out["result"] == "pass") == ok, out
+
+
+def test_finding_schema_road_rule_ids_and_parameter():
+    from jsonschema import Draft202012Validator
+    s = json.loads((REPO / "plugin/ldip-design-review/schemas/finding.schema.json").read_text())
+    ref = dict(s["$defs"]["reference"], **{"$defs": s["$defs"]})
+    v = Draft202012Validator(ref)
+    for rid in ("PKG-001", "GIS-012", "ROD-101", "EWK-002", "COR-001"):
+        assert v.is_valid({"rule_id": rid, "parameter": "row_min"}), rid
+    for rid in ("CRD-001", "ROD-1", "XYZ-001"):
+        assert not v.is_valid({"rule_id": rid}), rid
+    agent = s["properties"]["agent"]["enum"]
+    assert "COO" in agent and "RDE" in agent and "CRD" not in agent
+
+
+@pytest.mark.skipif(not os.environ.get("LDIP_REAL_RULEBOOK_V2"), reason="real rulebook is local-only (brief §10.2)")
+def test_real_rules_v2():
+    path = os.environ["LDIP_REAL_RULEBOOK_V2"]
+    rc, out = run("load_rules.py", path)
+    assert rc == 0 and out["states"] == {"active": 16, "advisory": 5, "inactive": 102}
+    rc, out = run("get_rules.py", "--rulebook", path, "--agent", "RDE")
+    assert rc == 0 and out["rules"] == [] and len(out["rules_skipped"]) == 90
+    assert all(s.get("target_state") for s in out["rules_skipped"])
+    rc, out = run("get_rules.py", "--rulebook", path, "--agent", "INT")
+    assert rc == 0 and any(s["rule_id"] == "PKG-012" and s["target_state"] == "active" for s in out["rules_skipped"])

@@ -25,6 +25,12 @@
       "query": "Run the GIS rules for this submittal and list which rules you skipped and why.",
       "files": ["rulebook/rules_v0.json"],
       "expected": ["GIS-004, GIS-005, GIS-006, GIS-007, GIS-010, GIS-011, GIS-016, GIS-017 in rules_skipped with their state_reason", "none of them run"]
+    },
+    {
+      "id": "T5-advisory-parameter-cap",
+      "query": "Using rulebook/rules_v2.json, a road candidate cites ROD-002 parameter row_max (ROW above 20 m) with proposed_status Confirmed. Check it against the rulebook and correct it if needed.",
+      "files": ["rulebook/rules_v2.json", "golden_set/seeded/candidates/rod_param_cap_test.json"],
+      "expected": ["ROD-002 is inactive in rules_v2 (skill 10 not built): check_cap.py fails the finding as an inactive rule", "agent does not run ROD-002 and does not change the rulebook", "once ROD-002 is active: row_max is advisory, status lowered to Probable"]
     }
   ]
 }

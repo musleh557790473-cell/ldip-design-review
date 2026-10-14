@@ -2,75 +2,293 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aicc.local/ldip-design-review/rules.schema.json",
   "title": "LDIP Design Review Rulebook",
-  "description": "AICC-BIM-SPC-0004 Rev A (draft). Structure of rulebook/rules_v<N>.json. Git holds this schema and a placeholder example only; real values stay in LDIP_Review/rulebook/ (SPC-0002 C7, brief §10.2).",
+  "description": "AICC-BIM-SPC-0004 Rev E (approved 14 Oct 2026). Structure of rulebook/rules_v<N>.json, schema 1.1 (adds ROD / EWK / COR rules, applicability, table-valued and advisory parameters, target state, source tier, tolerances, check type, required inputs, stage map). Schema 1.0 files stay valid. Git holds this schema and a placeholder example only; real values stay in LDIP_Review/rulebook/ (SPC-0002 C7, brief §10.2).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["rulebook_schema_version", "rulebook_version", "spec", "status", "issued", "sources", "code_lists", "rules"],
+  "required": [
+    "rulebook_schema_version",
+    "rulebook_version",
+    "spec",
+    "status",
+    "issued",
+    "sources",
+    "code_lists",
+    "rules"
+  ],
   "properties": {
-    "rulebook_schema_version": { "const": "1.0" },
-    "rulebook_version": { "type": "string", "pattern": "^v[0-9]+$" },
-    "spec": { "const": "AICC-BIM-SPC-0004" },
-    "status": { "enum": ["draft", "approved", "superseded"] },
-    "issued": { "type": "string", "format": "date" },
-    "approved_by": { "type": ["string", "null"] },
-    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
-    "code_lists": { "type": "object", "additionalProperties": { "$ref": "#/$defs/code_list" } },
-    "rules": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/rule" } }
+    "rulebook_schema_version": {
+      "enum": [
+        "1.0",
+        "1.1"
+      ]
+    },
+    "rulebook_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+$"
+    },
+    "spec": {
+      "const": "AICC-BIM-SPC-0004"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "approved",
+        "superseded"
+      ]
+    },
+    "issued": {
+      "type": "string",
+      "format": "date"
+    },
+    "approved_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "code_lists": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/code_list"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "description": "S12: tolerance table referenced by parameters through tolerance_ref (D-15).",
+      "additionalProperties": {
+        "$ref": "#/$defs/parameter"
+      }
+    },
+    "stage_map": {
+      "type": "object",
+      "description": "S17: MIDP stage name -> ER phase and DD milestone (Rev E §5.14, §5.14A).",
+      "additionalProperties": {
+        "$ref": "#/$defs/stage"
+      }
+    }
   },
   "$defs": {
-    "tag": { "enum": ["AGREED", "PROPOSED", "GAP"] },
+    "tag": {
+      "enum": [
+        "AGREED",
+        "PROPOSED",
+        "GAP"
+      ]
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_id", "title", "status"],
+      "required": [
+        "source_id",
+        "title",
+        "status"
+      ],
       "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[0-9]{2}$" },
-        "doc_no": { "type": ["string", "null"] },
-        "title": { "type": "string" },
-        "revision": { "type": ["string", "null"] },
+        "source_id": {
+          "type": "string",
+          "pattern": "^SRC-[0-9]{2}$"
+        },
+        "doc_no": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
-          "enum": ["approved", "for_approval", "internal_agreed", "unknown"],
+          "enum": [
+            "approved",
+            "for_approval",
+            "internal_agreed",
+            "unknown"
+          ],
           "description": "approved = contractually approved/accepted; for_approval = issued but not yet approved (rules citing it are capped at 'advisory'); internal_agreed = approved by the AICC owner in SPC-0001/0002/0003 or the progress log."
         },
-        "note": { "type": ["string", "null"] }
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "enum": [
+            "1",
+            "2",
+            "2b",
+            "observation",
+            null
+          ],
+          "description": "Value hierarchy tier (SPC-0004 Rev E §2.3): 1 ER / DTR; 2 standards; 2b draft sources; observation (law, OCR copy)."
+        }
       }
     },
     "code_list": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_id", "clause", "values", "tag"],
+      "required": [
+        "source_id",
+        "clause",
+        "values",
+        "tag"
+      ],
       "properties": {
-        "source_id": { "type": "string" },
-        "clause": { "type": "string" },
-        "values": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-        "tag": { "$ref": "#/$defs/tag" },
-        "note": { "type": ["string", "null"] }
+        "source_id": {
+          "type": "string"
+        },
+        "clause": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "parameter": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["value", "tag", "blocking"],
+      "required": [
+        "value",
+        "tag",
+        "blocking"
+      ],
       "properties": {
-        "value": { "type": ["number", "string", "boolean", "array", "object", "null"] },
-        "unit": { "type": ["string", "null"] },
-        "tag": { "$ref": "#/$defs/tag" },
-        "source_id": { "type": ["string", "null"] },
-        "clause": { "type": ["string", "null"] },
-        "note": { "type": ["string", "null"] },
+        "value": {
+          "type": [
+            "number",
+            "string",
+            "boolean",
+            "array",
+            "object",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "source_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clause": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "blocking": {
           "type": "boolean",
           "description": "True: a GAP value stops the rule (state must be inactive). False: only the sub-check that uses it is skipped."
+        },
+        "keyed_by": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "street_class",
+              "design_speed_kmh",
+              "junction_type",
+              "land_use",
+              "parking_type",
+              "phase"
+            ]
+          },
+          "description": "S8: value is an object keyed by these dimensions (e.g. street_class)."
+        },
+        "enforcement": {
+          "enum": [
+            "binding",
+            "advisory"
+          ],
+          "description": "S9: advisory sub-checks are capped at Probable (Rev E §4.7). Default binding."
+        },
+        "tolerance_ref": {
+          "type": "string",
+          "description": "S12: key in the top-level tolerances table."
+        },
+        "required_from_phase": {
+          "$ref": "#/$defs/phase"
         }
       },
       "allOf": [
         {
           "$comment": "A GAP parameter has no value; a non-GAP parameter must cite a source.",
-          "if": { "properties": { "tag": { "const": "GAP" } } },
-          "then": { "properties": { "value": { "const": null } } },
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "GAP"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "const": null
+              }
+            }
+          },
           "else": {
-            "required": ["source_id"],
-            "properties": { "source_id": { "type": "string" }, "value": { "not": { "const": null } } }
+            "required": [
+              "source_id"
+            ],
+            "properties": {
+              "source_id": {
+                "type": "string"
+              },
+              "value": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
           }
         }
       ]
@@ -78,53 +296,276 @@
     "rule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rule_id", "title", "group", "agent", "skill", "owner_role", "statement", "inputs", "method",
-                   "parameters", "severity_default", "issue_type", "default_status", "state", "state_reason", "tag"],
+      "required": [
+        "rule_id",
+        "title",
+        "group",
+        "agent",
+        "skill",
+        "owner_role",
+        "statement",
+        "inputs",
+        "method",
+        "parameters",
+        "severity_default",
+        "issue_type",
+        "default_status",
+        "state",
+        "state_reason",
+        "tag"
+      ],
       "properties": {
-        "rule_id": { "type": "string", "pattern": "^(PKG|GIS)-[0-9]{3}$" },
-        "title": { "type": "string", "maxLength": 100 },
-        "group": { "enum": ["PKG", "GIS"] },
-        "agent": { "enum": ["INT", "GIS"] },
-        "skill": { "enum": ["controlling-submittal-package", "comparing-drawing-revisions", "checking-cadastral-geometry"] },
-        "owner_role": { "enum": ["SBM", "Lead GIS"] },
-        "statement": { "type": "string", "description": "The requirement in 'shall' form." },
+        "rule_id": {
+          "type": "string",
+          "pattern": "^(PKG|GIS|ROD|EWK|COR)-[0-9]{3}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "group": {
+          "enum": [
+            "PKG",
+            "GIS",
+            "ROD",
+            "EWK",
+            "COR"
+          ]
+        },
+        "agent": {
+          "enum": [
+            "INT",
+            "GIS",
+            "RDE",
+            "COO"
+          ]
+        },
+        "skill": {
+          "enum": [
+            "controlling-submittal-package",
+            "comparing-drawing-revisions",
+            "checking-cadastral-geometry",
+            "reviewing-road-design",
+            "reviewing-earthworks-geotech",
+            "coordinating-utility-corridors"
+          ]
+        },
+        "owner_role": {
+          "enum": [
+            "SBM",
+            "Lead GIS",
+            "DMR",
+            "IM / CM"
+          ]
+        },
+        "statement": {
+          "type": "string",
+          "description": "The requirement in 'shall' form."
+        },
         "inputs": {
           "type": "array",
           "minItems": 1,
           "items": {
-            "enum": ["file_name", "dwg_title_block", "pdf_title_block", "transmittal", "drawing_list", "previous_submittal",
-                     "dwg_cadastral", "dwg_header", "pdf_drawing", "dlus", "overall_summary", "planning_assumptions",
-                     "community_facilities", "site_boundary", "reference_cadastre"]
+            "$ref": "#/$defs/input"
           }
         },
-        "method": { "type": "string", "description": "Short deterministic algorithm. Full procedure lives in the skill (SPC-0006)." },
-        "parameters": { "type": "object", "additionalProperties": { "$ref": "#/$defs/parameter" } },
-        "code_lists": { "type": "array", "items": { "type": "string" } },
-        "severity_default": { "enum": ["Critical", "Major", "Minor", "Observation"] },
-        "issue_type": { "enum": ["design_error", "inconsistency", "missing_information", "er_ambiguity", "package_control", "schedule_blocking"] },
+        "method": {
+          "type": "string",
+          "description": "Short deterministic algorithm. Full procedure lives in the skill (SPC-0006)."
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "code_lists": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "severity_default": {
+          "enum": [
+            "Critical",
+            "Major",
+            "Minor",
+            "Observation"
+          ]
+        },
+        "issue_type": {
+          "enum": [
+            "design_error",
+            "inconsistency",
+            "missing_information",
+            "er_ambiguity",
+            "package_control",
+            "schedule_blocking"
+          ]
+        },
         "default_status": {
           "type": "object",
           "description": "Finder's proposed_status by evidence source_type (SPC-0003). Keys are evidence source types.",
-          "additionalProperties": { "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information"] },
+          "additionalProperties": {
+            "enum": [
+              "Confirmed",
+              "Probable",
+              "Not auto-verifiable",
+              "Missing information"
+            ]
+          },
           "propertyNames": {
-            "enum": ["dwg_vector", "xlsx_cell", "csv_cell", "pdf_vector_text", "pdf_ocr", "pdf_raster_visual", "pdf_colour", "script_output", "landxml"]
+            "enum": [
+              "dwg_vector",
+              "xlsx_cell",
+              "csv_cell",
+              "pdf_vector_text",
+              "pdf_ocr",
+              "pdf_raster_visual",
+              "pdf_colour",
+              "script_output",
+              "landxml"
+            ]
           }
         },
-        "state": { "enum": ["active", "advisory", "inactive"] },
-        "state_reason": { "type": "string" },
-        "exclusions": { "type": "array", "items": { "type": "string" } },
-        "iso_ref": { "type": ["string", "null"] },
-        "brief_ref": { "type": ["string", "null"] },
+        "state": {
+          "enum": [
+            "active",
+            "advisory",
+            "inactive"
+          ]
+        },
+        "state_reason": {
+          "type": "string"
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "iso_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "brief_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tests": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["site", "expect"],
-            "properties": { "site": { "type": "string" }, "expect": { "type": "string" }, "ref": { "type": ["string", "null"] } }
+            "required": [
+              "site",
+              "expect"
+            ],
+            "properties": {
+              "site": {
+                "type": "string"
+              },
+              "expect": {
+                "type": "string"
+              },
+              "ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         },
-        "tag": { "$ref": "#/$defs/tag" }
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "applicability": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "S7: where the rule applies.",
+          "properties": {
+            "street_class": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": [
+                  "arterial",
+                  "sub_collector",
+                  "local_access",
+                  "service_road",
+                  "all"
+                ]
+              }
+            },
+            "design_speed_kmh": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 140
+              }
+            },
+            "junction_type": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "land_use": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "condition": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "target_state": {
+          "enum": [
+            "active",
+            "advisory"
+          ],
+          "description": "S10: agreed state once the skill is built and tested (Rev E §4.8)."
+        },
+        "check_type": {
+          "enum": [
+            "value",
+            "presence",
+            "document"
+          ],
+          "description": "S15. Default value."
+        },
+        "required_from_phase": {
+          "$ref": "#/$defs/phase"
+        },
+        "required_inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/required_input"
+          },
+          "description": "S16: inputs whose absence is a missing_information finding (Rev E §5.11)."
+        },
+        "decision_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Owner decision(s) behind the rule (e.g. D-02; P-N2-x)."
+        }
       },
       "allOf": [
         {
@@ -132,13 +573,155 @@
           "properties": {
             "default_status": {
               "properties": {
-                "pdf_colour": { "not": { "const": "Confirmed" } },
-                "pdf_raster_visual": { "not": { "const": "Confirmed" } }
+                "pdf_colour": {
+                  "not": {
+                    "const": "Confirmed"
+                  }
+                },
+                "pdf_raster_visual": {
+                  "not": {
+                    "const": "Confirmed"
+                  }
+                }
               }
             }
           }
         }
       ]
+    },
+    "phase": {
+      "enum": [
+        "PD",
+        "DD",
+        "FD"
+      ]
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase"
+      ],
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/phase"
+        },
+        "milestone": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "DD milestone (60 / 90 / 100) per the Employer-approved MIDP (Rev E §5.14A)."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "input": {
+      "enum": [
+        "file_name",
+        "dwg_title_block",
+        "pdf_title_block",
+        "transmittal",
+        "drawing_list",
+        "previous_submittal",
+        "dwg_cadastral",
+        "dwg_header",
+        "pdf_drawing",
+        "dlus",
+        "overall_summary",
+        "planning_assumptions",
+        "community_facilities",
+        "site_boundary",
+        "reference_cadastre",
+        "midp",
+        "landxml_alignment",
+        "landxml_profile",
+        "landxml_surface",
+        "road_hierarchy_plan",
+        "typical_section",
+        "plan_geometry",
+        "details",
+        "sections",
+        "design_report",
+        "pavement_report",
+        "signing_marking_plan",
+        "utility_plan",
+        "drainage_plan",
+        "grading_surface",
+        "plot_levels",
+        "parking_schedule",
+        "landscape_plan"
+      ]
+    },
+    "required_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item",
+        "carrier",
+        "required_from_phase"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "carrier": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/input"
+          }
+        },
+        "required_from_phase": {
+          "$ref": "#/$defs/phase"
+        },
+        "required_from_milestone": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "enum": [
+            60,
+            90,
+            100,
+            null
+          ],
+          "description": "Only when fixed by the rulebook; otherwise the MIDP milestone applies (Rev E §5.14A)."
+        },
+        "on_missing": {
+          "enum": [
+            "finding",
+            "not_run_logged"
+          ],
+          "default": "finding",
+          "description": "not_run_logged only for the Rev E §5.11 (a)-(c) reasons."
+        },
+        "source_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clause": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     }
   }
 }
