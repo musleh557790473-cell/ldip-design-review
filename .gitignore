@@ -24,6 +24,11 @@
 *.rvt
 *.imx
 *.landxml
+# LandXML is .xml (skill 3); only generated synthetic eval files may be committed
+*.xml
+!plugin/ldip-design-review/skills/*/evals/synthetic_*.xml
+*.aecc.pnt
+*.aecc.tri
 *.png
 *.jpg
 *.tif
