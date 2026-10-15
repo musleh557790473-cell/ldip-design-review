@@ -9,7 +9,8 @@ Usage:
 --summary is the agent's final message (SPC-0005 §4.8) saved by the Orchestrator as a file.
 
 Checks (SPC-0005 §6.3): S0 return summary · S1 files / .tmp / OneDrive conflict copies · S2 JSON
-Schema + identity (intake-batch: batch manifests and ingestion files, P-S3-19) · S3 script exit codes · FC1 confidence = strongest evidence tier · FC2 earlier
+Schema + identity (intake-batch: batch manifests and ingestion files, P-S3-19; LandXML side files and
+provenance, P7) · S3 script exit codes · FC1 confidence = strongest evidence tier · FC2 earlier
 fields unchanged · FC3 artifact hashes · FC4 input hashes · FC5 rule exists, not inactive, status
 within the rule cap · FC7 every candidate once in verified.json · FC8 every verified finding
 registered, gate PENDING · C3 batch ownership (P-S3-4, intake-batch).
@@ -19,7 +20,7 @@ Every result is appended to runs/<run>/format_checks.json. The one-line stdout s
 on a retry (SPC-0005 §6.5). Exit 0 = the check ran; 2 = input error. This script never reads
 findings/<run>/reasoning/**. No network, no shell calls.
 """
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import argparse
 import json
@@ -41,6 +42,11 @@ PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or HERE.parent)
 # FC5 uses skill 8's function: one implementation of the rule cap (owner, 30 Sep 2026).
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "applying-ldip-rulebook" / "scripts"))
 from rulebook_lib import cap_errors  # noqa: E402
+# S2 for LandXML (P7) uses skill 1's side-file check and skill 3's provenance folder rule: one implementation each.
+sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "extracting-dwg-data" / "scripts"))
+sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "parsing-landxml" / "scripts"))
+from validate_ingestion import check_side_files  # noqa: E402
+from landxml_common import expected_provenance  # noqa: E402
 SCHEMA_PATH = PLUGIN_ROOT / "schemas" / "finding.schema.json"
 INGESTION_SCHEMA = PLUGIN_ROOT / "schemas" / "ingestion.schema.json"
 BATCH_SCHEMA = PLUGIN_ROOT / "schemas" / "batch_manifest.schema.json"
@@ -102,8 +108,11 @@ def validator_for(path):
 
 def check_ingestion(rep, root, manifest):
     """S2 for intake-batch (P-S3-19): each b<nn>/batch_manifest.json against batch_manifest.schema.json
-    with run identity and counts; each *.dwg.json / *.pdf.json against ingestion.schema.json, with the
-    file name matching its source and the source hash matching the manifest entry."""
+    with run identity and counts; each *.dwg.json / *.pdf.json / *.xml.json against ingestion.schema.json,
+    with the file name matching its source, the source hash matching the manifest entry and the file type
+    matching the entry type. LandXML (P7): every surface side file exists, matches its tin_sha256 and
+    landxml_surface.schema.json, the entry's side_files equal the files the ingestion file references, and
+    source.provenance follows the folder rule (SPC-0006 Rev C §4.12.4)."""
     rep.run("S2")
     base = root / "0.ai_context" / manifest["site"] / manifest["sub_id"]
     vb, vi = validator_for(BATCH_SCHEMA), validator_for(INGESTION_SCHEMA)
@@ -152,6 +161,31 @@ def check_ingestion(rep, root, manifest):
                 rep.fail("S2", f"file name should be {Path(ing['source']['path']).name}.json", file=rel_o)
             if ing["source"]["sha256"] != f["sha256"]:
                 rep.fail("S2", "source.sha256 differs from the batch manifest entry", file=rel_o, path="/source/sha256")
+            if ing["source"]["file_type"] != f["type"]:
+                rep.fail("S2", f"entry type '{f['type']}' differs from source.file_type '{ing['source']['file_type']}'",
+                         file=rel_m, path=f"/files/{i}/type")
+            if ing["source"]["file_type"] == "landxml":
+                check_landxml(rep, op, rel_o, ing, f, rel_m, i)
+            elif f.get("side_files"):
+                rep.fail("S2", "side_files listed for a file that is not LandXML", file=rel_m, path=f"/files/{i}/side_files")
+
+
+def check_landxml(rep, op, rel_o, ing, entry, rel_m, i):
+    """S2 for one LandXML ingestion file (P7)."""
+    for msg in check_side_files(op, ing):
+        rep.fail("S2", msg, file=rel_o, path="/content/surfaces")
+    refs = sorted(s_["tin_file"] for s_ in ing["content"].get("surfaces", []))
+    listed = sorted(entry.get("side_files") or [])
+    if refs != listed:
+        rep.fail("S2", f"side_files {listed} differ from the surfaces' tin_file {refs}", file=rel_m,
+                 path=f"/files/{i}/side_files")
+    want, got = expected_provenance(ing["source"]["path"]), ing["source"].get("provenance")
+    if want is None:
+        rep.fail("S2", "no provenance rule for this source location in a review run (brief Rev G §11 item 26)",
+                 file=rel_o, path="/source/path")
+    elif got != want:
+        rep.fail("S2", f"provenance '{got}' differs from the folder rule ('{want}')", file=rel_o,
+                 path="/source/provenance")
 
 
 def rel(root, p):

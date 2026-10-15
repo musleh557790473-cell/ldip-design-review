@@ -2,7 +2,7 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.1.4"
+  version: "0.1.5"
   spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1"
 ---
 
@@ -53,11 +53,13 @@ your list and `<stem>` its file name without `.dwg`.
    Exit 4 lists the failing files; do not edit the JSON (`write_manifest.py` records them as failed).
 5. **Manifest** — one call writes `<B>/batch_manifest.json` from the logs and ingestion files on
    disk; never write or edit it yourself:
-   `python "<SK>/write_manifest.py" --batch-dir "<B>" --run <run_id> --site <SITE> --sub <sub-id> --file "<F1>" <sha256-1> --file "<F2>" <sha256-2>`
-   Give every file of your list (DWG, PDF and other) with the SHA-256 from the prompt. It sets
-   `status`, `output`, `intermediates`, `error`, `converter` and `counts`, validates every listed
-   `.dwg.json` and the manifest itself (SPC-0006 §3.1), and exits 4 without writing if the manifest
-   fails its schema. The format checker then checks the batch (S2, C3).
+   `python "<SK>/write_manifest.py" --out "<B>/batch_manifest.json" --run <run_id> --site <SITE> --sub <sub-id> --file "<F1>" <sha256-1> --file "<F2>" <sha256-2>`
+   (always this `--out` form: it also works when every file failed and `<B>` was never created.)
+   Give every file of your list (DWG, PDF, LandXML and other) with the SHA-256 from the prompt. It
+   sets `status`, `output`, `intermediates`, `side_files` (LandXML surfaces), `error`, `converter` and
+   `counts`, validates every listed `.dwg.json`, `.pdf.json` and `.xml.json` (LandXML also: side files
+   and the provenance folder rule) and the manifest itself (SPC-0006 §3.1), and exits 4 without writing
+   if the manifest fails its schema. The format checker then checks the batch (S2, C3).
 
 ## Outputs and exit codes
 

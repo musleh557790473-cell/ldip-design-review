@@ -9,15 +9,18 @@ writes, after schema validation:
   <out>/<stem>.surface-<n>.json     one side file per surface with the full TIN (E, N, Z)
 Every coordinate is written Easting, Northing, Elevation (LandXML text is N E Z; §4.12.6).
 
-Usage: python parse_landxml.py --in <file.xml> --out <batch dir> --provenance parsons|employer|aicc_export
+Usage: python parse_landxml.py --in <file.xml> --out <batch dir> | <batch dir>/<file.xml>.json
+                               --provenance parsons|employer|aicc_export
                                [--source-path <path as recorded, relative to LDIP_Review>]
+--out as the main output file (0.1.1, P7) is the form used in a review run: like skills 1 and 2 it names a
+file inside the batch folder, which the guard can check before the folder exists; it must be <file.xml>.json.
 Exit: 0 written, or skipped (not LandXML; nothing written) · 2 input error (missing, > 500 MB,
 malformed XML, DOCTYPE with entity declarations, unknown LandXML namespace) · 3 lxml / jsonschema
 missing · 4 output failed its schema (nothing written).
 XML security (§4.12.9): resolve_entities=False, no_network=True, load_dtd=False; entity
 declarations refused before parsing. No network, no shell calls, no eval.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import json
@@ -91,6 +94,39 @@ def prolog_check(path):
             i = close + 1
         else:
             return {"doctype": doctype}
+
+
+def classify(path):
+    """What intake should record for a .xml file that has no ingestion file (P7; write_manifest.py of
+    skill 1). Reads only the prolog and the root element, with the same rules as main():
+    returns ("skipped", code, detail) for a Civil 3D side file or a file whose root is not LandXML, and
+    ("failed", code, detail) for anything that main() refuses or should have written."""
+    p = Path(path)
+    low = p.name.lower()
+    if low.endswith(SIDE_SUFFIXES) or not low.endswith(".xml"):
+        return "skipped", EXIT_INPUT, "not a LandXML file (Civil 3D side file or not .xml)"
+    if not p.is_file():
+        return "failed", EXIT_INPUT, "source file not found"
+    if p.stat().st_size > MAX_BYTES:
+        return "failed", EXIT_INPUT, "file above the 500 MB cap (§4.12.9)"
+    try:
+        prolog_check(p)
+        from lxml import etree
+        it = etree.iterparse(str(p), events=("start",), resolve_entities=False, no_network=True,
+                             load_dtd=False, huge_tree=True)
+        _, el = next(it)
+    except LandXmlError as exc:
+        return "failed", exc.code, exc.detail
+    except ImportError:
+        return "failed", EXIT_DEPENDENCY, "lxml is not installed"
+    except Exception as exc:  # XMLSyntaxError before the root element, StopIteration
+        return "failed", EXIT_INPUT, f"malformed XML: {str(exc)[:200]}"
+    if local(el.tag) != "LandXML":
+        return "skipped", EXIT_INPUT, f"not LandXML (root element {local(el.tag)})"
+    ns = el.tag[1:].split("}")[0] if el.tag.startswith("{") else ""
+    if ns not in NAMESPACES:
+        return "failed", EXIT_INPUT, f"unknown LandXML namespace: {ns or '(none)'}"
+    return "failed", EXIT_INPUT, "no ingestion file: parse_landxml.py not run or failed"
 
 
 # ============================================================================ helpers
@@ -609,6 +645,13 @@ def main(argv=None):
             emit({"status": "skipped", "code": EXIT_OK, "file": a.source_path,
                   "detail": "not a LandXML file (Civil 3D side file or not .xml); nothing written"})
             return EXIT_OK
+        out_arg = Path(a.out)
+        if out_arg.name.lower().endswith(".xml.json"):
+            if out_arg.name != f"{p.name}.json":
+                raise LandXmlError(EXIT_INPUT, f"--out must be named {p.name}.json")
+            out, main_path = out_arg.parent, out_arg
+        else:
+            out, main_path = out_arg, out_arg / f"{p.name}.json"
         size = p.stat().st_size
         if size > MAX_BYTES:
             raise LandXmlError(EXIT_INPUT, f"file is {size} bytes, above the 500 MB cap (§4.12.9)")
@@ -627,10 +670,8 @@ def main(argv=None):
         if errs:
             emit({"status": "fail", "code": EXIT_SCHEMA, "errors": errs[:20]})
             return EXIT_SCHEMA
-        out = Path(a.out)
         for fname, _, sb in res["sides"]:       # side files first: the main file carries their hashes
             atomic_write_bytes(out / fname, sb)
-        main_path = out / f"{p.name}.json"
         atomic_write_bytes(main_path, dumps_main(doc))
     except NotLandXml as exc:
         emit({"status": "skipped", "code": EXIT_OK, "file": a.source_path, "detail": f"not LandXML ({exc}); nothing written"})

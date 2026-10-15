@@ -9,7 +9,7 @@ description: >-
   metres, recording the file's source. Use when an LDIP submittal or survey
   package contains .xml LandXML files that road or earthworks checks need.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   spec: "AICC-BIM-SPC-0006 Rev C §2.4.2, §4.12; AICC-BIM-SPC-0001 Rev G §1.5"
 ---
 
@@ -28,7 +28,8 @@ Packages: Python 3.11+, `lxml`, `jsonschema`. No converter.
 1. `--provenance` is given by the caller, never guessed from the content: `parsons` for files under
    `submittals/<SITE>/<sub-id>/`, `employer` for Employer (RCRC) reference data, `aicc_export` for files
    AICC exported from Parsons Civil 3D models (their names end `-AICC-EXPORT`). If the prompt does not
-   say, stop and ask.
+   say, stop and ask. In a review run (intake-batch) the folder rule decides and `employer` is not used;
+   `write_manifest.py` of skill 1 records each `.xml` and checks the same rule.
 2. Write only to the output folder you were given. Never write or edit a `.xml.json` or side file by hand,
    and never fill in a value the script did not produce.
 3. A file that fails (exit 2, 3 or 4) is not retried: continue with the next file and report the code and
@@ -48,7 +49,9 @@ Run each command from the LDIP_Review folder with paths relative to it. `<SK>` i
 
 1. **Plan** — list the `.xml` files from the prompt with their provenance. Nothing else is read.
 2. **Parse** — one call per file:
-   `python "<SK>/parse_landxml.py" --in "<F>" --out "<B>" --provenance <p> --source-path "<F>"`
+   `python "<SK>/parse_landxml.py" --in "<F>" --out "<B>/<file>.json" --provenance <p> --source-path "<F>"`
+   (`<file>` = the file name with `.xml`; side files are written next to it. `--out "<B>"` alone also
+   works standalone, but in a review run the guard needs the file form.)
    The script checks the file (root element, namespace, size, DOCTYPE), streams it, computes, validates
    its own output against the schemas, then writes the side files and the main file (`.tmp` → rename).
 3. **Validate** — all ingestion files in one call:

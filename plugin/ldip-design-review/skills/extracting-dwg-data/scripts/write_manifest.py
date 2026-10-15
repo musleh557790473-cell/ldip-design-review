@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""Write batch_manifest.json for one intake batch from what is on disk (SPC-0006 §3.1; D8, 0.2.2).
+"""Write batch_manifest.json for one intake batch from what is on disk (SPC-0006 §3.1; D8, 0.2.2; P7).
 
 The agent no longer writes the manifest by hand. For each input of the batch the script reads the
 converter log (<stem>.convert.json) and the ingestion file (<stem>.dwg.json) in the batch folder,
 validates the ingestion file (validate_ingestion.check), and sets status / output / intermediates /
 error. PDFs (skill 2): the ingestion file <name>.pdf.json written by extract_pdf.py is validated →
-`extracted`; missing or invalid → `failed`. Other files are `skipped` (code 2).
+`extracted`; missing or invalid → `failed`. LandXML (skill 3, P7): <file>.xml.json written by
+parse_landxml.py is validated with its surface side files, its source hash and its provenance against
+the folder rule (landxml_common.expected_provenance) → `extracted` with `side_files`; a .xml whose root is
+not LandXML → `skipped` (type `other`); refused, missing or invalid → `failed`. Other files are
+`skipped` (code 2).
 The manifest is validated against schemas/batch_manifest.schema.json before it is written.
 
-Usage: python write_manifest.py --batch-dir <0.ai_context/SITE/SUB/bNN> --run <run_id> --site <SITE>
-                                --sub <sub_id> --file <path> <sha256> [--file <path> <sha256> ...]
-                                [--root <LDIP_Review>]
+Usage: python write_manifest.py --out <0.ai_context/SITE/SUB/bNN>/batch_manifest.json | --batch-dir <…/bNN>
+                                --run <run_id> --site <SITE> --sub <sub_id>
+                                --file <path> <sha256> [--file <path> <sha256> ...] [--root <LDIP_Review>]
+--out (0.3.0, G19-1) is the form used in a review run: it names a file inside the batch folder, which the
+guard can check before the folder exists, so a batch whose files were all refused before anything was
+written still gets a manifest (all entries `failed`); the folder is created. --batch-dir needs the folder.
 Exit: 0 written · 2 input error · 3 jsonschema missing · 4 manifest failed its schema (not written).
 No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -29,6 +36,10 @@ from dwg_common import (  # noqa: E402
 import validate_ingestion  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+# Skill 3 (parsing-landxml): one implementation of "is this LandXML" and of the provenance folder rule.
+sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "parsing-landxml" / "scripts"))
+import landxml_common  # noqa: E402
+import parse_landxml  # noqa: E402
 BATCH_SCHEMA = PLUGIN_ROOT / "schemas" / "batch_manifest.schema.json"
 INGESTION_SCHEMA = PLUGIN_ROOT / "schemas" / "ingestion.schema.json"
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -69,6 +80,56 @@ def pdf_entry(bdir, path, sha, ing_validator, root):
     return entry
 
 
+def landxml_entry(bdir, path, sha, ing_validator, root):
+    name = Path(path).name
+    stem = name[:-4] if name.lower().endswith(".xml") else name
+    out = bdir / f"{name}.json"
+    entry = {"path": path, "sha256": sha, "type": "landxml", "status": "failed", "output": None, "error": None}
+    orphans = sorted(p.name for p in bdir.glob(f"{stem}.surface-*.json") if p.is_file())
+
+    def fail(code, detail, keep_out=False):
+        inter = ([out.name] if keep_out else []) + orphans
+        if inter:
+            entry["intermediates"] = inter     # on disk and owned by this batch (C3), not an output
+        entry["error"] = {"code": int(code), "detail": str(detail)[:500]}
+        return entry
+
+    if not out.is_file():
+        status, code, detail = parse_landxml.classify(Path(root or ".") / path)
+        if status == "skipped":
+            entry.update(type="other", status="skipped", error={"code": int(code), "detail": detail})
+            if orphans:
+                entry["intermediates"] = orphans
+            return entry
+        return fail(code, detail)
+    doc = read_json(out)
+    if doc is None:
+        return fail(EXIT_SCHEMA, "ingestion file is not readable JSON", True)
+    if (doc.get("source") or {}).get("sha256") != sha:
+        return fail(EXIT_INPUT, "ingestion source hash differs from the file list", True)
+    try:
+        errs = validate_ingestion.check(out, ing_validator, root)
+    except (OSError, json.JSONDecodeError) as exc:
+        errs = [f"unreadable: {exc}"]
+    if errs:
+        return fail(EXIT_SCHEMA, "ingestion file failed validation: " + "; ".join(errs[:3]), True)
+    want = landxml_common.expected_provenance(path)
+    got = doc["source"].get("provenance")
+    if want is None:
+        return fail(EXIT_INPUT, "no provenance rule for this location in a review run "
+                                "(only submittals/<SITE>/<sub-id>/; brief Rev G §11 item 26)", True)
+    if got != want:
+        return fail(EXIT_INPUT, f"provenance '{got}' differs from the folder rule ('{want}', SPC-0006 Rev C §4.12.4)", True)
+    sides = [s["tin_file"] for s in doc["content"].get("surfaces", [])]
+    entry.update(status="extracted", output=out.name)
+    if sides:
+        entry["side_files"] = sides
+    stale = [o for o in orphans if o not in sides]
+    if stale:
+        entry["intermediates"] = stale         # left by an earlier attempt; listed so C3 accounts for them
+    return entry
+
+
 def dwg_entry(bdir, path, sha, ing_validator, root):
     stem = Path(path).stem
     logp, dxf, out = bdir / f"{stem}.convert.json", bdir / f"{stem}.dxf", bdir / f"{stem}.dwg.json"
@@ -102,7 +163,9 @@ def dwg_entry(bdir, path, sha, ing_validator, root):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--batch-dir", required=True)
+    where = ap.add_mutually_exclusive_group(required=True)
+    where.add_argument("--batch-dir")
+    where.add_argument("--out")
     ap.add_argument("--run", required=True)
     ap.add_argument("--site", required=True)
     ap.add_argument("--sub", required=True)
@@ -115,9 +178,17 @@ def main(argv=None):
         emit({"status": "error", "code": EXIT_DEPENDENCY, "detail": "jsonschema is not installed"})
         return EXIT_DEPENDENCY
     try:
-        bdir = check_path(a.batch_dir)
-        if not bdir.is_dir():
-            raise DwgError(EXIT_INPUT, f"batch folder not found: {a.batch_dir}")
+        if a.out:
+            outp = check_path(a.out)
+            if outp.name != "batch_manifest.json":
+                raise DwgError(EXIT_INPUT, f"--out must be <batch folder>/batch_manifest.json: {a.out}")
+            bdir = outp.parent
+            if bdir.exists() and not bdir.is_dir():
+                raise DwgError(EXIT_INPUT, f"not a folder: {bdir}")
+        else:
+            bdir = check_path(a.batch_dir)
+            if not bdir.is_dir():
+                raise DwgError(EXIT_INPUT, f"batch folder not found: {a.batch_dir}")
         if not re.fullmatch(r"b[0-9]{2}", bdir.name):
             raise DwgError(EXIT_INPUT, f"batch folder name must be b<nn>: {bdir.name}")
         for _, sha in a.file:
@@ -138,6 +209,8 @@ def main(argv=None):
                 (ok_engines if log.get("status") == "ok" else engines).add((log.get("engine"), log.get("engine_version")))
         elif ext == ".pdf":
             entry = pdf_entry(bdir, path, sha, vi, a.root)
+        elif ext == ".xml":
+            entry = landxml_entry(bdir, path, sha, vi, a.root)
         else:
             entry = {"path": path, "sha256": sha, "type": "other", "status": "skipped", "output": None,
                      "error": {"code": EXIT_INPUT, "detail": "file type not handled by intake-batch"}}

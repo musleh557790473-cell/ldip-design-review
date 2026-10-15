@@ -1,5 +1,5 @@
 {
-  "matrix_source_version": "0.3.0",
+  "matrix_source_version": "0.3.1",
   "source": "AICC-BIM-SPC-0002 Rev E §5 (access matrix), narrowed by AICC-BIM-SPC-0005 Rev C §5 (per-agent reads/writes), §5.0.1, §7.2-7.3",
   "status": "AGREED form (P-S3-12, owner 30 Sep 2026): agent_type is plugin-qualified; absent agent_type = main session",
   "plugin_name": "ldip-design-review",
@@ -65,7 +65,8 @@
       ],
       "bash_skills": [
         "extracting-dwg-data",
-        "extracting-pdf-drawings"
+        "extracting-pdf-drawings",
+        "parsing-landxml"
       ]
     },
     "intake-package": {

@@ -1,0 +1,155 @@
+{
+ "skill": "reviewing-road-design",
+ "note": "Data paths only; real files stay in LDIP_Review/ or the owner's folders, never in Git (SPC-0006 §2.6). Rule values come from the approved rulebook through skill 8. T4 data is synthetic (make_synthetic.py). Expectations from SPC-0006 Rev D §4.13.13. Run on sonnet and opus (B7). Phase B1 (TB1-TB6): SPC-0006 Rev E §4.13B.9, rules with DB-3 / DB-7 applied (rules_v4 or a test copy).",
+ "evals": [
+  {
+   "id": "T1-NMAR-criteria",
+   "query": "Read the road design criteria of the Namar 30% design report.",
+   "files": [
+    "submittals/NMAR/10-2026/Reports/LDIP-RCRC-SAP-03-DN-DES-RPT-00001.pdf"
+   ],
+   "expected": [
+    "one table, pp.20-21, classes sub_collector (Collector) and local_access (Local / Access)",
+    "Collector: speed 40, lane 3.3, median Raised / 1.2, ROW 25, crossfall 2.0 %, e-max 4 %, Rmin 50, Gmax 8 %, Gmin 0.5 %, K crest 1, K sag 2, Lmin 12, clearance 5.5, curb 150 mm",
+    "Local / Access: 20, 3.3, None, 15/18, 2.0 %, None, 10, 10 %, 0.5 %, 4, 8, 24, 5.5, 150 mm",
+    "departures DEP-01 to DEP-04 listed"
+   ]
+  },
+  {
+   "id": "T2-NMAR-criteria-check",
+   "query": "Check the Namar 30% road design criteria against the rulebook.",
+   "files": [
+    "submittals/NMAR/10-2026/Reports/LDIP-RCRC-SAP-03-DN-DES-RPT-00001.pdf"
+   ],
+   "expected": [
+    "Probable findings: ROD-006, 007, 002 (local 15 m), 014 (1.2 m), 017, 018, 024, 025, 028 and 029 (collector, at 40 and 50 km/h), 030 (both classes)",
+    "tier-2 Observations once per submittal: ROD-010 / 011 lane, ROD-014 median",
+    "passes: ROD-003, 010 / 011 lane_min and lane_upper, 021, 022, 026, 031, 057; local K at the ER minimum 30 km/h"
+   ]
+  },
+  {
+   "id": "T3-NMAR-register-sections",
+   "query": "Build the Namar road register and check the typical sections.",
+   "files": [
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-00003-001-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-30000-001-00.dwg"
+   ],
+   "expected": [
+    "ROW layers with roads: 15 m (34 lines), 18 m (5), 25 m (4); 20 / 30 / 36 / 60 m layers empty",
+    "42 road labels RD-01 … RD-38, RD-M-01 … 03, RA-01",
+    "4 sections: 15 m local, 18 m local (two), 25 m neighbourhood collector with median",
+    "Confirmed: ROD-002 (15 m < 16 m, labelled) and ROD-014 (median 1.20 < 1.5, labelled)"
+   ]
+  },
+  {
+   "id": "T4-synthetic-landxml",
+   "query": "Check the alignment and profile of the synthetic LandXML.",
+   "files": [
+    "plugin/ldip-design-review/skills/reviewing-road-design/evals/synthetic_t4.xml"
+   ],
+   "expected": [
+    "ROD-017 (120 < 150), ROD-024 (6.5 > 6.0), ROD-028 at 50 km/h (5 < 7.4), ROD-030 (40 < 50) fail, all Probable",
+    "ROD-026 passes; no other finding"
+   ]
+  },
+  {
+   "id": "T5-stage-gate",
+   "query": "Which road inputs are required at the 30% stage?",
+   "expected": [
+    "C1, C2, C3 present; C4 not required at stage (PD)",
+    "at 60% without LandXML: C4 not run, carrier plan_geometry not read in phase A"
+   ]
+  },
+  {
+   "id": "T6-negative",
+   "query": "Check a report without a criteria table and a hierarchy plan with an unknown class term.",
+   "expected": [
+    "C2 Missing information listing the files searched",
+    "unknown class term: no class assigned"
+   ]
+  },
+  {
+   "id": "T7-real-landxml",
+   "status": "waiting [GAP: brief Rev G §11 item 25]",
+   "query": "Check the alignments of the first DD package.",
+   "files": [],
+   "expected": [
+    "ROD-017, 018, 024-030 re-tested on real LandXML; ROD-019 / 020 then proposed for activation"
+   ]
+  },
+  {
+   "id": "TB1-NMAR-sections-presence",
+   "query": "Check the Namar 30% typical sections for sidewalks on both sides and parking lanes.",
+   "files": [
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-30000-001-00.dwg"
+   ],
+   "expected": [
+    "ROD-101 section level: 4 of 4 sections have a sidewalk on both sides, no finding",
+    "ROD-116: all 4 sections titled WITHOUT PARALLEL PARKING -> one finding, Probable (advisory), count 4"
+   ]
+  },
+  {
+   "id": "TB2-NMAR-report-statements",
+   "query": "Check what the Namar 30% design report says about walkways, parking, crossings and bus stops.",
+   "files": [
+    "submittals/NMAR/10-2026/Reports/LDIP-RCRC-SAP-03-DN-DES-RPT-00001.pdf",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-30000-001-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-50000-001-00.dwg"
+   ],
+   "expected": [
+    "ROD-101 partial provision: report PDF p.59 'both sides of the roads for at least 85%' -> one finding, Probable, Major",
+    "ROD-116 inconsistency: sections without parking vs report p.59 on-street visitor parking and details 50000 ON-STREET PARKING -> one finding, Probable",
+    "ROD-104 at PD: report p.60 'accessible pedestrian crossings are proposed at all intersections' counts as presence (DB-3), no finding",
+    "ROD-114 condition met from report p.60 (bus stations proposed)"
+   ]
+  },
+  {
+   "id": "TB3-NMAR-plans-search",
+   "query": "Search the Namar 30% road plans for crossings, ramps, tactile tiles, signs and parking.",
+   "files": [
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-00003-001-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-10200-000-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-10200-001-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-50000-001-00.dwg"
+   ],
+   "expected": [
+    "no crossing, tactile, sign or parking-bay evidence on the plans; road marking layers G-ROAD WHITE LINE / G-YELLOW LINE found",
+    "search list per file: layers, blocks, texts and undecodable text count (00003: 14; 10200-000: 48; 10200-001: 39)"
+   ]
+  },
+  {
+   "id": "TB4-NMAR-stage-gate",
+   "query": "Run the road presence checks on the Namar 30% package at stage 30% Concept Design.",
+   "files": [
+    "submittals/NMAR/10-2026/Reports/LDIP-RCRC-SAP-03-DN-DES-RPT-00001.pdf",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-30000-001-00.dwg",
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-10200-001-00.dwg"
+   ],
+   "expected": [
+    "the 12 DD presence rules not run: not required at stage",
+    "ROD-115 not run: road-end positions not read in phase B1",
+    "findings: ROD-101 (partial, Probable), ROD-116 (stated absent, Probable), ROD-116 (inconsistency, Probable)"
+   ]
+  },
+  {
+   "id": "TB5-synthetic-DD",
+   "query": "Run the presence checks on the synthetic DD package of the tests.",
+   "files": [
+    "tests/test_road_presence.py (generated in a temporary folder)"
+   ],
+   "expected": [
+    "element shown -> no finding; absent -> one Missing information finding listing what was searched; negated -> stated absent; missing carrier named"
+   ]
+  },
+  {
+   "id": "TB6-undecodable-texts",
+   "query": "Check the cap when undecodable texts lie on an element layer.",
+   "files": [
+    "tests/test_road_presence.py (generated in a temporary folder)"
+   ],
+   "expected": [
+    "undecodable text on layer 0 -> Missing information; on a layer matching the element terms -> capped at Probable (DB-4)"
+   ]
+  }
+ ]
+}

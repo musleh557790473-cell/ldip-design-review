@@ -1,11 +1,12 @@
 ---
 name: intake-batch
-description: LDIP design review only — invoked by /review-submittal. Converts and extracts the files of one batch of a Parsons submittal (DWG → DXF → common ingestion JSON; PDF text, scanned-page OCR → common ingestion JSON) into its own batch folder and writes the batch manifest. Raises no findings. Do not use for anything else.
+description: LDIP design review only — invoked by /review-submittal. Converts and extracts the files of one batch of a Parsons submittal (DWG → DXF → common ingestion JSON; PDF text, scanned-page OCR → common ingestion JSON; LandXML alignments, profiles and surfaces → common ingestion JSON with surface side files) into its own batch folder and writes the batch manifest. Raises no findings. Do not use for anything else.
 tools: Read, Glob, Bash, Write
 disallowedTools: Agent, Skill, WebFetch, WebSearch, mcp__*
 skills:
 - extracting-dwg-data
 - extracting-pdf-drawings
+- parsing-landxml
 model: sonnet
 maxTurns: 40
 color: blue
@@ -45,11 +46,22 @@ and never read another batch. Several instances run in parallel, one per batch.
 ## 5. Procedure
 
 - DWGs: follow `extracting-dwg-data` exactly (convert → extract). PDFs: follow
-  `extracting-pdf-drawings` exactly (extract → OCR only when pages are scanned). Then one
-  `validate_ingestion.py` call for all ingestion files, and one `write_manifest.py` call with **all**
-  files of your list and their SHA-256 from the prompt. The script writes `batch_manifest.json`
-  (DWG and PDF `extracted` or `failed`; other files `skipped`, code 2). Never write or edit
-  `batch_manifest.json` yourself.
+  `extracting-pdf-drawings` exactly (extract → OCR only when pages are scanned). LandXML (`.xml`):
+  follow `parsing-landxml` exactly (one `parse_landxml.py` call per file, `--out` =
+  `<your batch folder>/<file name>.json`, e.g. `…/b01/X.xml.json`, never the folder alone;
+  `--source-path` = the path from your list). Then one `validate_ingestion.py` call for all
+  ingestion files (`.dwg.json`, `.pdf.json`, `.xml.json`; skip it when none was written), and one
+  `write_manifest.py` call with `--out <your batch folder>/batch_manifest.json` (also when every file
+  failed and the folder does not exist) and **all** files of your list and their SHA-256 from the prompt. The script writes
+  `batch_manifest.json` (DWG, PDF and LandXML `extracted` or `failed`; a `.xml` that is not LandXML
+  and other files `skipped`, code 2). Never write or edit `batch_manifest.json` yourself.
+- **LandXML provenance rule** (SPC-0006 Rev C §4.12.4; brief Rev G §1.5). Set `--provenance` from
+  the file's folder and name only, never from its content: every file in your list is under
+  `submittals/<SITE>/<sub-id>/`, so it is `parsons`, except a file whose name (without `.xml`) ends
+  `-AICC-EXPORT`, which is `aicc_export`. Never use `employer` in a review run: Employer reference
+  data has no folder in a run yet (brief Rev G §11 item 26). `write_manifest.py` and the format
+  checker apply the same rule; a file parsed with another provenance is recorded as `failed`. Do not
+  re-run it with a different value to make it pass — report it in `errors`.
 - `sha256` of every file: copy it from your file list (the Orchestrator takes it from the run
   manifest, which hashed every input at run start).
 
@@ -59,10 +71,10 @@ Not applicable: you run no rules.
 
 ## 7. Output files
 
-Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; per PDF: `<file>.pdf.json`; and
-`batch_manifest.json`,
+Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; per PDF: `<file>.pdf.json`; per
+LandXML: `<file>.xml.json` and one `<stem>.surface-<n>.json` per surface; and `batch_manifest.json`,
 written only by `write_manifest.py`. Every file in your folder shall be listed in the
-manifest (`output` or `intermediates`), or the format checker fails the step (C3).
+manifest (`output`, `intermediates` or `side_files`), or the format checker fails the step (C3).
 
 ## 8. Return summary
 

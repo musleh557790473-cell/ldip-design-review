@@ -1,7 +1,7 @@
 {
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://aicc.local/ldip/batch_manifest.schema.json",
- "title": "LDIP intake-batch manifest \u2014 SPC-0006 Rev B \u00a73.1 (P-S3-19)",
+ "title": "LDIP intake-batch manifest \u2014 SPC-0006 Rev B \u00a73.1 (P-S3-19); LandXML (Rev C \u00a74.12, P7)",
  "type": "object",
  "additionalProperties": false,
  "required": [
@@ -60,6 +60,7 @@
       "enum": [
        "dwg",
        "pdf",
+       "landxml",
        "other"
       ]
      },
@@ -112,6 +113,17 @@
         }
        }
       ]
+     },
+     "side_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 250,
+       "pattern": "^[^/\\\\]+\\.surface-[1-9][0-9]*\\.json$"
+      }
      }
     },
     "allOf": [
@@ -148,6 +160,23 @@
        "properties": {
         "error": {
          "type": "object"
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "required": [
+        "side_files"
+       ]
+      },
+      "then": {
+       "properties": {
+        "type": {
+         "const": "landxml"
+        },
+        "status": {
+         "const": "extracted"
         }
        }
       }

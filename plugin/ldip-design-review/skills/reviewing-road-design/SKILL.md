@@ -1,0 +1,94 @@
+---
+name: reviewing-road-design
+description: >-
+  LDIP design review (AICC JV): checks Parsons road design against the LDIP
+  Rulebook road rules (ROD): road classes and design speeds, the design
+  criteria stated in the design report, typical-section widths (right of
+  way, lanes, medians, sidewalks, crossfall) and horizontal and vertical
+  alignment (radii, grades, K values, vertical curve lengths) from LandXML,
+  the presence of required road elements (sidewalks, crossings, ramps,
+  markings, signs, parking lanes and others), and raises missing road
+  information by design stage. Use for any LDIP road geometry, road
+  design-criteria or missing road element check.
+metadata:
+  version: "0.2.0"
+  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
+---
+
+# Reviewing road design (phases A and B1)
+
+This skill compares what Parsons states and draws for its roads with the road rules of the approved
+rulebook and writes candidate findings (agent code `RDE`). It reads only ingestion files written by skills
+1, 2 and 3 (`*.dwg.json`, `*.pdf.json`, `*.xml.json`); it never opens a DWG, PDF or XML itself. The
+scripts do every check. Run them in order, read their one-line JSON results and report. Do not re-do a
+check by hand, do not read the scripts' source and never edit a result file.
+
+Phase A covers: road classes and design speeds (ROD-001, 006-009), the design-criteria table of the
+design report, typical-section widths and crossfall from DWG text (ROD-002-004, 010-014, 016, 021, 048
+minimum, 057 height), LandXML alignment and profile (ROD-017, 018, 024-026, 028-030) and the required
+inputs C1-C4 by stage. Phase B1 covers the presence rules ROD-101-116 at package and typical-section
+level: is each required element shown anywhere in its accepted carriers for the stage (sidewalks,
+crossings, curb ramps, tactile tiles, sight triangles, swept paths, catch basins, accessible bays, street
+name signs, markings, calming signs, splitter islands, calming devices, bus stops, turning areas, parking
+lanes). Checks per junction, crossing or road end (phase B2), junction and roundabout geometry, details
+and reports are later phases.
+
+Packages: Python 3.11+, `jsonschema`, `pypdfium2` and `Pillow` (evidence crops, as skill 2).
+
+## Hard rules
+
+1. Get the rules only through `applying-ldip-rulebook` (`get_rules.py --agent RDE`). Every value,
+   tolerance, applicability and cap comes from that file. An inactive rule never runs; it is listed in
+   `rules_skipped`.
+2. The stage name is given by the owner per run (e.g. `30% Concept Design`, `60%`). Never guess it.
+3. A road class comes only from a Parsons class term in the fixed synonym list (`references/road_checks.md`
+   §2). An unknown term gives no class: report it, do not choose one.
+4. A value is read as printed. If two columns look swapped or a value looks wrong, the rule check decides;
+   never correct a value.
+5. An absence is a finding only after the search script has searched every accepted carrier; the finding
+   lists what was searched. A design-report statement counts as presence only where the rule accepts the
+   report for the stage (PD). Never decide presence by looking at a drawing yourself.
+6. Findings are candidates for the Verifier. Never raise a status above what `build_candidates.py` sets,
+   and never write a finding by hand.
+
+## Procedure (plan → rules → read → check → findings → validate)
+
+Run each command from the LDIP_Review folder with paths relative to it. `<SK>` is
+`${CLAUDE_PLUGIN_ROOT}/skills/reviewing-road-design/scripts`, `<SK8>` is
+`${CLAUDE_PLUGIN_ROOT}/skills/applying-ldip-rulebook/scripts`, `<EV>` the output folder (standalone: the
+folder the owner names). Inputs are the ingestion files the owner or the Orchestrator lists: the design
+report `<R>.pdf.json`, the road hierarchy plan `<H>.dwg.json`, the typical sections `<T>.dwg.json`, and any
+LandXML `<X>.xml.json`.
+
+1. **Rules** — `python "<SK8>/get_rules.py" --rulebook rulebook/rules_v<N>.json --agent RDE --out "<EV>/rules_RDE.json"`
+2. **Criteria** — `python "<SK>/read_criteria.py" --ingestion "<R>.pdf.json" --out "<EV>/criteria.json"`
+3. **Register** — `python "<SK>/build_register.py" --criteria "<EV>/criteria.json" --rules "<EV>/rules_RDE.json" --hierarchy "<H>.dwg.json" --sections "<T>.dwg.json" --landxml "<X>.xml.json" --out "<EV>/road_register.json"`
+   (omit an option whose files do not exist).
+4. **Checks** —
+   `python "<SK>/check_criteria.py" --criteria "<EV>/criteria.json" --rules "<EV>/rules_RDE.json" --out "<EV>/criteria_checks.json"`
+   `python "<SK>/check_sections.py" --sections "<T>.dwg.json" --rules "<EV>/rules_RDE.json" --out "<EV>/section_checks.json"`
+   `python "<SK>/check_alignment.py" --register "<EV>/road_register.json" --landxml "<X>.xml.json" --rules "<EV>/rules_RDE.json" --out "<EV>/alignment_checks.json"`
+5. **Presence (phase B1)** — give every ingestion file once with its carrier type (`typical_section`,
+   `plan_geometry`, `road_hierarchy_plan`, `details`, `signing_marking_plan`, `drainage_plan`,
+   `landscape_plan`, `parking_schedule`, `design_report`), as the owner or the drawing titles name it:
+   `python "<SK>/find_presence.py" --file design_report="<R>.pdf.json" --file typical_section="<T>.dwg.json" --file plan_geometry="<P>.dwg.json" --out "<EV>/presence.json"`
+   `python "<SK>/check_presence.py" --presence "<EV>/presence.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --sections "<EV>/section_checks.json" [--land-uses "<DLUS land use>" ...] --out "<EV>/presence_checks.json"`
+   (`--land-uses`: the distinct land uses of the DLUS, for ROD-113; omit when no DLUS is given).
+6. **Required inputs** — `python "<SK>/check_required.py" --stage "<stage name>" --rules "<EV>/rules_RDE.json" --register "<EV>/road_register.json" --criteria "<EV>/criteria.json" --sections "<EV>/section_checks.json" --landxml "<X>.xml.json" --out "<EV>/required_inputs.json"`
+7. **Findings** — `python "<SK>/build_candidates.py" --results "<EV>/criteria_checks.json" "<EV>/section_checks.json" "<EV>/alignment_checks.json" "<EV>/road_register.json" "<EV>/required_inputs.json" "<EV>/presence_checks.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
+   (list only the result files that exist).
+8. **Validate** — `python "<SK>/validate_findings.py" --findings "<EV>/candidates.json" --rules "<EV>/rules_RDE.json"`
+   Exit 4 lists the problems; do not edit the file.
+
+Standalone output is a draft: it does not pass the guard or the run log, and is checked with skill 18
+before use.
+
+## Outputs and exit codes
+
+`criteria.json`, `road_register.json`, `criteria_checks.json`, `section_checks.json`, `alignment_checks.json`,
+`required_inputs.json`, `presence.json`, `presence_checks.json`, `candidates.json` and PNG crops of the PDF evidence. Every script prints one JSON line.
+Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4 schema failure.
+
+What each check reads, the class synonyms, how section values are assigned, status caps and the limits of
+phase A: `references/road_checks.md`. The presence terms, stage and condition logic of phase B1:
+`references/presence_terms.md`. The finding skeleton: `templates/finding.json`.

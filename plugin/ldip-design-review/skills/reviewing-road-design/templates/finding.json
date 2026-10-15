@@ -1,0 +1,64 @@
+{
+ "schema_version": "1.0",
+ "finding_id": "<SITE>-<sub>-<yyyymmddThhmm>/RDE-001",
+ "stage": "candidate",
+ "run_id": "<run-id>",
+ "site": "<QRWN|NMAR|NRJS>",
+ "sub_id": "<sub-id>",
+ "agent": "RDE",
+ "agent_versions": {
+  "reviewing-road-design": "<version>"
+ },
+ "title": "<rule_id> <rule title>: <parameter> (<class>)",
+ "statement": "<n> occurrence(s). Observed — <subject>: <value> <unit>. Required (<rule_id> <parameter>, <source> <clause>): <op> <value> <unit> (tolerance ±<t>). Requirement (<rule_id>): <rule statement>",
+ "issue_type": "design_error",
+ "location": {
+  "document_no": "<Parsons number>",
+  "file_path": "submittals/<SITE>/<sub-id>/<file>",
+  "file_sha256": "<sha256>",
+  "pdf": {
+   "page": 1,
+   "bbox_pt": [
+    0,
+    0,
+    1,
+    1
+   ]
+  }
+ },
+ "severity": "Minor",
+ "confidence": "Medium",
+ "evidence": [
+  {
+   "evidence_id": "E01",
+   "tier": "extracted_text_crop",
+   "source_type": "pdf_vector_text",
+   "extract": "<label> — <class> column: \"<text>\" (p.<n>)",
+   "measured_value": 0,
+   "unit": "m",
+   "script": {
+    "name": "reviewing-road-design/scripts/check_criteria.py",
+    "version": "<version>",
+    "exit_code": 0
+   },
+   "artifact_path": "<evidence dir>/rde_001_p<n>.png",
+   "artifact_sha256": "<sha256>"
+  }
+ ],
+ "reference": {
+  "rule_id": "ROD-002",
+  "parameter": "row_min",
+  "rulebook_version": "<v>",
+  "source_doc": "LDIP Rulebook <v> (AICC-BIM-SPC-0004); <SRC-nn>",
+  "clause": "<rule_id>: <clause>",
+  "required_value": 0,
+  "tolerance": 0.05,
+  "unit": "m"
+ },
+ "proposed_status": "<min(default_status[source_type], parameter cap, link cap)>",
+ "owner": {
+  "role": "DMR",
+  "name": null
+ },
+ "created_at": "<ISO 8601 +03:00>"
+}

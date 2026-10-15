@@ -1,5 +1,5 @@
 """Shared helpers for skill 3 parsing-landxml (SPC-0006 §2.3; Rev C §4.12). No network, no shell calls."""
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import hashlib
 import json
@@ -17,6 +17,7 @@ NUMBER_TOKEN = re.compile(r"^([A-Za-z0-9]+(?:-[A-Za-z0-9]+){5,})(?=$|[ _.(\[]| -
 TEN_FIELD_TYPES = ("DWG", "MOD")
 MIDP_SEQ, MIDP_SHEET = re.compile(r"^\d{5}$"), re.compile(r"^\d{3}$")
 AICC_EXPORT_SUFFIX = "-AICC-EXPORT"   # SPC-0006 Rev C §4.12.4
+SUBMITTAL_FILE = re.compile(r"^submittals/(QRWN|NMAR|NRJS)/[^/]+/.+")
 
 
 class LandXmlError(Exception):
@@ -96,3 +97,17 @@ def revision_of(number):
     dtype = f[6].upper() if len(f) > 6 else None
     expected = 10 if dtype in TEN_FIELD_TYPES else 9
     return f[-1] if len(f) == expected else None
+
+
+def expected_provenance(source_path):
+    """Folder rule used in a review run (SPC-0006 Rev C §4.12.4; P7, owner 15 Oct 2026): a file under
+    submittals/<SITE>/<sub-id>/ is a Parsons deliverable (`parsons`) unless its name ends -AICC-EXPORT
+    (`aicc_export`). No other location has a rule in a run yet: Employer reference data has no agreed
+    folder or read access (brief Rev G §11 item 26) -> None. One implementation, used by write_manifest.py
+    (skill 1) and format_check.py."""
+    p = str(source_path).replace("\\", "/")
+    if not SUBMITTAL_FILE.match(p):
+        return None
+    name = p.rsplit("/", 1)[-1]
+    stem = name[:-4] if name.lower().endswith(".xml") else name
+    return "aicc_export" if stem.upper().endswith(AICC_EXPORT_SUFFIX) else "parsons"

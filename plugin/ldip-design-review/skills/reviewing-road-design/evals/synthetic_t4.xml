@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2" date="2026-10-15" time="12:00:00">
+ <Units><Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter" temperatureUnit="celsius" pressureUnit="milliBars" angularUnit="decimal degrees" directionUnit="decimal degrees"/></Units>
+ <CoordinateSystem epsgCode="32638" desc="UTM-WGS 1984 datum, Zone 38 North (synthetic test)"/>
+ <Project name="SYNTHETIC-SKILL10-T4"/>
+ <Application name="make_synthetic.py" version="0.1.0" manufacturer="AICC BIM Office (test data)"/>
+ <Alignments>
+  <Alignment name="RD-90" desc="Collector road, synthetic" staStart="0" length="241.887902">
+   <CoordGeom>
+    <Line length="100.000000"><Start>2747500.000000 657000.000000</Start><End>2747500.000000 657100.000000</End></Line>
+    <Curve rot="cw" crvType="arc" radius="120.000000" length="41.887902"><Start>2747500.000000 657100.000000</Start><Center>2747380.000000 657100.000000</Center><End>2747492.763114 657141.042417</End><PI>2747500.000000 657121.159238</PI></Curve>
+    <Line length="100.000000"><Start>2747492.763114 657141.042417</Start><End>2747458.561100 657235.011679</End></Line>
+   </CoordGeom>
+   <Profile name="RD-90">
+    <ProfAlign name="RD-90-FG" desc="design">
+     <PVI>0.000000 680.000000</PVI>
+     <ParaCurve length="40.000000">120.000000 687.800000</ParaCurve>
+     <PVI>241.887902 685.971681</PVI>
+    </ProfAlign>
+   </Profile>
+  </Alignment>
+ </Alignments>
+</LandXML>

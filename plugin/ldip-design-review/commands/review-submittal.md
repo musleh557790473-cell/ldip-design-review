@@ -67,7 +67,8 @@ saved return summary fall outside it, so L3 judges the agent alone.
 ## 3. Steps (fixed order — never reorder, add or drop a step on your own)
 
 **Step 1a — `intake-batch` (parallel).** From `inputs[]`, take the files under
-`submittals/<SITE>/<sub-id>/` with extensions `.dwg` and `.pdf` (ignore the rest), sorted by path,
+`submittals/<SITE>/<sub-id>/` with extensions `.dwg`, `.pdf` and `.xml` (any letter case; ignore the
+rest, including Civil 3D side files `*.xml.aecc.pnt` / `*.xml.aecc.tri`), sorted by path,
 in batches of 20 → `b01`, `b02`, …. Run all batch instances in parallel (step pattern per instance;
 all start events first, then one snapshot pair around the whole parallel group with
 `--agent intake-batch`, then the returns and end events). Prompt per
@@ -80,7 +81,12 @@ files (path, sha256):
 - submittals/<SITE>/<sub-id>/<file> <sha256>
 ```
 
-If the submittal holds no DWG or PDF, skip step 1a and log it in the chat summary.
+If the submittal holds no DWG, PDF or XML, skip step 1a and log it in the chat summary. A `.xml` is
+parsed by skill 3 `parsing-landxml`; the agent sets its provenance by the folder rule (`parsons`, or
+`aicc_export` for names ending `-AICC-EXPORT`) — do not add provenance to the prompt. A `.xml` that is
+not LandXML is recorded as `skipped`. LandXML ingestion files are not read by any later step yet (no
+agent preloads skill 10 or 13: skill 10 is used standalone, its agent waits for Stage 6): list the count of extracted LandXML files in the
+chat summary only.
 
 **Step 1b — `intake-package`.** Not built yet (skills 6 and 7). Do not invoke it. Record in the chat
 summary: "intake-package not run — skills not built (Stage 3)".
