@@ -1,6 +1,6 @@
-"""D13 (owner, 5 Oct 2026): ezdwg is pinned to 0.12.9 for run sessions.
+"""D13 (owner, 5 Oct 2026) and D13-2 (owner, 16 Oct 2026 20:13): ezdwg is pinned to 0.16.0 for run sessions.
 
-- the skill 1 SKILL.md packages line and the repo README install line name ezdwg==0.12.9;
+- the skill 1 SKILL.md packages line and the repo README install line name ezdwg==0.16.0;
 - convert.py warns ENGINE_VERSION_UNPINNED (warning only, exit 0) when the installed ezdwg differs.
 
 A stand-in `ezdwg` package with its own dist-info is put first on PYTHONPATH, so the real engine is
@@ -20,8 +20,8 @@ REPO = Path(__file__).resolve().parents[1]
 SKILL = REPO / "plugin/ldip-design-review/skills/extracting-dwg-data"
 SC = SKILL / "scripts"
 PY = sys.executable
-PIN = "0.12.9"
-INSTALL = f"pip install ezdwg=={PIN} ezdxf pypdfium2 pdfplumber pytesseract shapely --break-system-packages"
+PIN = "0.16.0"
+INSTALL = f"pip install ezdwg=={PIN} ezdxf pypdfium2 pdfplumber pytesseract shapely numpy scipy --break-system-packages"
 
 
 def fake_ezdwg(root: Path, ver: str) -> Path:

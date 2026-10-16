@@ -23,7 +23,10 @@ DLUS, rule values (`rules_v<N>.json`), or any Golden Set content. `.gitignore` a
 Install before an install check or a review run (D13: ezdwg is pinned so that test runs stay
 comparable; `convert.py` warns `ENGINE_VERSION_UNPINNED` on any other version):
 
-    pip install ezdwg==0.12.9 ezdxf pypdfium2 pdfplumber pytesseract shapely --break-system-packages
+    pip install ezdwg==0.16.0 ezdxf pypdfium2 pdfplumber pytesseract shapely numpy scipy --break-system-packages
     apt-get install -y tesseract-ocr tesseract-ocr-ara
+
+LibreDWG `dwg2dxf` (reader-chain step 2, SPC-0006 Rev F §4.1A.2) is not installed and `LDIP_LIBREDWG_EXE` is not
+set until the licence review L-1 closes (DF-1).
 
 Python 3.11 or later (suite last run on 3.13.16, session 10).
