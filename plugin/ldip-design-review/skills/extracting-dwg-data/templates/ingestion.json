@@ -1,5 +1,5 @@
 {
- "template_version": "1.0",
+ "template_version": "1.2",
  "source": {
   "path": "submittals/<SITE>/<sub-id>/<file>.dwg",
   "sha256": "<sha256>",
@@ -13,7 +13,7 @@
   "script": "extract_dxf.py",
   "version": "<version>",
   "converter": {
-   "name": "<ezdwg|oda|accoreconsole>",
+   "name": "<ezdwg|libredwg|oda|accoreconsole>",
    "version": "<version>"
   }
  },
@@ -45,7 +45,18 @@
   "origin_signals": {
    "confidence": "Probable"
   },
-  "layouts": []
+  "layouts": [],
+  "block_expansion": {
+   "on": true
+  },
+  "side_files": [
+   {
+    "path": "<stem>.linework.json",
+    "kind": "linework",
+    "sha256": "<sha256>",
+    "records": 0
+   }
+  ]
  },
  "warnings": [
   {

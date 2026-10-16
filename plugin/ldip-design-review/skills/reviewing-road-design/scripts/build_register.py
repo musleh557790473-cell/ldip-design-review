@@ -12,11 +12,17 @@ no open-polyline geometry: [GAP] K17).
 ROD-001 is checked here: every class the submittal uses maps to an ER class; the class given to one ROW
 width by the criteria table and by a section title agree.
 
+0.2.0 (SPC-0006 Rev F §4.13C.2): with --network (build_network.py) the roads are the named alignments of
+the setting-out tables (or LandXML), replacing the label-point link (N1) for them; with --class
+(read_class.py) each road carries its ROW width, class, the methods used and their agreement (RC-2). The
+label route stays the fallback when no table exists.
+
 Usage: python build_register.py --criteria <criteria.json> --rules <rules_RDE.json> --out <road_register.json>
            [--hierarchy <plan.dwg.json> ...] [--sections <sections.dwg.json> ...] [--landxml <x.xml.json> ...]
+           [--network <network.json>] [--class <road_class.json>]
 Exit: 0 written · 2 input error. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import math
@@ -62,7 +68,7 @@ def polyline(alignment):
     return pts
 
 
-def build(crit, rules, hierarchy, sections, landxml):
+def build(crit, rules, hierarchy, sections, landxml, net=None, rc=None):
     reg = {"classes": {}, "row_groups": [], "roads": {}, "sections": [], "alignments": [], "checks": [], "warnings": []}
     src_c = crit["source"]
     for t in crit.get("tables", []):
@@ -129,6 +135,16 @@ def build(crit, rules, hierarchy, sections, landxml):
                                                    "extract": f"ROW {w:g} m: " + "; ".join(f"{a} → {b}" for a, b in sorted(pairs))}})
         if not crit.get("criteria") and not reg["sections"]:
             reg["warnings"].append({"code": "NO_CLASS_CARRIER", "detail": "neither criteria table nor typical sections give a class"})
+    if net:
+        reg["location_register"] = {"network": net.get("tool"), "counts": net.get("counts")}
+        for name, r in sorted(net.get("roads", {}).items()):
+            c = ((rc or {}).get("roads") or {}).get(name) or {}
+            old = reg["roads"].pop(name, None)
+            reg["roads"][name] = {"labels": (old or {}).get("labels", []), "source": (r.get("evidence") or {}).get("path"),
+                                  "link": "setting-out table name", "length_m": r.get("length"),
+                                  "width_m": c.get("width"), "width_basis": c.get("width_basis"),
+                                  "agreement": c.get("agreement"), "class": c.get("class"),
+                                  "class_basis": c.get("class_basis"), "class_note": c.get("class_note")}
     half = widest / 2 if widest else 0.0
     for ing in landxml:
         src = source_of(ing)
@@ -162,13 +178,17 @@ def main(argv=None):
     ap.add_argument("--hierarchy", nargs="*", default=[])
     ap.add_argument("--sections", nargs="*", default=[])
     ap.add_argument("--landxml", nargs="*", default=[])
+    ap.add_argument("--network")
+    ap.add_argument("--class", dest="road_class")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
     def run():
         rules, _, _ = rules_index(read_json(a.rules))
+        net = read_json(a.network) if a.network else None
+        rc = read_json(a.road_class) if a.road_class else None
         reg = build(read_json(a.criteria), rules, [read_json(p) for p in a.hierarchy],
-                    [read_json(p) for p in a.sections], [read_json(p) for p in a.landxml])
+                    [read_json(p) for p in a.sections], [read_json(p) for p in a.landxml], net, rc)
         reg["tool"] = {"script": "build_register.py", "version": __version__}
         reg["mode"] = "register"
         atomic_write_json(a.out, reg)

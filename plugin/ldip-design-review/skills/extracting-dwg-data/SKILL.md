@@ -2,8 +2,8 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.1.5"
-  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1"
+  version: "0.2.0"
+  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A"
 ---
 
 # Extracting DWG data
@@ -13,14 +13,18 @@ package and GIS agents read. It records what the drawing contains; it never judg
 never raises a finding. The scripts do the work: run them, read their one-line results, and do not
 read their source.
 
-Packages: Python 3.11+, `ezdxf`, `jsonschema`; engine `ezdwg==0.12.9` (pinned, D13), or ODA File
+Packages: Python 3.11+, `ezdxf`, `jsonschema`; engine `ezdwg==0.16.0` (pinned, D13 / D13-2), or ODA File
 Converter / AutoCAD Core Console as external programs. Another ezdwg version still converts, but
 `convert.py` adds the warning `ENGINE_VERSION_UNPINNED` (results not comparable with pinned runs).
+Engine `chain` (Rev F, K21-3) runs ezdwg, then LibreDWG `dwg2dxf` when it is enabled
+(`LDIP_LIBREDWG_EXE`; not before licence review L-1), and otherwise records `next: local_autocad`.
 
 ## Hard rules
 
 1. Use the engine named in the prompt (`--engine`). Never switch engine on your own; a failed
-   conversion is recorded, not retried with another engine.
+   conversion is recorded, not retried with another engine. With `--engine chain` the script itself
+   tries the readers in the agreed order and records which one converted; a file that fails with
+   `next: local_autocad` is left for the owner's local AutoCAD route (you never call a connector).
 2. Work only on the files in your batch list and write only to your batch folder
    `0.ai_context/<SITE>/<sub-id>/b<nn>/`.
 3. A file that fails (any exit code other than 0) is not retried: continue with the next file;
@@ -47,7 +51,12 @@ your list and `<stem>` its file name without `.dwg`.
    convert again). Exit 3 = engine missing, DWG version not supported, or timeout; exit 2 = not a
    DWG or no DXF produced. Either way: continue; the manifest script records it (hard rule 3).
 3. **Extract** —
-   `python "<SK>/extract_dxf.py" --dxf "<B>/<stem>.dxf" --dwg "<F>" --convert-log "<B>/<stem>.convert.json" --out "<B>/<stem>.dwg.json" --source-path "<F>" --resolve-base "<folder of F>"`
+   `python "<SK>/extract_dxf.py" --dxf "<B>/<stem>.dxf" --dwg "<F>" --convert-log "<B>/<stem>.convert.json" --out "<B>/<stem>.dwg.json" --source-path "<F>" --resolve-base "<folder of F>" [--linework]`
+   Add `--linework` for a road drawing: the prompt marks it as a road carrier, or its document number
+   has the discipline code `ROD` or `IRO`. It writes `<B>/<stem>.linework.json` (all line work,
+   flattened) and lists it in the ingestion file. Block references are expanded by default (texts
+   and closed polylines inside them are kept with `via_block`); never pass `--no-expand` unless the
+   prompt says so.
 4. **Validate** — all ingestion files of the batch in one call:
    `python "<SK>/validate_ingestion.py" --files "<B>/<stem1>.dwg.json" "<B>/<stem2>.dwg.json"`
    Exit 4 lists the failing files; do not edit the JSON (`write_manifest.py` records them as failed).
@@ -56,14 +65,15 @@ your list and `<stem>` its file name without `.dwg`.
    `python "<SK>/write_manifest.py" --out "<B>/batch_manifest.json" --run <run_id> --site <SITE> --sub <sub-id> --file "<F1>" <sha256-1> --file "<F2>" <sha256-2>`
    (always this `--out` form: it also works when every file failed and `<B>` was never created.)
    Give every file of your list (DWG, PDF, LandXML and other) with the SHA-256 from the prompt. It
-   sets `status`, `output`, `intermediates`, `side_files` (LandXML surfaces), `error`, `converter` and
+   sets `status`, `output`, `intermediates`, `side_files` (LandXML surfaces, DWG linework), `error`, `converter` and
    `counts`, validates every listed `.dwg.json`, `.pdf.json` and `.xml.json` (LandXML also: side files
    and the provenance folder rule) and the manifest itself (SPC-0006 §3.1), and exits 4 without writing
    if the manifest fails its schema. The format checker then checks the batch (S2, C3).
 
 ## Outputs and exit codes
 
-Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`. Every script prints one JSON line.
+Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json` (template 1.2), and
+`<stem>.linework.json` with `--linework`. Every script prints one JSON line.
 `batch_manifest.json` per batch (from `write_manifest.py`).
 Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing engine or package · 4 schema failure.
 

@@ -8,11 +8,14 @@ with the reason. Speed-keyed rules (ROD-028 crest K, ROD-029 sag K, ROD-030 curv
 the stated design speed and, where it is below the ER minimum for the class (vd_min of ROD-006 / 007 /
 009), also at that minimum; a speed that is not a key of the rule table is not interpolated (D10-5).
 ROD-028 at 50 km/h uses k_crest_50_derived (D-16). Tolerances come with the parameters (skill 8).
+0.2.0 (SPC-0006 Rev F §4.13.6, K24): when read_criteria.py 0.2.0 gives `columns`, every column is checked;
+a later column of the same class checks only the criteria whose printed value differs from an earlier
+column of that class (no duplicate results), and its subject names the column's sub-heading.
 
 Usage: python check_criteria.py --criteria <criteria.json> --rules <rules_RDE.json> --out <criteria_checks.json>
 Exit: 0 written · 2 input error. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import sys
@@ -62,6 +65,24 @@ def ev(cell, src, cls):
             "extract": f"{cell['label']} — {cls} column: \"{cell['text']}\" (p.{cell['page']})"}
 
 
+def value_sets(crit):
+    """[(class, criteria, column note)] — every column (read_criteria 0.2.0) or the per-class criteria."""
+    cols = [c for c in crit.get("columns") or [] if c.get("criteria")]
+    if not cols:
+        return [(cls, vals, "") for cls, vals in sorted(crit.get("criteria", {}).items())]
+    out, seen, n = [], {}, {}
+    for c in cols:
+        n[c["class"]] = n.get(c["class"], 0) + 1
+    for c in cols:
+        prev = seen.setdefault(c["class"], {})
+        vals = {k: v for k, v in c["criteria"].items() if prev.get(k) != v["text"]}
+        for k, v in c["criteria"].items():
+            prev.setdefault(k, v["text"])
+        note = f", column '{c.get('sub_heading') or c.get('heading')}'" if n[c["class"]] > 1 else ""
+        out.append((c["class"], vals, note))
+    return out
+
+
 def run_checks(crit, rules):
     out, not_run = [], []
     src = crit["source"]
@@ -73,7 +94,7 @@ def run_checks(crit, rules):
             return "design_report is not an input of the rule (rules_v3, SPC-0006 Rev D Annex A.3)"
         return None
 
-    for cls, values in sorted(crit["criteria"].items()):
+    for cls, values, note in value_sets(crit):
         for key, checks in PLAIN.items():
             cell = values.get(key)
             if cell is None:
@@ -99,7 +120,7 @@ def run_checks(crit, rules):
                 for obs in nums:
                     ok = compare(obs, float(p["value"]), op, tol(p))
                     out.append({"rule_id": rid, "parameter": pname, "class": cls, "criterion": key,
-                                "subject": f"design criterion '{cell['label']}' ({cls})", "observed": obs,
+                                "subject": f"design criterion '{cell['label']}' ({cls}{note})", "observed": obs,
                                 "required": p["value"], "comparison": op, "tolerance": tol(p), "unit": p.get("unit"),
                                 "result": "pass" if ok else "fail", "evidence": ev(cell, src, cls)})
         stated = (values.get("design_speed") or {}).get("numbers") or []
@@ -145,7 +166,7 @@ def run_checks(crit, rules):
                 obs = cell["numbers"][0]
                 ok = compare(obs, req, "ge", tol(p))
                 out.append({"rule_id": rid, "parameter": pn, "class": cls, "criterion": key,
-                            "subject": f"design criterion '{cell['label']}' ({cls}) at {v:g} km/h ({basis})",
+                            "subject": f"design criterion '{cell['label']}' ({cls}{note}) at {v:g} km/h ({basis})",
                             "observed": obs, "required": req, "comparison": "ge", "tolerance": tol(p),
                             "unit": p.get("unit"), "speed_kmh": v, "speed_basis": basis,
                             "result": "pass" if ok else "fail", "evidence": ev(cell, src, cls)})

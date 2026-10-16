@@ -8,13 +8,26 @@ until the Parsons title-block layout is confirmed (K5) and carry a TITLE_BLOCK_H
 
 Usage: python extract_dxf.py --dxf <file.dxf> --dwg <source.dwg> --convert-log <file.convert.json>
                              --out <stem>.dwg.json [--source-path submittals/<SITE>/<sub>/<file>.dwg]
-                             [--resolve-base <folder of the DWG>]
+                             [--resolve-base <folder of the DWG>] [--linework] [--no-expand]
+
+0.2.0 (SPC-0006 Rev F §4.1A.3–4.1A.4; K21-2, K17-1, DF-2):
+- Block expansion (default on): model-space block references (INSERT, bound xrefs included) are expanded
+  to their entities with the insert transform (ezdxf virtual_entities, nested to depth 4). Texts and closed
+  polylines found inside enter `texts` / `polylines` with `via_block` (block-name chain), `insert_handle`
+  (the model-space insert) and `layer_short`; `handle` is the entity's handle in the block definition.
+  An entity on layer 0 takes the layer of its insert. Inserts with attributes and the Parsons title-block
+  blocks are not expanded (title-block rule, K5). `--no-expand` keeps the 0.1 behaviour.
+- `--linework` writes the side file `<stem>.linework.json` next to the ingestion file: every LINE, ARC,
+  CIRCLE, LWPOLYLINE, 2-D POLYLINE and SPLINE of model space and of the expanded blocks, flattened at
+  0.05 m, with layer, layer_short, handle, via_block, closed, length and points [[E, N], ...] in drawing
+  units (schema `schemas/linework.schema.json` 1.0). It is listed in `content.side_files`. Over
+  200,000 records -> warning LINEWORK_LARGE and only the per-layer list is written.
 --source-path is written to source.path (default: the --dwg path as given). --resolve-base is the
 folder used to decide whether xrefs, images and fonts resolve; without it `resolved` is null.
 Exit: 0 written · 2 input error (missing or unreadable DXF, log not ok) · 3 ezdxf missing.
 No network, no shell calls.
 """
-__version__ = "0.1.4"
+__version__ = "0.2.0"
 
 import argparse
 import json
@@ -169,6 +182,76 @@ def poly_rec(e):
             "n_vertices": len(verts), "has_bulge": bulge, "elevation": r3(elev), "area": r2(area)}
 
 
+MAX_DEPTH = 4
+FLATTEN = 0.05
+LINEWORK_MAX = 200_000
+TB_ATTRIB_BLOCKS = ("Ladun - Qairwan ATT",)          # K5 profile, as convert.py
+LINEWORK_TYPES = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE"}
+
+
+def layer_short(name):
+    return str(name or "").split("$")[-1]
+
+
+def skip_insert(e, doc):
+    """Title-block rule (K5): inserts with attributes or attribute definitions, and known title blocks."""
+    if e.dxf.get("name") in TB_ATTRIB_BLOCKS or getattr(e, "attribs", None):
+        return True
+    b = doc.blocks.get(e.dxf.get("name"))
+    return b is None or any(x.dxftype() == "ATTDEF" for x in b)
+
+
+def expanded(msp, doc, stats):
+    """(entity, layer, src_handle, via_block chain, insert handle) for every entity inside model-space inserts."""
+    def walk(ins, chain, top, depth, eff_layer):
+        try:
+            ents = list(ins.virtual_entities())
+        except Exception as exc:              # an insert ezdxf cannot transform: counted, never fatal
+            stats["inserts_not_expanded"] += 1
+            stats.setdefault("not_expanded_detail", f"{type(exc).__name__}: {str(exc)[:120]}")
+            return
+        for v in ents:
+            lay = v.dxf.get("layer", "0")
+            lay = eff_layer if lay == "0" else lay
+            src = getattr(v, "source_of_copy", None)
+            h = src.dxf.handle if src is not None else None
+            if v.dxftype() == "INSERT":
+                if skip_insert(v, doc):
+                    stats["inserts_skipped_title_block"] += 1
+                    continue
+                if depth >= MAX_DEPTH:
+                    stats["inserts_beyond_depth"] += 1
+                    continue
+                yield from walk(v, chain + [v.dxf.name], top, depth + 1, lay)
+            else:
+                stats["entities"] += 1
+                yield v, lay, h, chain, top
+    for e in sorted((e for e in msp if e.dxftype() == "INSERT"), key=hkey):
+        if skip_insert(e, doc):
+            stats["inserts_skipped_title_block"] += 1
+            continue
+        stats["inserts_expanded"] += 1
+        yield from walk(e, [e.dxf.name], e.dxf.handle, 1, e.dxf.get("layer", "0"))
+
+
+def linework_rec(e, layer, handle, chain):
+    from ezdxf import path as ezpath
+    t = e.dxftype()
+    if t == "POLYLINE" and not e.is_2d_polyline:
+        return None
+    if t == "CIRCLE":
+        pts = [(v.x, v.y) for v in e.flattening(FLATTEN)]
+        closed = True
+    else:
+        pts = [(v.x, v.y) for v in ezpath.make_path(e).flattening(FLATTEN)]
+        closed = bool(getattr(e, "closed", False)) if t == "LWPOLYLINE" else (bool(e.is_closed) if t == "POLYLINE" else False)
+    if len(pts) < 2:
+        return None
+    length = sum(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 for (x0, y0), (x1, y1) in zip(pts, pts[1:]))
+    return {"type": t, "layer": layer, "layer_short": layer_short(layer), "handle": handle, "via_block": chain,
+            "closed": closed, "length": r3(length), "points": [[r3(x), r3(y)] for x, y in pts]}
+
+
 def resolved(p, base):
     if base is None or not p:
         return None
@@ -267,6 +350,41 @@ def extract(a):
                 proxy_ent[proxy_class_id(e)] += 1
             elif t.upper().startswith("AECC"):
                 aecc_entities[t] += 1
+
+    lines = []
+    if getattr(a, "linework", False):
+        for e in sorted((e for e in msp if e.dxftype() in LINEWORK_TYPES), key=hkey):
+            rec = linework_rec(e, e.dxf.layer, e.dxf.handle, [])
+            if rec:
+                lines.append(rec)
+    xstats = Counter()
+    if not getattr(a, "no_expand", False):
+        for v, lay, h, chain, top in expanded(msp, doc, xstats):
+            t = v.dxftype()
+            extra = {"handle": h, "layer": lay, "layer_short": layer_short(lay), "via_block": chain, "insert_handle": top}
+            try:
+                if t in ("TEXT", "MTEXT"):
+                    texts.append({**text_rec(v, "model"), **extra})
+                    xstats["texts"] += 1
+                elif t in ("LWPOLYLINE", "POLYLINE") and (t == "LWPOLYLINE" or v.is_2d_polyline) and v.is_closed:
+                    rec = poly_rec(v)
+                    rec.update({k: extra[k] for k in ("handle", "layer", "layer_short", "via_block", "insert_handle")})
+                    polys.append(rec)
+                    xstats["closed_polylines"] += 1
+                if getattr(a, "linework", False) and t in LINEWORK_TYPES:
+                    rec = linework_rec(v, lay, h, chain)
+                    if rec:
+                        rec["insert_handle"] = top
+                        lines.append(rec)
+            except Exception:                 # one entity that cannot be read: counted, never fatal
+                xstats["entities_unreadable"] += 1
+        if xstats.get("inserts_not_expanded"):
+            warnings.append({"code": "BLOCK_NOT_EXPANDED",
+                             "detail": f"{xstats['inserts_not_expanded']} insert(s) not expanded: "
+                                       + str(xstats.get("not_expanded_detail", ""))})
+        if xstats.get("inserts_beyond_depth"):
+            warnings.append({"code": "BLOCK_DEPTH_LIMIT",
+                             "detail": f"{xstats['inserts_beyond_depth']} nested insert(s) deeper than {MAX_DEPTH} not expanded"})
 
     classes = []
     for i, c in enumerate(doc.classes.classes.values()):
@@ -383,6 +501,33 @@ def extract(a):
               "note": "signals only, for the brief §1.4 (b)/(c) heuristic; decided by intake-package"}
 
     stem = dwg.stem
+    side_files = []
+    if getattr(a, "linework", False):
+        lw_path = out.with_name(out.name[:-len(".dwg.json")] + ".linework.json" if out.name.endswith(".dwg.json")
+                                else out.stem + ".linework.json")
+        by_layer = {}
+        for r in lines:
+            k = by_layer.setdefault(r["layer"], {"layer_short": r["layer_short"], "records": 0, "length": 0.0})
+            k["records"] += 1
+            k["length"] += r["length"] or 0.0
+        for k in by_layer.values():
+            k["length"] = r3(k["length"])
+        lw_warn = []
+        recs = sorted(lines, key=lambda r: (r["layer"], r["insert_handle"] if r.get("insert_handle") else "",
+                                            str(r["handle"]), r["points"][0]))
+        if len(recs) > LINEWORK_MAX:
+            lw_warn.append({"code": "LINEWORK_LARGE", "detail": f"{len(recs)} records > {LINEWORK_MAX}: layer list only"})
+            warnings.append(dict(lw_warn[0]))
+            recs = []
+        lw = {"schema_version": "1.0", "source": {"path": (a.source_path or dwg.as_posix()).replace("\\", "/"),
+                                                  "sha256": dwg_sha},
+              "extractor": {"script": "extract_dxf.py", "version": __version__, "flatten_m": FLATTEN,
+                            "block_expansion": not getattr(a, "no_expand", False)},
+              "units": UNITS.get(insunits, "unknown"), "layers": dict(sorted(by_layer.items())), "records": recs,
+              "warnings": lw_warn}
+        atomic_write_json(lw_path, lw)
+        side_files.append({"path": lw_path.name, "kind": "linework", "sha256": sha256_file(lw_path),
+                           "records": len(recs)})
     content = {
         "header": {"insunits": insunits, "measurement": hdr.get("$MEASUREMENT", None),
                    "extmin": pt(hdr.get("$EXTMIN", (0, 0, 0))), "extmax": pt(hdr.get("$EXTMAX", (0, 0, 0))),
@@ -391,9 +536,12 @@ def extract(a):
         "open_polylines_by_layer": dict(sorted(open_by_layer.items())),
         "xrefs": sorted(xrefs, key=lambda x: x["name"]), "images": sorted(images, key=lambda x: x["filename"]),
         "fonts": sorted(fonts, key=lambda x: x["style"]), "aecc": aecc, "origin_signals": origin, "layouts": lay_out,
+        "block_expansion": {"on": not getattr(a, "no_expand", False),
+                            **{k: v for k, v in sorted(xstats.items()) if k != "not_expanded_detail"}},
+        "side_files": side_files,
     }
     ing = {
-        "template_version": "1.0",
+        "template_version": "1.2",
         "source": {"path": (a.source_path or dwg.as_posix()).replace("\\", "/"), "sha256": dwg_sha,
                    "bytes": dwg.stat().st_size, "document_no": stem if DOCNO_RE.match(stem) else None,
                    "revision": None, "file_type": "dwg"},
@@ -419,6 +567,8 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--source-path")
     ap.add_argument("--resolve-base")
+    ap.add_argument("--linework", action="store_true")
+    ap.add_argument("--no-expand", action="store_true")
     a = ap.parse_args(argv)
     try:
         ing, out = extract(a)
@@ -428,6 +578,8 @@ def main(argv=None):
               "dimension_overrides": sum(1 for d in c["dimensions"] if d["override"]),
               "closed_polylines": len(c["polylines"]), "civil3d_native": c["aecc"]["civil3d_native"],
               "saved_in_civil3d": c["aecc"]["saved_in_civil3d"],
+              "expanded": {k: v for k, v in c["block_expansion"].items() if k in ("inserts_expanded", "texts", "closed_polylines")},
+              "linework": c["side_files"][0]["records"] if c["side_files"] else None,
               "warnings": [w["code"] for w in ing["warnings"]]})
         return EXIT_OK
     except DwgError as e:

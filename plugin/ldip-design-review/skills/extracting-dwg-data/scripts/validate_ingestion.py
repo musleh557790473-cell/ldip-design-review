@@ -5,13 +5,17 @@ Also checks what the schema cannot express: the file name matches the source fil
 (`<stem>.dwg.json` for `<stem>.dwg`, `<file>.xml.json` for `<file>.xml`), and the recorded SHA-256
 equals the source file on disk when --root is given. LandXML (template 1.1, skill 3): every
 `content.surfaces[].tin_file` exists next to the ingestion file, its SHA-256 equals `tin_sha256`,
-and it passes schemas/landxml_surface.schema.json.
+and it passes schemas/landxml_surface.schema.json. DWG (template 1.2, skill 1 0.2.0, SPC-0006 Rev F §4.1A.4):
+every `content.side_files[]` linework file exists next to the ingestion file, its SHA-256 equals the listed
+one, it passes schemas/linework.schema.json, its record count equals `records` and its source hash equals the
+ingestion file's. PDF (template 1.2, skill 2 0.4.0 --paths): the same for `<file>.paths.json`
+(schemas/pdf_paths.schema.json).
 
 Usage: python validate_ingestion.py --files <a.dwg.json> [<b.pdf.json> <c.xml.json> ...] [--root <LDIP_Review>]
 Exit: 0 all valid · 2 input error (file missing or not JSON) · 3 jsonschema missing · 4 a file failed.
 No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -23,7 +27,46 @@ from dwg_common import EXIT_DEPENDENCY, EXIT_INPUT, EXIT_OK, EXIT_SCHEMA, check_
 
 SCHEMA = Path(__file__).resolve().parents[3] / "schemas" / "ingestion.schema.json"
 SURFACE_SCHEMA = Path(__file__).resolve().parents[3] / "schemas" / "landxml_surface.schema.json"
+SIDE_SCHEMAS = {"linework": Path(__file__).resolve().parents[3] / "schemas" / "linework.schema.json",
+                "paths": Path(__file__).resolve().parents[3] / "schemas" / "pdf_paths.schema.json"}
 _surface_validator = None
+_side_validators = {}
+
+
+def side_records(kind, sd):
+    if kind == "paths":
+        return sum(len(g.get("paths", [])) for p in sd.get("pages", []) for g in (p.get("colours") or {}).values())
+    return len(sd.get("records", []))
+
+
+def check_linework(path, doc):
+    """DWG linework (Rev F §4.1A.4) and PDF paths (Rev F §4.13C.3) side files listed in content.side_files[]."""
+    errs = []
+    for s in doc["content"].get("side_files", []):
+        if s.get("kind") not in SIDE_SCHEMAS:
+            errs.append(f"unknown side file kind: {s.get('kind')}")
+            continue
+        if s["kind"] not in _side_validators:
+            from jsonschema import Draft202012Validator
+            _side_validators[s["kind"]] = Draft202012Validator(json.loads(SIDE_SCHEMAS[s["kind"]].read_text(encoding="utf-8")))
+        _linework_validator = _side_validators[s["kind"]]
+        side = Path(path).parent / s["path"]
+        if not side.is_file():
+            errs.append(f"linework side file not found: {s['path']}")
+            continue
+        if sha256_file(side) != s["sha256"]:
+            errs.append(f"sha256 differs from {s['path']}")
+            continue
+        try:
+            sd = json.loads(side.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errs.append(f"{s['path']}: unreadable ({exc})")
+            continue
+        errs += [f"{s['path']}: {'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message[:120]}"
+                 for e in _linework_validator.iter_errors(sd)][:5]
+        if side_records(s["kind"], sd) != s["records"] or (sd.get("source") or {}).get("sha256") != doc["source"]["sha256"]:
+            errs.append(f"{s['path']}: record count or source hash differs from the ingestion file")
+    return errs
 
 
 def check_side_files(path, doc):
@@ -64,6 +107,8 @@ def check(path, validator, root):
         errs.append(f"file name should be {want}")
     if src["file_type"] == "landxml":
         errs += check_side_files(path, doc)
+    elif src["file_type"] in ("dwg", "pdf") and doc["content"].get("side_files"):
+        errs += check_linework(path, doc)
     if root is not None:
         f = Path(root) / src["path"]
         if not f.is_file():

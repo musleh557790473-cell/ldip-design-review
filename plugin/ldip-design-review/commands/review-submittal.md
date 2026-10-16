@@ -1,7 +1,7 @@
 ---
 description: LDIP design review — run the review agents on one Parsons submittal (drafts only; nothing is issued)
 allowed-tools: Agent, Read, Glob, Bash, Write
-argument-hint: <SITE> <sub-id> [--mode live|test|shadow] [--engine oda|accoreconsole|ezdwg] [--schedule <path>] [--schedule-no <document number>]
+argument-hint: <SITE> <sub-id> [--mode live|test|shadow] [--engine oda|accoreconsole|ezdwg|chain] [--schedule <path>] [--schedule-no <document number>]
 ---
 
 # /review-submittal — Orchestrator (Agent 0)

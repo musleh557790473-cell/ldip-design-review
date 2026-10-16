@@ -20,7 +20,7 @@ Every result is appended to runs/<run>/format_checks.json. The one-line stdout s
 on a retry (SPC-0005 §6.5). Exit 0 = the check ran; 2 = input error. This script never reads
 findings/<run>/reasoning/**. No network, no shell calls.
 """
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import argparse
 import json
@@ -45,7 +45,7 @@ from rulebook_lib import cap_errors  # noqa: E402
 # S2 for LandXML (P7) uses skill 1's side-file check and skill 3's provenance folder rule: one implementation each.
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "extracting-dwg-data" / "scripts"))
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "parsing-landxml" / "scripts"))
-from validate_ingestion import check_side_files  # noqa: E402
+from validate_ingestion import check_linework, check_side_files  # noqa: E402
 from landxml_common import expected_provenance  # noqa: E402
 SCHEMA_PATH = PLUGIN_ROOT / "schemas" / "finding.schema.json"
 INGESTION_SCHEMA = PLUGIN_ROOT / "schemas" / "ingestion.schema.json"
@@ -112,7 +112,9 @@ def check_ingestion(rep, root, manifest):
     with the file name matching its source, the source hash matching the manifest entry and the file type
     matching the entry type. LandXML (P7): every surface side file exists, matches its tin_sha256 and
     landxml_surface.schema.json, the entry's side_files equal the files the ingestion file references, and
-    source.provenance follows the folder rule (SPC-0006 Rev C §4.12.4)."""
+    source.provenance follows the folder rule (SPC-0006 Rev C §4.12.4). DWG (0.6.0, SPC-0006 Rev F §4.1A.4):
+    every linework side file (and, for PDF, every paths side file) passes the side-file check of skill 1 and
+    the entry's side_files equal the ingestion file's content.side_files."""
     rep.run("S2")
     base = root / "0.ai_context" / manifest["site"] / manifest["sub_id"]
     vb, vi = validator_for(BATCH_SCHEMA), validator_for(INGESTION_SCHEMA)
@@ -166,8 +168,22 @@ def check_ingestion(rep, root, manifest):
                          file=rel_m, path=f"/files/{i}/type")
             if ing["source"]["file_type"] == "landxml":
                 check_landxml(rep, op, rel_o, ing, f, rel_m, i)
+            elif ing["source"]["file_type"] in ("dwg", "pdf") and (f.get("side_files") or ing["content"].get("side_files")):
+                check_dwg_sides(rep, op, rel_o, ing, f, rel_m, i)
             elif f.get("side_files"):
-                rep.fail("S2", "side_files listed for a file that is not LandXML", file=rel_m, path=f"/files/{i}/side_files")
+                rep.fail("S2", "side_files listed for a file that is not LandXML, DWG or PDF", file=rel_m,
+                         path=f"/files/{i}/side_files")
+
+
+def check_dwg_sides(rep, op, rel_o, ing, entry, rel_m, i):
+    """S2 for the side files of one DWG (linework, Rev F §4.1A.4) or PDF (paths, §4.13C.3) ingestion file."""
+    for msg in check_linework(op, ing):
+        rep.fail("S2", msg, file=rel_o, path="/content/side_files")
+    refs = sorted(s_["path"] for s_ in ing["content"].get("side_files", []))
+    listed = sorted(entry.get("side_files") or [])
+    if refs != listed:
+        rep.fail("S2", f"side_files {listed} differ from the ingestion file's content.side_files {refs}", file=rel_m,
+                 path=f"/files/{i}/side_files")
 
 
 def check_landxml(rep, op, rel_o, ing, entry, rel_m, i):

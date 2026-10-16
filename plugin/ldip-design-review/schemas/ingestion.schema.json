@@ -2,7 +2,7 @@
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://aicc.local/ldip/ingestion.schema.json",
  "title": "LDIP common ingestion file (*.dwg.json, *.pdf.json, *.xml.json) \u2014 SPC-0006 Rev B \u00a72.4, \u00a74.1.4; Rev C \u00a72.4.2, \u00a74.12",
- "description": "template_version 1.0 for DWG (skill 1) and PDF (skill 2); 1.1 for LandXML (skill 3 parsing-landxml, SPC-0006 Rev C \u00a72.4.2 I1\u2013I6, additive). DWG content per \u00a74.1.4; PDF content per \u00a74.2.4; PDF title block per K5-1 (11 Oct 2026, optional fields added); LandXML content per Rev C \u00a74.12.5.",
+ "description": "template_version 1.0 for DWG (skill 1) and PDF (skill 2); 1.1 for LandXML (skill 3 parsing-landxml, SPC-0006 Rev C \u00a72.4.2 I1\u2013I6, additive). DWG content per \u00a74.1.4; PDF content per \u00a74.2.4; PDF title block per K5-1 (11 Oct 2026, optional fields added); LandXML content per Rev C \u00a74.12.5. template_version 1.2 for DWG from skill 1 0.2.0 (SPC-0006 Rev F \u00a74.1A, K17-1 / K21-2, additive): texts and closed polylines from expanded block references carry via_block, insert_handle and layer_short; content.block_expansion and content.side_files (linework side file, schemas/linework.schema.json). PDF 1.2 from skill 2 0.4.0 --paths: content.side_files lists <file>.paths.json (schemas/pdf_paths.schema.json; Rev F \u00a74.13C.3, DF-5).",
  "type": "object",
  "required": [
   "template_version",
@@ -19,7 +19,8 @@
   "template_version": {
    "enum": [
     "1.0",
-    "1.1"
+    "1.1",
+    "1.2"
    ]
   },
   "source": {
@@ -518,6 +519,20 @@
           },
           "space": {
            "type": "string"
+          },
+          "via_block": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           },
+           "minItems": 1
+          },
+          "insert_handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "layer_short": {
+           "type": "string"
           }
          },
          "required": [
@@ -636,6 +651,20 @@
           "area": {
            "type": "number",
            "minimum": 0
+          },
+          "via_block": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           },
+           "minItems": 1
+          },
+          "insert_handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "layer_short": {
+           "type": "string"
           }
          },
          "required": [
@@ -844,6 +873,52 @@
          ],
          "additionalProperties": false
         }
+       },
+       "block_expansion": {
+        "type": "object",
+        "properties": {
+         "on": {
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "on"
+        ],
+        "additionalProperties": {
+         "type": "integer",
+         "minimum": 0
+        }
+       },
+       "side_files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "path",
+          "kind",
+          "sha256",
+          "records"
+         ],
+         "properties": {
+          "path": {
+           "type": "string",
+           "pattern": "^[^/\\\\]+\\.linework\\.json$",
+           "maxLength": 250
+          },
+          "kind": {
+           "const": "linework"
+          },
+          "sha256": {
+           "type": "string",
+           "pattern": "^[0-9a-f]{64}$"
+          },
+          "records": {
+           "type": "integer",
+           "minimum": 0
+          }
+         }
+        }
        }
       },
       "required": [
@@ -871,7 +946,10 @@
       }
      },
      "template_version": {
-      "const": "1.0"
+      "enum": [
+       "1.0",
+       "1.2"
+      ]
      },
      "crs": {
       "properties": {
@@ -1214,6 +1292,37 @@
           "type": "number"
          }
         }
+       },
+       "side_files": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "path",
+          "kind",
+          "sha256",
+          "records"
+         ],
+         "properties": {
+          "path": {
+           "type": "string",
+           "pattern": "^[^/\\\\]+\\.paths\\.json$",
+           "maxLength": 250
+          },
+          "kind": {
+           "const": "paths"
+          },
+          "sha256": {
+           "type": "string",
+           "pattern": "^[0-9a-f]{64}$"
+          },
+          "records": {
+           "type": "integer",
+           "minimum": 0
+          }
+         }
+        }
        }
       }
      },
@@ -1225,7 +1334,10 @@
       }
      },
      "template_version": {
-      "const": "1.0"
+      "enum": [
+       "1.0",
+       "1.2"
+      ]
      },
      "crs": {
       "properties": {

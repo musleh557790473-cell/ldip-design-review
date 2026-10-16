@@ -7,8 +7,8 @@ description: >-
   for a given page and box. Use when an LDIP submittal contains PDFs, or when a
   finding needs a verbatim text crop as evidence.
 metadata:
-  version: "0.2.0"
-  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.2"
+  version: "0.3.0"
+  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.2; Rev F §4.13C.3 (DF-5)"
 ---
 
 # Extracting PDF drawings
@@ -20,7 +20,7 @@ their source.
 
 Packages: Python 3.11+, `pypdfium2` (reads and renders), `Pillow`, `pytesseract`, `jsonschema`; the
 `tesseract` program with Arabic (`ara`) and English data. `pdfplumber` is the Verifier's second
-reader (skill 18). PyMuPDF is not used (licence review open).
+reader (skill 18) and reads the vector paths of `--paths`. PyMuPDF is not used (licence review open).
 
 ## Hard rules
 
@@ -48,7 +48,9 @@ your list and `<name>` its file name (with `.pdf`).
 1. **Plan** — list the PDFs of your batch from the prompt.
 2. **Extract** — `python "<SK>/extract_pdf.py" --pdf "<F>" --out "<B>/<name>.json" --source-path "<F>"`
    The result lists `scanned_pages`, `image_region_pages` (picture regions inside vector pages) and
-   `unreadable_pages`.
+   `unreadable_pages`. Add `--paths` only for a PDF the prompt names as the road hierarchy plan: it also
+   writes `<B>/<name without .pdf>.paths.json` (coloured vector paths, for the road-class method M4 of
+   skill 10) and lists it in the ingestion file.
 3. **OCR** — only when `scanned_pages` or `image_region_pages` is not empty, with the Bash `timeout`
    set to 600000 (it reads scanned pages whole and the picture regions of the other pages):
    `python "<SK>/ocr_tiles.py" --ingestion "<B>/<name>.json" --pdf "<F>"`
@@ -68,7 +70,7 @@ PNG's `sha256`, also written to `<png>.sha256`; quote it in your evidence. Same 
 
 ## Outputs and exit codes
 
-Per PDF: `<name>.json` (= `<file>.pdf.json`). Crops: `<…>.png` and `<…>.png.sha256`. Every script
+Per PDF: `<name>.json` (= `<file>.pdf.json`), and `<stem>.paths.json` with `--paths`. Crops: `<…>.png` and `<…>.png.sha256`. Every script
 prints one JSON line. Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error (missing file, not a PDF,
 encrypted, page or box outside the page, path over 250 characters) · 3 missing package or OCR data ·
 4 schema failure. Content fields, the scanned-page rule and the known limits: `references/pdf_content.md`.

@@ -45,7 +45,10 @@ and never read another batch. Several instances run in parallel, one per batch.
 
 ## 5. Procedure
 
-- DWGs: follow `extracting-dwg-data` exactly (convert → extract). PDFs: follow
+- DWGs: follow `extracting-dwg-data` exactly (convert → extract). Road drawings get `--linework`
+  (SPC-0005 Rev E §5.1a): a DWG the prompt marks as a road carrier, or whose document number has the
+  discipline code `ROD` or `IRO`. With engine `chain`, a DWG that no reader converts is `failed` with
+  `next: local_autocad`; report it in `errors` (the owner runs the local AutoCAD route). PDFs: follow
   `extracting-pdf-drawings` exactly (extract → OCR only when pages are scanned). LandXML (`.xml`):
   follow `parsing-landxml` exactly (one `parse_landxml.py` call per file, `--out` =
   `<your batch folder>/<file name>.json`, e.g. `…/b01/X.xml.json`, never the folder alone;
@@ -71,7 +74,8 @@ Not applicable: you run no rules.
 
 ## 7. Output files
 
-Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json`; per PDF: `<file>.pdf.json`; per
+Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json` and, for road drawings,
+`<stem>.linework.json`; per PDF: `<file>.pdf.json`; per
 LandXML: `<file>.xml.json` and one `<stem>.surface-<n>.json` per surface; and `batch_manifest.json`,
 written only by `write_manifest.py`. Every file in your folder shall be listed in the
 manifest (`output`, `intermediates` or `side_files`), or the format checker fails the step (C3).

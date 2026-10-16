@@ -13,10 +13,13 @@ OCR of scanned pages is a separate step (ocr_tiles.py).
 bbox convention: [x0, top, x1, bottom] in PDF points from the displayed page's top-left corner (crop
 box origin and /Rotate applied).
 
-Usage: python extract_pdf.py --pdf <file.pdf> --out <batch>/<file.pdf>.json [--source-path <rel path>]
+Usage: python extract_pdf.py --pdf <file.pdf> --out <batch>/<file.pdf>.json [--source-path <rel path>] [--paths]
+--paths (0.4.0, SPC-0006 Rev F §4.13C.3, DF-5): also writes `<file>.paths.json` next to the ingestion file —
+the coloured vector paths of each page (vector_paths.py) — and lists it in `content.side_files`
+(template 1.2). Only for a road hierarchy plan named in the prompt (method M4 of skill 10).
 Exit: 0 written · 2 input error (missing, not a PDF, encrypted, path > 250) · 3 missing package.
 No network, no shell calls."""
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import argparse
 import collections
@@ -196,6 +199,7 @@ def main(argv=None):
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--source-path", help="path recorded in source.path (relative to LDIP_Review); default --pdf")
+    ap.add_argument("--paths", action="store_true", help="also write <file>.paths.json (coloured vector paths)")
     a = ap.parse_args(argv)
     try:
         check_path(a.out)
@@ -203,6 +207,15 @@ def main(argv=None):
         if not str(a.out).endswith(Path(src).name + ".json"):
             raise PdfError(EXIT_INPUT, f"--out must be named {Path(src).name}.json")
         doc = extract(a.pdf, src)
+        if a.paths:
+            import vector_paths
+            name = Path(src).name
+            side = Path(a.out).with_name(name[:-4] + ".paths.json" if name.lower().endswith(".pdf") else name + ".paths.json")
+            pj = vector_paths.build(a.pdf, Path(src).as_posix(), doc["source"]["sha256"], need)
+            atomic_write_json(side, pj)
+            doc["template_version"] = "1.2"
+            doc["content"]["side_files"] = [{"path": side.name, "kind": "paths", "sha256": sha256_file(side),
+                                             "records": sum(len(g["paths"]) for p in pj["pages"] for g in p["colours"].values())}]
         atomic_write_json(a.out, doc)
     except PdfError as e:
         emit({"status": "error", "code": e.code, "detail": e.detail})
@@ -213,6 +226,7 @@ def main(argv=None):
           "unreadable_pages": [p["page"] for p in pages if p["error"]],
           "large_pages": [p["page"] for p in pages if not p["colours_complete"] and not p["error"]],
           "image_region_pages": [p["page"] for p in pages if not p["scanned"] and any(r["ocr_candidate"] for r in p["image_regions"])],
+          "paths": doc["content"]["side_files"][0]["records"] if doc["content"].get("side_files") else None,
           "warnings": sorted({w["code"] for w in doc["warnings"]})})
     return EXIT_OK
 

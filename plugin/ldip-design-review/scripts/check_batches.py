@@ -4,7 +4,8 @@
 The guard lets every intake-batch instance write any b<nn>/ folder of its submittal, because a
 hook cannot tell which batch an instance owns. This check closes the gap after the parallel step:
 every file in 0.ai_context/<SITE>/<sub-id>/b<nn>/ must be batch_manifest.json, or an output or an
-intermediate (DXF, converter log — P-S3-19) or a LandXML surface side file (`side_files`, P7) listed in
+intermediate (DXF, converter log — P-S3-19) or a side file (`side_files`: LandXML surfaces, P7; DWG
+linework, SPC-0006 Rev F §4.1A.4) listed in
 THAT folder's batch_manifest.json, and no manifest may list an output in another batch folder.
 Intended to be called by format_check.py after the intake-batch step.
 
@@ -12,7 +13,7 @@ Usage: python check_batches.py --root R --site S --sub ID [--out FILE]
 Prints a one-line JSON summary; exit 0 when the check ran (pass/fail in the result), 2 input error.
 No network, no shell calls.
 """
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import argparse
 import json

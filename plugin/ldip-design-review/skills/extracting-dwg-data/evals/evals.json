@@ -1,6 +1,6 @@
 {
  "skill": "extracting-dwg-data",
- "note": "Data paths only; the DWGs are copied to golden_set/inputs/ before the run (SPC-0006 §2.6), never to Git. Expectations from SPC-0006 §4.1.8. Run on sonnet and opus (B7).",
+ "note": "Data paths only; the DWGs are copied to golden_set/inputs/ before the run (SPC-0006 §2.6), never to Git. Expectations from SPC-0006 §4.1.8. Run on sonnet and opus (B7). Rev F (§4.1A.7): T-F1 ... T-F4 real (tests/test_revf_real.py, local only); T-F5 ... T-F8 synthetic (tests/test_revf_build.py).",
  "evals": [
   {
    "id": "T1-QRWN-DMP",
@@ -62,6 +62,53 @@
     "corrupt file recorded as failed with the script's code and detail",
     "good file extracted",
     "no hand-written JSON; no engine switch"
+   ]
+  },
+  {
+   "id": "T-F1-QRWN-reader-chain",
+   "query": "Convert the QRWN road hierarchy plan with the reader chain.",
+   "files": [
+    "submittals/QRWN/<sub>/LDIP-RCRC-SAP-01-AQ-ROD-DWG-00003-001-0A.dwg"
+   ],
+   "expected": [
+    "ezdwg fails ('section page info truncated'), recorded in the convert log chain",
+    "with LibreDWG enabled (after L-1): engine libredwg, fallback_from = the ezdwg error, warning ENGINE_FALLBACK",
+    "LibreDWG not enabled: exit 3, next: local_autocad"
+   ]
+  },
+  {
+   "id": "T-F2-QRWN-linework",
+   "query": "Extract the QRWN road hierarchy plan with its line work.",
+   "files": [
+    "submittals/QRWN/<sub>/LDIP-RCRC-SAP-01-AQ-ROD-DWG-00003-001-0A.dwg"
+   ],
+   "expected": [
+    "linework: 15/18/20/25/30/36/60 m ROW layers 185/22/10/10/4/1/1 records",
+    "RD_PR_CNRL 332 records, 64,349 m; RD_ROW 260",
+    "468 alignment-name texts with via_block"
+   ]
+  },
+  {
+   "id": "T-F3-NMAR-linework",
+   "query": "Extract the Namar road hierarchy plan with its line work.",
+   "files": [
+    "submittals/NMAR/10-2026/Drawings/Roads/CAD/LDIP-RCRC-SAP-03-DN-ROD-DWG-00003-001-00.dwg"
+   ],
+   "expected": [
+    "_CL 47 records, 11,813 m",
+    "15 m ROW 34, 18 m ROW 5, 25m ROW 4",
+    "ezdwg path (no fallback)"
+   ]
+  },
+  {
+   "id": "T-F4-NRJS-linework",
+   "query": "Extract the Narjis plan IRO 15000 with its line work.",
+   "files": [
+    "submittals/NRJS/<sub>/LDIP-RCRC-SAP-01-NRJS-IRO-DWG-00-15000-0A.dwg"
+   ],
+   "expected": [
+    "RD_CL 7 records and RD_CL External Road 4",
+    "__ROW boundaries present"
    ]
   }
  ]

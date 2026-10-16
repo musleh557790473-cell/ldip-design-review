@@ -10,13 +10,20 @@ assignment, name-only class — D10-3). Missing information (check_required.py) 
 issue_type missing_information, listing what was searched (M5).
 PDF evidence needs a crop (SPC-0003 tier extracted_text_crop): made here with skill 2's crop function from
 the source PDF under --review-root; the PNG and its SHA-256 go to --evidence-dir.
+0.3.0 (SPC-0006 Rev F §4.13C): also takes cross_check.json, road_class.json and location_checks.json; a
+check may carry `status_override` (Missing information for a class not stated, K23) which is still lowered
+to the rule / parameter / link caps; a sample whose evidence has `xy` gives the finding an EPSG:32638
+location (first sample), and the other locations are listed in the statement and the evidence.
+0.4.0 (SPC-0006 Rev G §4.13D): the phase B2 part 2 location kinds (low points, parking areas, calming devices,
+school frontages) come through location_checks.json unchanged; a LandXML position [e, n] gives an EPSG:32638
+location. The version is the skill version (agent_versions).
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 
 import argparse
 import json
@@ -109,7 +116,10 @@ class Builder:
     def location(self, s0, samples):
         ev = s0["evidence"]
         if not ev.get("path"):                       # presence absence (phase B1): the whole submittal
-            return {"document_no": "PACKAGE", "package_level": True}
+            loc = {"document_no": "PACKAGE", "package_level": True}
+            if ev.get("xy"):                          # phase B2: a location of the network (first sample)
+                loc = {"document_no": "PACKAGE", "xy": {"crs": "EPSG:32638", "e": float(ev["xy"][0]), "n": float(ev["xy"][1])}}
+            return loc
         loc = {"document_no": doc_no(ev), "file_path": ev["path"], "file_sha256": ev["sha256"]}
         st = ev["source_type"]
         if st.startswith("pdf") and ev.get("page"):
@@ -122,7 +132,10 @@ class Builder:
                         hs.append(h)
             loc["dwg"] = {"handles": hs[:40], **({"layer": ev["layer"]} if ev.get("layer") else {})}
         elif st == "landxml" and ev.get("xy"):
-            loc["xy"] = ev["xy"]
+            v = ev["xy"]                              # Rev G: a LandXML network position is [e, n]
+            loc["xy"] = v if isinstance(v, dict) else {"crs": "EPSG:32638", "e": float(v[0]), "n": float(v[1])}
+        if ev.get("xy") and isinstance(ev["xy"], (list, tuple)) and "xy" not in loc:
+            loc["xy"] = {"crs": "EPSG:32638", "e": float(ev["xy"][0]), "n": float(ev["xy"][1])}
         else:
             loc["package_level"] = True
         return loc
@@ -136,6 +149,8 @@ class Builder:
         s0 = samples[0]
         st = s0["evidence"]["source_type"]
         status = rule["default_status"].get(st) or rule["default_status"].get("script_output") or "Probable"
+        if s0.get("status_override"):
+            status = s0["status_override"]
         status = lower(status, p.get("cap") or rule["cap"])
         for s in samples:
             if s.get("link_cap"):

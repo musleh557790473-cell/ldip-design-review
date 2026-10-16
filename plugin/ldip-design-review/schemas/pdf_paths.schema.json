@@ -1,0 +1,149 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://aicc.local/ldip/pdf_paths.schema.json",
+ "title": "LDIP PDF vector-path side file <file>.paths.json \u2014 SPC-0006 Rev F \u00a74.13C.3 (DF-5)",
+ "description": "Written by skill 2 extract_pdf.py --paths (vector_paths.py). Points in PDF points from the displayed page's top-left corner. Only chromatic colours keep their paths; every colour is counted.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "source",
+  "reader",
+  "pages",
+  "warnings"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": "1.0"
+  },
+  "source": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "path",
+    "sha256"
+   ],
+   "properties": {
+    "path": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 250
+    },
+    "sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    }
+   }
+  },
+  "reader": {
+   "type": "object",
+   "required": [
+    "script",
+    "version"
+   ],
+   "properties": {
+    "script": {
+     "const": "vector_paths.py"
+    },
+    "version": {
+     "type": "string"
+    }
+   }
+  },
+  "pages": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "page",
+     "width_pt",
+     "height_pt",
+     "colour_counts",
+     "colours"
+    ],
+    "properties": {
+     "page": {
+      "type": "integer",
+      "minimum": 1
+     },
+     "width_pt": {
+      "type": "number"
+     },
+     "height_pt": {
+      "type": "number"
+     },
+     "colour_counts": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "colours": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "rgb",
+        "paths"
+       ],
+       "properties": {
+        "rgb": {
+         "type": "array",
+         "minItems": 3,
+         "maxItems": 3,
+         "items": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+         }
+        },
+        "paths": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+           "kind",
+           "width",
+           "points"
+          ],
+          "properties": {
+           "kind": {
+            "enum": [
+             "stroke",
+             "fill"
+            ]
+           },
+           "width": {
+            "type": "number",
+            "minimum": 0
+           },
+           "points": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+             "type": "array",
+             "minItems": 2,
+             "maxItems": 2,
+             "items": {
+              "type": "number"
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "warnings": {
+   "type": "array"
+  }
+ }
+}

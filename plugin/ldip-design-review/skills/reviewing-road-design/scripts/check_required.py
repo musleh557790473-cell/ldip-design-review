@@ -18,7 +18,7 @@ Usage: python check_required.py --stage "<MIDP stage name>" --rules <rules_RDE.j
            [--searched <file> ...] --out <required_inputs.json>
 Exit: 0 written · 2 input error (unknown stage). No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import re
@@ -95,6 +95,11 @@ def main(argv=None):
                    "clause": it["clause"], "searched": searched}
             if it["phase"] and PHASE_ORDER.get(phase, 0) < PHASE_ORDER.get(it["phase"], 0):
                 res.update(result="not_run", reason="not required at stage")
+            elif key == "C2" and crit and crit.get("tables") and not crit.get("criteria") \
+                    and "design_report" in it["carriers"]:
+                # K24 / DF-3 (SPC-0006 Rev F §4.13.6): a criteria table was found but not read -> not a missing C2
+                res.update(result="not_run", reason="criteria table found but not read (CRITERIA_TABLE_UNREAD)",
+                           status_hint="Not auto-verifiable")
             elif found.get(key, set()) & it["carriers"]:
                 res.update(result="pass", found_in=sorted(found[key] & it["carriers"]))
             elif it["carriers"] - READ_IN_PHASE_A:

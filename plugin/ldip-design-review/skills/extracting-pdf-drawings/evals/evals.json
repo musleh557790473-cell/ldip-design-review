@@ -1,6 +1,6 @@
 {
  "skill": "extracting-pdf-drawings",
- "note": "Data paths only; files live in LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0006 §4.2.6. Run on sonnet and opus (SPC-0006 B7).",
+ "note": "Data paths only; files live in LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0006 §4.2.6. Run on sonnet and opus (SPC-0006 B7). Rev F DF-5: --paths (vector_paths.py) for the road hierarchy plan only.",
  "evals": [
   {
    "id": "T1-QRWN-DMP-PDF",
@@ -46,6 +46,17 @@
    "expected": [
     "crop.py writes the PNG and .sha256 under findings/<run>/evidence/verifier/",
     "the same call twice gives the same sha256"
+   ]
+  },
+  {
+   "id": "DF5-paths-hierarchy-plan",
+   "query": "Extract the QRWN road hierarchy plan PDF with its coloured paths.",
+   "files": [
+    "submittals/QRWN/<sub>/LDIP-RCRC-SAP-01-AQ-ROD-DWG-00003-001-0A.pdf"
+   ],
+   "expected": [
+    "<file>.pdf.json template 1.2 lists <stem>.paths.json",
+    "class colours of the legend (15 m (1,0.498,1) ... ) with paths; greys counted only"
    ]
   }
  ]

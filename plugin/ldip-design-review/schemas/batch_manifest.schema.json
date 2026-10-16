@@ -1,7 +1,7 @@
 {
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://aicc.local/ldip/batch_manifest.schema.json",
- "title": "LDIP intake-batch manifest \u2014 SPC-0006 Rev B \u00a73.1 (P-S3-19); LandXML (Rev C \u00a74.12, P7)",
+ "title": "LDIP intake-batch manifest \u2014 SPC-0006 Rev B \u00a73.1 (P-S3-19); LandXML (Rev C \u00a74.12, P7); DWG linework and PDF paths side files (Rev F \u00a74.1A.4, \u00a74.13C.3)",
  "type": "object",
  "additionalProperties": false,
  "required": [
@@ -122,7 +122,7 @@
        "type": "string",
        "minLength": 1,
        "maxLength": 250,
-       "pattern": "^[^/\\\\]+\\.surface-[1-9][0-9]*\\.json$"
+       "pattern": "^[^/\\\\]+\\.(surface-[1-9][0-9]*|linework|paths)\\.json$"
       }
      }
     },
@@ -173,10 +173,77 @@
       "then": {
        "properties": {
         "type": {
-         "const": "landxml"
+         "enum": [
+          "landxml",
+          "dwg",
+          "pdf"
+         ]
         },
         "status": {
          "const": "extracted"
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "required": [
+        "side_files"
+       ],
+       "properties": {
+        "type": {
+         "const": "landxml"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "side_files": {
+         "items": {
+          "pattern": "^[^/\\\\]+\\.surface-[1-9][0-9]*\\.json$"
+         }
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "required": [
+        "side_files"
+       ],
+       "properties": {
+        "type": {
+         "const": "dwg"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "side_files": {
+         "items": {
+          "pattern": "^[^/\\\\]+\\.linework\\.json$"
+         }
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "required": [
+        "side_files"
+       ],
+       "properties": {
+        "type": {
+         "const": "pdf"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "side_files": {
+         "items": {
+          "pattern": "^[^/\\\\]+\\.paths\\.json$"
+         }
         }
        }
       }

@@ -12,7 +12,7 @@
 
 | Engine | What it is | Notes |
 |---|---|---|
-| `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`). **Pinned to 0.12.9** (D13, owner 5 Oct 2026): results from another version are not comparable; `convert.py` then warns `ENGINE_VERSION_UNPINNED` |
+| `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`). **Pinned to 0.16.0** (D13, owner 5 Oct 2026; D13-2, owner 16 Oct 2026 — 0.12.9 dropped setting-out table cells): results from another version are not comparable; `convert.py` then warns `ENGINE_VERSION_UNPINNED` |
 | `oda` | ODA File Converter, external program | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `unknown` until installed |
 | `accoreconsole` | AutoCAD Core Console, Windows only | `--exe` or env `LDIP_ACCORE_EXE`. Script `DXFOUT … Version 2018, 16 decimals`. Prompt sequence to verify on the review workstation [GAP] |
 
@@ -70,7 +70,7 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
 ## 5. Known limits
 
 - Parsons sheets (Namar 30%, AC1032) hold the title-block values as attributes of the paper-space block
-  "Ladun - Qairwan ATT"; ezdwg 0.12.9 does not decode them, so the DWG title block is read only with the
+  "Ladun - Qairwan ATT"; ezdwg 0.12.9 does not decode them and 0.16.0 does not write them to the DXF, so the DWG title block is read only with the
   oda or accoreconsole engine (K2). Tag names are not known until then; values read by tag name are
   Medium confidence at best (`TITLE_BLOCK_HEURISTIC`). The PDF title block is read by skill 2 (K5-1).
 - Blocks inside blocks are not expanded; attributes are read from the top-level inserts only.
@@ -83,3 +83,20 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
 - Civil 3D test (P-S3-22, owner 30 Sep 2026): a DWG saved in a Civil 3D session carries the whole AECC
   class catalogue (345–448 classes in the Parsons samples) even with no Civil 3D object, so classes alone
   give `saved_in_civil3d`, not `civil3d_native`.
+
+## Block expansion and line work (0.2.0, SPC-0006 Rev F §4.1A)
+
+- Template 1.2. Model-space block references (bound xrefs included) are expanded, nested to depth 4.
+  Texts and closed polylines found inside are added to `texts` / `polylines` with `via_block` (block-name
+  chain), `insert_handle` (the model-space insert) and `layer_short` (layer name after the last `$`);
+  `handle` is the handle in the block definition. An entity on layer 0 takes its insert's layer.
+  Inserts with attributes and the Parsons title-block blocks are not expanded (K5).
+  `content.block_expansion` counts what was expanded (`--no-expand`: off).
+- `--linework` writes `<stem>.linework.json` (schema `linework.schema.json` 1.0): every LINE, ARC,
+  CIRCLE, LWPOLYLINE, 2-D POLYLINE and SPLINE of model space and of the expanded blocks, flattened at
+  0.05 m, open and closed (`closed`), with `points` in drawing units; `layers` gives records and length per
+  layer. Listed in `content.side_files` with its SHA-256 and record count. Over 200,000 records:
+  `LINEWORK_LARGE` and the layer list only.
+- Reader chain (`--engine chain`): ezdwg, then LibreDWG `dwg2dxf` when enabled (`LDIP_LIBREDWG_EXE`, after
+  licence review L-1), else `next: local_autocad` (the owner's local AutoCAD route). The convert log keeps
+  `chain`, `fallback_from` and the warning `ENGINE_FALLBACK`.

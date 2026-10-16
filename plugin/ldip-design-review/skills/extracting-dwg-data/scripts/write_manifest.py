@@ -9,7 +9,9 @@ error. PDFs (skill 2): the ingestion file <name>.pdf.json written by extract_pdf
 parse_landxml.py is validated with its surface side files, its source hash and its provenance against
 the folder rule (landxml_common.expected_provenance) → `extracted` with `side_files`; a .xml whose root is
 not LandXML → `skipped` (type `other`); refused, missing or invalid → `failed`. Other files are
-`skipped` (code 2).
+`skipped` (code 2). DWG linework side files (0.4.0, SPC-0006 Rev F §4.1A.4): an extracted DWG lists its
+`<stem>.linework.json` under `side_files`; a linework file left by a failed extraction is an intermediate.
+An extracted PDF lists its `<file>.paths.json` (skill 2 --paths) under `side_files`.
 The manifest is validated against schemas/batch_manifest.schema.json before it is written.
 
 Usage: python write_manifest.py --out <0.ai_context/SITE/SUB/bNN>/batch_manifest.json | --batch-dir <…/bNN>
@@ -21,7 +23,7 @@ written still gets a manifest (all entries `failed`); the folder is created. --b
 Exit: 0 written · 2 input error · 3 jsonschema missing · 4 manifest failed its schema (not written).
 No network, no shell calls.
 """
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import argparse
 import json
@@ -55,28 +57,38 @@ def read_json(p):
 
 def pdf_entry(bdir, path, sha, ing_validator, root):
     out = bdir / f"{Path(path).name}.json"
+    name = Path(path).name
+    side = bdir / ((name[:-4] if name.lower().endswith(".pdf") else name) + ".paths.json")
+    orphan = [side.name] if side.is_file() else []
     entry = {"path": path, "sha256": sha, "type": "pdf", "status": "failed", "output": None, "error": None}
-    if not out.is_file():
-        entry["error"] = {"code": EXIT_INPUT, "detail": PDF_MISSING}
+
+    def fail(code, detail, keep_out=True):
+        inter = ([out.name] if keep_out else []) + orphan
+        if inter:
+            entry["intermediates"] = inter
+        entry["error"] = {"code": code, "detail": detail}
         return entry
+
+    if not out.is_file():
+        return fail(EXIT_INPUT, PDF_MISSING, keep_out=False)
     doc = read_json(out)
     if doc is None:
-        entry["error"] = {"code": EXIT_SCHEMA, "detail": "ingestion file is not readable JSON"}
-        entry["intermediates"] = [out.name]
-        return entry
+        return fail(EXIT_SCHEMA, "ingestion file is not readable JSON")
     if (doc.get("source") or {}).get("sha256") != sha:
-        entry["error"] = {"code": EXIT_INPUT, "detail": "ingestion source hash differs from the file list"}
-        entry["intermediates"] = [out.name]
-        return entry
+        return fail(EXIT_INPUT, "ingestion source hash differs from the file list")
     try:
         errs = validate_ingestion.check(out, ing_validator, root)
     except (OSError, json.JSONDecodeError) as exc:
         errs = [f"unreadable: {exc}"]
     if errs:
-        entry["error"] = {"code": EXIT_SCHEMA, "detail": "ingestion file failed validation: " + "; ".join(errs[:3])}
-        entry["intermediates"] = [out.name]
-        return entry
+        return fail(EXIT_SCHEMA, "ingestion file failed validation: " + "; ".join(errs[:3]))
     entry.update(status="extracted", output=out.name)
+    sides = [x["path"] for x in doc.get("content", {}).get("side_files", [])]
+    if sides:
+        entry["side_files"] = sides
+    stale = [o for o in orphan if o not in sides]
+    if stale:
+        entry["intermediates"] = stale
     return entry
 
 
@@ -142,6 +154,9 @@ def dwg_entry(bdir, path, sha, ing_validator, root):
         entry["error"] = {"code": int(code), "detail": str(detail)[:500]}
         return entry, log
 
+    lw = bdir / f"{stem}.linework.json"
+    if lw.is_file():
+        entry["intermediates"] = inter = inter + [lw.name]    # until the ingestion file lists it
     if log is None:
         return fail(EXIT_INPUT, "no readable converter log")
     if log.get("status") != "ok":
@@ -158,6 +173,10 @@ def dwg_entry(bdir, path, sha, ing_validator, root):
         entry["intermediates"] = inter + [out.name]   # keep it listed (C3) but not as an output
         return fail(EXIT_SCHEMA, "ingestion file failed validation: " + "; ".join(errs[:3]))
     entry.update(status="extracted", output=out.name)
+    sides = [x["path"] for x in (read_json(out) or {}).get("content", {}).get("side_files", [])]
+    if sides:
+        entry["side_files"] = sides
+        entry["intermediates"] = [i for i in inter if i not in sides]
     return entry, log
 
 

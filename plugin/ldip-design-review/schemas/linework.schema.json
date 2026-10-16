@@ -1,0 +1,183 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://aicc.local/ldip/linework.schema.json",
+ "title": "LDIP DWG linework side file <stem>.linework.json \u2014 SPC-0006 Rev F \u00a74.1A.4 (K17-1)",
+ "description": "Written by skill 1 extract_dxf.py --linework. Every LINE, ARC, CIRCLE, LWPOLYLINE, 2-D POLYLINE and SPLINE of model space and of expanded block references, flattened at 0.05 m, in drawing units.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "source",
+  "extractor",
+  "units",
+  "layers",
+  "records",
+  "warnings"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": "1.0"
+  },
+  "source": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "path",
+    "sha256"
+   ],
+   "properties": {
+    "path": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 250
+    },
+    "sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    }
+   }
+  },
+  "extractor": {
+   "type": "object",
+   "required": [
+    "script",
+    "version",
+    "flatten_m",
+    "block_expansion"
+   ],
+   "properties": {
+    "script": {
+     "const": "extract_dxf.py"
+    },
+    "version": {
+     "type": "string"
+    },
+    "flatten_m": {
+     "type": "number",
+     "exclusiveMinimum": 0
+    },
+    "block_expansion": {
+     "type": "boolean"
+    }
+   },
+   "additionalProperties": false
+  },
+  "units": {
+   "type": "string"
+  },
+  "layers": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "layer_short",
+     "records",
+     "length"
+    ],
+    "properties": {
+     "layer_short": {
+      "type": "string"
+     },
+     "records": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "length": {
+      "type": "number",
+      "minimum": 0
+     }
+    }
+   }
+  },
+  "records": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "type",
+     "layer",
+     "layer_short",
+     "handle",
+     "via_block",
+     "closed",
+     "length",
+     "points"
+    ],
+    "properties": {
+     "type": {
+      "enum": [
+       "LINE",
+       "ARC",
+       "CIRCLE",
+       "LWPOLYLINE",
+       "POLYLINE",
+       "SPLINE"
+      ]
+     },
+     "layer": {
+      "type": "string"
+     },
+     "layer_short": {
+      "type": "string"
+     },
+     "handle": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "insert_handle": {
+      "type": "string"
+     },
+     "via_block": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "closed": {
+      "type": "boolean"
+     },
+     "length": {
+      "type": "number",
+      "minimum": 0
+     },
+     "points": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+       "type": "array",
+       "minItems": 2,
+       "maxItems": 2,
+       "items": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   }
+  },
+  "warnings": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "code",
+     "detail"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_]+$"
+     },
+     "detail": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}
