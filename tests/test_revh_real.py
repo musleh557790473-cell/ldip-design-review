@@ -73,3 +73,46 @@ def test_th7_junctions(geo):
     assert (len(loc), sum(c["result"] == "fail" for c in loc)) == (50, 44)
     assert (len(col), sum(c["result"] == "fail" for c in col)) == (16, 15)
     assert n["not_positioned"] == [] and sum(1 for r in n["roads"].values() if not r["continuous"]) == 12
+
+
+# ------------------------------------------------------------------ TH8 (recorded at build, 17 Oct 2026; DH-10)
+QD = os.environ.get("LDIP_REVH_DATA_QRWN")
+JD = os.environ.get("LDIP_REVH_DATA_NRJS")
+
+
+def _geo_site(tmp, d, site, sheets, sections, plan=None, pdf=None):
+    rules = D / "rules_RDE_c1.json" if DATA else Path(d) / "rules_RDE_c1.json"
+    run("check_sections.py", "--sections", sections, "--rules", rules, "--out", tmp / "sc.json")
+    run("read_setout.py", "--ingestion", *sheets, "--out", tmp / "setout.json")
+    run("build_network.py", "--setout", tmp / "setout.json", "--site", site, *(["--linework", plan] if plan else []),
+        "--out", tmp / "network.json")
+    run("read_class.py", "--network", tmp / "network.json", "--site", site, *(["--linework", plan] if plan else []),
+        *(["--pdf", pdf] if pdf else []), "--sections", tmp / "sc.json", "--out", tmp / "class.json")
+    run("check_geometry.py", "--setout", tmp / "setout.json", "--network", tmp / "network.json", "--class", tmp / "class.json",
+        "--rules", rules, "--stage", "30% Concept Design", "--out", tmp / "geo.json")
+    return load(tmp / "geo.json")
+
+
+@pytest.mark.skipif(not JD, reason="LDIP_REVH_DATA_NRJS not set (real drawings stay out of Git)")
+def test_th8_nrjs(tmp_path):
+    d = Path(JD)
+    n = "LDIP-RCRC-SAP-01-NRJS-IRO-DWG-00"
+    g = _geo_site(tmp_path, d, "NRJS", [d / f"{n}-60001-0A.dwg.json"], d / f"{n}-30001-0A.dwg.json",
+                  d / f"{n}-15000-0A.dwg.json", d / f"{n}-15000-0A.pdf.json")
+    assert [c["observed"] for c in fails(g, "ROD-018")] == [10.2, 10.2] and len(fails(g, "ROD-019")) == 2
+    assert not fails(g, "ROD-035") and sum(1 for c in g["checks"] if c["rule_id"] == "ROD-035") == 7
+    assert sorted(c["observed"] for c in fails(g, "ROD-036")) == [68.0, 68.0, 68.0, 89.4, 114.3, 114.4]
+
+
+@pytest.mark.skipif(not QD, reason="LDIP_REVH_DATA_QRWN not set (real drawings stay out of Git)")
+def test_th8_qrwn(tmp_path):
+    d = Path(QD)
+    n = "LDIP-RCRC-SAP-01-AQ-ROD-DWG"
+    g = _geo_site(tmp_path, d, "QRWN", [d / f"{n}-60000-00{i}-0A.dwg.json" for i in (1, 2)], d / f"{n}-30000-001-0A.dwg.json",
+                  None, d / f"{n}-00003-001-0A.pdf.json")
+    a = [c for c in g["checks"] if c["rule_id"] == "ROD-035"]
+    assert (len(a), len(fails(g, "ROD-035"))) == (336, 17)
+    assert sorted(c["observed"] for c in fails(g, "ROD-035"))[:2] == [42.2, 55.8]
+    assert g["counts"]["tangents"] == 335 and g["counts"]["reverse_tangents"] == 12
+    # without the design report and a readable plan (K21) no road has a class: class rules are listed, not judged
+    assert any(x["rule_id"] == "ROD-018" and "without a class" in x["reason"] for x in g["not_run"])
