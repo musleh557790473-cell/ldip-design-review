@@ -80,16 +80,20 @@ QD = os.environ.get("LDIP_REVH_DATA_QRWN")
 JD = os.environ.get("LDIP_REVH_DATA_NRJS")
 
 
-def _geo_site(tmp, d, site, sheets, sections, plan=None, pdf=None):
+def _geo_site(tmp, d, site, sheets, sections, plan=None, pdf=None, report=None):
     rules = D / "rules_RDE_c1.json" if DATA else Path(d) / "rules_RDE_c1.json"
+    crit = []
+    if report:
+        run("read_criteria.py", "--ingestion", report, "--out", tmp / "criteria.json")
+        crit = ["--criteria", tmp / "criteria.json"]
     run("check_sections.py", "--sections", sections, "--rules", rules, "--out", tmp / "sc.json")
     run("read_setout.py", "--ingestion", *sheets, "--out", tmp / "setout.json")
     run("build_network.py", "--setout", tmp / "setout.json", "--site", site, *(["--linework", plan] if plan else []),
         "--out", tmp / "network.json")
     run("read_class.py", "--network", tmp / "network.json", "--site", site, *(["--linework", plan] if plan else []),
-        *(["--pdf", pdf] if pdf else []), "--sections", tmp / "sc.json", "--out", tmp / "class.json")
+        *(["--pdf", pdf] if pdf else []), *crit, "--sections", tmp / "sc.json", "--out", tmp / "class.json")
     run("check_geometry.py", "--setout", tmp / "setout.json", "--network", tmp / "network.json", "--class", tmp / "class.json",
-        "--rules", rules, "--stage", "30% Concept Design", "--out", tmp / "geo.json")
+        "--rules", rules, "--stage", "30% Concept Design", *crit, "--out", tmp / "geo.json")
     return load(tmp / "geo.json")
 
 
@@ -106,13 +110,20 @@ def test_th8_nrjs(tmp_path):
 
 @pytest.mark.skipif(not QD, reason="LDIP_REVH_DATA_QRWN not set (real drawings stay out of Git)")
 def test_th8_qrwn(tmp_path):
+    """QRWN rev 0A: setting-out 60000-001 / 002; plan 00003 read by the reader chain (ezdwg fails, LibreDWG converts —
+    scratch test only, L-1 open) with line work; plan PDF paths; design report AQ-DES-RPT-00001-001 (owner, 17 Oct)."""
     d = Path(QD)
     n = "LDIP-RCRC-SAP-01-AQ-ROD-DWG"
     g = _geo_site(tmp_path, d, "QRWN", [d / f"{n}-60000-00{i}-0A.dwg.json" for i in (1, 2)], d / f"{n}-30000-001-0A.dwg.json",
-                  None, d / f"{n}-00003-001-0A.pdf.json")
-    a = [c for c in g["checks"] if c["rule_id"] == "ROD-035"]
-    assert (len(a), len(fails(g, "ROD-035"))) == (336, 17)
-    assert sorted(c["observed"] for c in fails(g, "ROD-035"))[:2] == [42.2, 55.8]
+                  d / f"{n}-00003-001-0A.dwg.json", d / f"{n}-00003-001-0A.pdf.json", d / "LDIP-RCRC-SAP-01-AQ-DES-RPT-00001-001.pdf.json")
+    net = load(tmp_path / "network.json")["counts"]
+    assert (net["junctions"], net["roundabouts"], net["roundabout_approaches"]) == (329, 7, 26)
+    cls = load(tmp_path / "class.json")["summary"]
+    assert cls["classes"] == {"local_access": 210, "sub_collector": 21} and cls["class_unknown"] == 9
+    assert len(fails(g, "ROD-018")) == 73 and min(c["observed"] for c in fails(g, "ROD-018")) == 13.0
+    assert not fails(g, "ROD-017") and sum(1 for c in g["checks"] if c["rule_id"] == "ROD-017") == 17
+    assert (len(fails(g, "ROD-019", "local_access")), len(fails(g, "ROD-019", "sub_collector"))) == (20, 4)
+    f35 = sorted(c["observed"] for c in fails(g, "ROD-035"))
+    assert len(f35) == 16 and f35[0] == 42.2
+    assert (len(fails(g, "ROD-036", "local_access")), len(fails(g, "ROD-036", "sub_collector"))) == (307, 64)
     assert g["counts"]["tangents"] == 335 and g["counts"]["reverse_tangents"] == 12
-    # without the design report and a readable plan (K21) no road has a class: class rules are listed, not judged
-    assert any(x["rule_id"] == "ROD-018" and "without a class" in x["reason"] for x in g["not_run"])
