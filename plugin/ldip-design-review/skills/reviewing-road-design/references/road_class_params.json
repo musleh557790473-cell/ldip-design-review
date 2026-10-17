@@ -1,5 +1,5 @@
 {
- "_doc": "Skill 10 location-register parameters (SPC-0006 Rev F §4.13C; K19-3, RC-1 ... RC-4, DF-6). Site-specific items are skill parameters (RC-3). Network values are [PROPOSED] until tested in the build (K19-3, owner 15 Oct 2026 15:41). PDF colour maps are used only when `pdf_colours_confirmed` is set (RC-4).",
+ "_doc": "Skill 10 location-register parameters (SPC-0006 Rev F §4.13C; K19-3, RC-1 ... RC-4, DF-6). Site-specific items are skill parameters (RC-3). Network values are [PROPOSED] until tested in the build (K19-3, owner 15 Oct 2026 15:41). PDF colour maps are used only when `pdf_colours_confirmed` is set (RC-4). Phase C1 (SPC-0006 Rev H §4.13E): `c1` (DH-3).",
  "network": {
   "status": "PROPOSED (K19-3; tested in build-025)",
   "end_on_alignment_m": 1.0,
@@ -36,6 +36,13 @@
    "parking",
    "car\\s?parks?"
   ]
+ },
+ "c1": {
+  "status": "AGREED DH-3 (owner 17 Oct 2026 13:17); SPC-0006 Rev H §4.13E",
+  "through_tolerance_deg": 15.0,
+  "angle_offset_m": 10.0,
+  "junction_window_m": 30.0,
+  "max_listed": 10
  },
  "class": {
   "standard_widths_m": [

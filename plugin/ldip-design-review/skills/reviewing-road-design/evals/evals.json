@@ -204,6 +204,32 @@
     "NMAR: 19 dead ends without turning-area evidence",
     "QRWN: 82 listed, DEP-05 / DEP-06 quoted"
    ]
+  },
+  {
+   "id": "TH1-TH6-geometry-synthetic",
+   "query": "Run phase C1 (plan geometry) on the synthetic setting-out tables of tests/test_revh_build.py.",
+   "files": [
+    "tests/test_revh_build.py (generated in the test)"
+   ],
+   "expected": [
+    "RD-A C-1 R 40 m below the local 50 m minimum; RA-1 not checked; RD-X not judged (no class)",
+    "RD-D arc 14.7 m below 20 m at 30 km/h; 20 km/h not a key (not run)",
+    "RD-S R 100 m needs a spiral at 50 km/h only; RD-T with spirals passes",
+    "T junction at 60° listed; crossroads with two names on the through line passes (one arm)",
+    "spacings 30 m and 120 m on a local road listed as Observation (advisory)"
+   ]
+  },
+  {
+   "id": "TH7-NMAR-30pct-geometry",
+   "query": "Check the drawn plan geometry of the Namar 30 % roads (ROD-017 ... 037).",
+   "files": [
+    "setting-out sheets 60000-001 ... 003, hierarchy plan 00003, typical sections 30000, design report (local only)"
+   ],
+   "expected": [
+    "ROD-018 12 local curves and ROD-017 4 sub-collector curves below the minimum radius",
+    "ROD-019 5 local + 3 sub-collector arcs; ROD-020 7 (4 curves, 40 and 50 km/h); J047 61.2°",
+    "ROD-036 44 / 50 local and 15 / 16 collector pairs below the agreed spacing; 67 tangents, 3 reverse"
+   ]
   }
  ]
 }
