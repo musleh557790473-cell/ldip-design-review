@@ -215,7 +215,7 @@
   }
  },
  "c2": {
-  "status": "AGREED DI-1 ... DI-7 (owner 18 Oct 2026 12:48); SPC-0006 Rev I §4.13F. Values marked in `_impl` were set in the build (not named in the spec).",
+  "status": "AGREED DI-1 ... DI-7 (owner 18 Oct 2026 12:48); the build values listed in `_impl` AGREED (owner 18 Oct 2026 14:09); SPC-0006 Rev I §4.13F",
   "corner_search_m": 25.0,
   "corner_sweep_deg": [
    45,
