@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from c3_common import (angle_class, c3_params, fail_rec, gate, load_carrier_files, min_rotated_rect,  # noqa: E402
                        parse_file_args)
 from location_common import closed_polygons, plot_polygons, shapely_mods, xy  # noqa: E402
-from road_common import EXIT_OK, atomic_write_json, emit, main_guard, read_json, rules_index, source_of  # noqa: E402
+from road_common import (EXIT_OK, atomic_write_json, emit, main_guard, param, read_json, rules_index,  # noqa: E402
+                         source_of, tol)
 
 
 def marking_lines(ing, layers):
@@ -219,14 +220,20 @@ def main(argv=None):
                 commercial, note = commercial_frontage((centre.x, centre.y), plots, dlus_rows,
                                                        commercial_terms, row_half)
                 req = 6.0 if commercial else 4.0
+                p_w = param(rule, "width") or {"value": req, "tolerance": {"value": 0}}
+                # commercial overrides the general 4.0 m parameter when frontage is commercial
+                req_v = req
+                t_w = tol(p_w)
                 n_found += 1
-                ok = width + 1e-9 >= req
+                ok = width + t_w + 1e-9 >= req_v
                 handles = [c["handle"] for c in cl if c.get("handle")]
-                rec = fail_rec("ROD-055", "width", f"crosswalk at {junc['id']}", round(width, 3), req, "ge", "m",
+                rec = fail_rec("ROD-055", "width", f"crosswalk at {junc['id']}", round(width, 3), req_v, "ge", "m",
                                {**src, "source_type": "dwg_vector"}, handles=handles,
                                xy_pt=xy((centre.x, centre.y)),
-                               extract=f"crosswalk width {width:g} m along road ({note}; required {req:g} m)",
+                               extract=f"crosswalk width {width:g} m along road ({note}; required {req_v:g} m ± {t_w:g})",
                                result="pass" if ok else "fail", mode_tag="c3_crosswalk")
+                if t_w:
+                    rec["tolerance"] = t_w
                 (passed if ok else checks).append(rec)
                 # offset from nearest C2 corner return (near edge of crosswalk → tangent point along road)
                 if returns:
@@ -264,45 +271,55 @@ def main(argv=None):
                 not_run.append({"rule_id": "ROD-055", "phase": "C3",
                                 "reason": "no crosswalk (zebra bars / edge lines) near a junction"})
 
-        # ---- ROD-056
+        # ---- ROD-056: closed outline crossed by a crosswalk, or holding a refuge term
         rule, ph = gate(rules, skipped, "ROD-056", stage_map, a.stage)
         if rule is None:
             not_run.append({"rule_id": "ROD-056", "phase": "C3", "reason": ph})
         else:
             tier2_once = False
             plan_files = [f for f in files if f[0] in ("plan_geometry", "signing_marking_plan", "details")]
+            # rebuild crosswalk geometries for the "crossed by" test (§4.13G.8)
+            xwalk_geoms = []
+            for carrier, path, ing, src in [f for f in files if f[0] in ("signing_marking_plan", "plan_geometry")]:
+                for cl in group_zebras(marking_lines(ing, mark_layers), gap, g):
+                    geoms = [c["geom"] for c in cl]
+                    if len(geoms) == 1:
+                        xwalk_geoms.append(geoms[0])
+                    else:
+                        from shapely.ops import unary_union
+                        xwalk_geoms.append(unary_union(geoms))
             found = 0
+            p_w = param(rule, "width") or {"value": 2.0, "tolerance": {"value": 0}}
+            t_w = tol(p_w)
             for carrier, path, ing, src in plan_files:
                 for poly, layer, handle in closed_polygons(ing, []):
                     if poly.area <= 0 or poly.area >= 200:
                         continue
-                    # refuge term or crossed by a crosswalk cluster (simplified: layer/term)
                     blob = layer or ""
-                    is_refuge = bool(re.search(r"refuge|ped.*island", blob, re.I))
-                    # also accept any closed outline the test marks as REFUGE
                     texts = [t for t in (ing.get("content") or {}).get("texts", [])
-                             if t.get("insert") and poly.intersects(
-                                 __import__("shapely").geometry.Point(t["insert"][:2]))]
-                    if any(re.search(r"refuge", t.get("text", ""), re.I) for t in texts):
-                        is_refuge = True
-                    if not is_refuge and "REFUGE" not in blob.upper():
+                             if t.get("insert") and poly.intersects(g.Point(t["insert"][:2]))]
+                    has_term = bool(re.search(r"refuge|ped.*island", blob, re.I)) or any(
+                        re.search(r"refuge", t.get("text", ""), re.I) for t in texts)
+                    crossed = any(poly.intersects(xw) or poly.distance(xw) < 0.5 for xw in xwalk_geoms)
+                    if not has_term and not crossed:
                         continue
                     w, L, _ = min_rotated_rect(poly)
                     found += 1
-                    ok_w = w + 1e-9 >= 2.0
+                    ok_w = w + t_w + 1e-9 >= 2.0
                     ok_l = L + 1e-9 >= 10.0
+                    how = "term" if has_term else "crossed by crosswalk"
                     if not ok_w or not ok_l:
                         checks.append(fail_rec("ROD-056", "size", f"refuge {handle}", {"width": round(w, 3), "length": round(L, 3)},
                                                {"width": 2.0, "length": 10.0}, "ge", "m",
                                                {**src, "source_type": "dwg_vector"}, handles=[handle],
                                                xy_pt=xy((poly.centroid.x, poly.centroid.y)),
-                                               extract=f"refuge {w:g} × {L:g} m", mode_tag="c3_refuge"))
+                                               extract=f"refuge {w:g} × {L:g} m ({how})", mode_tag="c3_refuge"))
                     else:
                         passed.append(fail_rec("ROD-056", "size", f"refuge {handle}", {"width": round(w, 3), "length": round(L, 3)},
                                                {"width": 2.0, "length": 10.0}, "ge", "m",
                                                {**src, "source_type": "dwg_vector"}, handles=[handle],
                                                xy_pt=xy((poly.centroid.x, poly.centroid.y)),
-                                               extract=f"refuge {w:g} × {L:g} m", result="pass", mode_tag="c3_refuge"))
+                                               extract=f"refuge {w:g} × {L:g} m ({how})", result="pass", mode_tag="c3_refuge"))
                     if w + 1e-9 < 3.5 and not tier2_once:
                         tier2_once = True
                         checks.append(fail_rec("ROD-056", "tier2_width", f"refuge {handle} tier-2 width", round(w, 3),
@@ -311,7 +328,8 @@ def main(argv=None):
                                                extract=f"refuge width {w:g} m < tier-2 3.5 m (Observation once)",
                                                mode_tag="c3_refuge", note="tier-2 Observation once per submittal"))
             if not found:
-                not_run.append({"rule_id": "ROD-056", "phase": "C3", "reason": "no refuge island outline"})
+                not_run.append({"rule_id": "ROD-056", "phase": "C3",
+                                "reason": "no refuge island (term or crossed by a crosswalk)"})
             not_run.append({"rule_id": "ROD-056", "parameter": "gradient", "phase": "C3",
                             "reason": "gradient ≤ 2 % not run without a LandXML design surface (phase D)"})
 

@@ -217,8 +217,14 @@ def test_tj3_hump_placement(tmp_path):
         "c3_devices": [],
     })
     # rebuild devices from plan; inject grade via landxml hook
+    # LandXML design profile with 7 % grade on ROAD-A (real profile path, not only hump_grades hook)
     lx = tmp_path / "lx.json"
-    lx.write_text(json.dumps({"path": "x.xml", "sha256": "a" * 64, "hump_grades": [{"id": "CD001", "grade_pct": 7.0}]}))
+    lx.write_text(json.dumps({
+        "source": {"path": "x.xml", "sha256": "a" * 64, "file_type": "xml"},
+        "content": {"alignments": [{"name": "ROAD-A (15m R.O.W)", "elements": []}],
+                    "profiles": [{"kind": "design", "name": "FG", "alignment": "ROAD-A (15m R.O.W)",
+                                  "pvis": [{"sta": 0, "elev": 10}, {"sta": 200, "elev": 10 - 14}],
+                                  "tangents": [{"sta_from": 0, "sta_to": 200, "grade_pct": -7.0}]}]}}))
     crit = tmp_path / "crit.json"
     crit.write_text(json.dumps({"rows": [
         {"criterion": "design_speed", "by_class": {"local_access": {"values": [30]}}},
@@ -236,7 +242,9 @@ def test_tj3_hump_placement(tmp_path):
     assert any(abs(c["observed"] - 40) < 0.1 for c in space_fail)
     assert any(abs(c["observed"] - 60) < 0.1 for c in space_pass)
     assert any(c["parameter"] == "tier2_on_curve" for c in cal["checks"])
-    assert any(c["parameter"] == "tier2_grade" and c["observed"] == 7.0 for c in cal["checks"])
+    assert any(c["parameter"] == "tier2_grade" and float(c["observed"]) >= 7.0 - 1e-6 for c in cal["checks"])
+    assert all("hook" not in (c.get("evidence") or {}).get("extract", "") for c in cal["checks"]
+               if c.get("parameter") == "tier2_grade")
 
 
 def test_tj4_mini_rb_and_chicane(tmp_path):
@@ -249,22 +257,29 @@ def test_tj4_mini_rb_and_chicane(tmp_path):
     r24 = 12.0
     circ24 = [[660050 + r24 * math.cos(a), 2750100 + r24 * math.sin(a)]
               for a in [i * math.pi / 8 for i in range(17)]]
-    # network RB ring (should be ignored) at 660100, 2750120
     r_net = 20.0
     circ_net = [[660100 + r_net * math.cos(a), 2750120 + r_net * math.sin(a)]
                 for a in [i * math.pi / 8 for i in range(17)]]
-    # chicane curbs: left shift 0.7, right none
-    curb_l = [[660160 + 0.7, 2750000 + y] for y in range(-40, 41)]
-    # bend for shift: straight reference 20-40m away, offset in middle
-    curb_l = ([[660160, 2749960], [660160, 2749980], [660160.7, 2750000], [660160, 2750020], [660160, 2750040]])
-    curb_r = ([[660140, 2749960], [660140, 2750040]])  # straight — shift ~0
-    plan = dwg(tmp_path, "PL", texts=[("CHICANE", 660150, 2750000, "TC")],
+
+    def curb_with_shift(y0, shift, x_dev=660150):
+        """Open curb polyline: straight at y0 for |dx| in 20–40 m; offset `shift` within ±20 m of device."""
+        pts = []
+        for x in range(x_dev - 45, x_dev + 46):
+            if abs(x - x_dev) <= 20:
+                pts.append([x, y0 + shift])
+            else:
+                pts.append([x, y0])
+        return pts
+
+    # measured chicanes: 0.7 pass, 1.2 fail; right side absent → not run for that side
+    curb_ok = curb_with_shift(2750008.0, 0.7, 660150)
+    curb_hi = curb_with_shift(2750008.0, 1.2, 660050)
+    plan = dwg(tmp_path, "PL", texts=[("CHICANE", 660150, 2750000, "TC"), ("CHICANE", 660050, 2750000, "TC")],
                polys=[("CURB_MARK", circ16), ("CURB_MARK", circ24), ("CURB_MARK", circ_net),
-                      ("CURB_L", curb_l), ("CURB_R", curb_r)])
-    # open curb polys (not closed) — rewrite as open by patching
+                      ("CURB_L", curb_ok), ("CURB_L2", curb_hi)])
     ing = load(plan)
     for p in ing["content"]["polylines"]:
-        if p["layer"] in ("CURB_L", "CURB_R"):
+        if p["layer"].startswith("CURB_L"):
             p["closed"] = False
             p["n_vertices"] = len(p["vertices"])
     plan.write_text(json.dumps(ing))
@@ -281,11 +296,8 @@ def test_tj4_mini_rb_and_chicane(tmp_path):
                 "geometry": [[660000, 2750000], [660200, 2750000]],
             }
         },
-        "c3_devices": [{"id": "CD099", "xy": [660150.0, 2750000.0], "type": "chicane", "labels": ["CHICANE"],
-                        "chicane_shift_m": 0.7, "hits": 1, "handles": []},
-                       {"id": "CD098", "xy": [660170.0, 2750000.0], "type": "chicane", "labels": ["CHICANE"],
-                        "chicane_shift_m": 1.2, "hits": 1, "handles": []},
-                       {"id": "CD097", "xy": [660180.0, 2750000.0], "type": "chicane", "labels": ["CHICANE"],
+        # fallback-only device (no curb nearby) → pre-measured 0.3 listed
+        "c3_devices": [{"id": "CD097", "xy": [660190.0, 2750200.0], "type": "chicane", "labels": ["CHICANE"],
                         "chicane_shift_m": 0.3, "hits": 1, "handles": []}],
     })
     (tmp_path / "class.json").write_text(json.dumps({
@@ -300,9 +312,15 @@ def test_tj4_mini_rb_and_chicane(tmp_path):
             if c.get("parameter") == "diameter"]
     assert any(abs(o - 16) < 1.5 and r == "pass" for o, r in dias)
     assert any(abs(o - 24) < 1.5 and r == "fail" for o, r in dias)
-    shifts = {round(c["observed"], 1): c["result"] for c in cal["checks"] + cal["passed"]
-              if c.get("parameter") == "chicane_shift"}
-    assert shifts.get(0.7) == "pass" and shifts.get(1.2) == "fail" and shifts.get(0.3) == "fail"
+    shift_recs = [c for c in cal["checks"] + cal["passed"] if c.get("parameter") == "chicane_shift"]
+    # measured path (not only pre-measured fallback)
+    assert any(abs(c["observed"] - 0.7) < 0.15 and c["result"] == "pass"
+               and "pre-measured" not in c["evidence"]["extract"] for c in shift_recs)
+    assert any(abs(c["observed"] - 1.2) < 0.15 and c["result"] == "fail"
+               and "pre-measured" not in c["evidence"]["extract"] for c in shift_recs)
+    assert any(abs(c["observed"] - 0.3) < 0.05 and c["result"] == "fail" for c in shift_recs)
+    assert any("no curb line work" in (n.get("reason") or "") for n in cal["not_run"]
+               if n.get("parameter") == "chicane_shift")
 
 
 def test_tj5_crosswalks(tmp_path):

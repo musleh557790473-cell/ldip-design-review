@@ -63,7 +63,11 @@ def bands_of(ing):
         labels = [(label_kind(t["text"]), t) for t in inside if label_kind(t["text"])]
         parsed = []
         for t in inside:
-            for p in parse_len_height(t["text"]):
+            raw = t["text"].strip()
+            got = parse_len_height(raw)
+            if not got and re.search(r"\d", raw) and not label_kind(raw) and title_kind(raw) == (None, None):
+                unused.append({"raw": raw, "handle": t.get("handle"), "reason": "unit undecided"})
+            for p in got:
                 parsed.append((t, p))
         for t, p in parsed:
             kind = p["kind"]
@@ -91,7 +95,7 @@ def bands_of(ing):
             lengths[1]["kind"] = "flat_top"
         bands.append({"rule_id": tit["rule_id"], "kind": tit["kind"], "title": tit["text"]["text"].strip(),
                       "title_handle": tit["text"].get("handle"), "xy": [tit["x"], tit["y"]],
-                      "values": values, "unused_units": unused})
+                      "values": values, "unused_units": unused})  # §4.13G.4 item 3: undecided units listed
     return bands
 
 
