@@ -99,7 +99,7 @@
   - curb arcs and islands → `dwg_vector`, with the handles and position;
   - the design vehicle → `pdf_vector_text`, with the criteria cell (crop).
 - **Findings** (`build_candidates.py` 0.6.0): one finding per rule, parameter and class or junction type, with the count and up to ten items.
-- **Severity:** the advisory splitter-island length is Observation.
+- **Severity:** the advisory splitter-island length is Observation. A check of an advisory rule is Observation (ROD-040 in rules_v7).
 
 ## 7. Limits
 

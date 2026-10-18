@@ -32,14 +32,15 @@ or on two curb layers (same centre and mid point, radius within 0.5 m) counts on
   of each corner (10 m) and driveway return (5 m); obstructions are blocks and line work of the landscape and
   plan carriers whose layer or block name holds an obstruction term.
 - ROD-041 entry deflection is not run (measuring method [GAP] R-I1).
-Class from drawings caps at Probable (DH-4); inactive rules are listed as not run.
+Class from drawings caps at Probable (DH-4); a check of an advisory rule carries severity_override Observation
+(as DH-7; ROD-040 in rules_v7); inactive rules are listed as not run.
 
 Usage: python check_layout.py --network <network.json> --class <road_class.json> --rules <rules_RDE.json>
            --stage "<stage name>" --file plan_geometry=<x.dwg.json> [...] [--file landscape_plan=<x.dwg.json>]
            [--criteria <criteria.json>] --out <layout_checks.json>
 Exit: 0 written · 2 input error · 3 shapely missing. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import math
@@ -168,6 +169,8 @@ def main(argv=None):
                 c["link_cap"] = cap                      # class from drawings (DH-4)
             if extra:
                 c.update(extra)
+            if rules[rid].get("state") == "advisory":
+                c["severity_override"] = "Observation"          # advisory rule (as DH-7; ROD-040 in rules_v7)
             checks.append(c)
 
         corner_max = float(C2.get("corner_r_max_m", 30.0))

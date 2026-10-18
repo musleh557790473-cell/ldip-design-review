@@ -103,7 +103,7 @@ def rule(rid, title, params, appl=None, severity="Minor", issue="design_error"):
     return r
 
 
-def rules_file(tmp, skip=()):
+def rules_file(tmp, skip=(), advisory=()):
     W = {"value": 0.05}
     rs = [rule("ROD-032", "Corner (curb return) radius at intersections",
                {"corner_radius": P({"sub_collector": [12, 15], "local_access": [6, 9]}, "m", keyed_by=["street_class"]),
@@ -124,6 +124,9 @@ def rules_file(tmp, skip=()):
           rule("ROD-043", "Roundabout apron, circulatory crossfall and drainage",
                {"apron_width": P([1.5, 2.0], "m", tolerance=W), "circulatory_crossfall": P(2.0, "%")})]
     keep = [r for r in rs if r["rule_id"] not in skip]
+    for r in keep:
+        if r["rule_id"] in advisory:
+            r["state"] = "advisory"
     return put(tmp / "rules_RDE.json", {"agent": "RDE", "rulebook_version": "v99", "rules": keep,
                                         "rules_skipped": [{"rule_id": r, "reason": "inactive"} for r in skip],
                                         "stage_map": {PD: {"phase": "PD"}, DD: {"phase": "DD"}}})
@@ -372,3 +375,11 @@ def test_ti7_determinism(tmp_path):
     layout(tmp_path, w, crit=criteria(tmp_path), out="b.json")
     a, b = (tmp_path / "a.json").read_bytes(), (tmp_path / "b.json").read_bytes()
     assert a == b and load(tmp_path / "a.json")["counts"]["checks"] > 5
+
+
+def test_ti4_entry_width_advisory(tmp_path):
+    """rules_v7 (owner, 18 Oct 2026 14:23): ROD-040 advisory -> its checks are Observation; other rules unchanged."""
+    d = layout(tmp_path, rb_world(tmp_path, entry=6.5), rules=rules_file(tmp_path, advisory=("ROD-040",)))
+    ew = checks(d, "ROD-040")
+    assert ew and all(c["severity_override"] == "Observation" for c in ew)
+    assert all("severity_override" not in c for c in checks(d, "ROD-042", "length_min"))
