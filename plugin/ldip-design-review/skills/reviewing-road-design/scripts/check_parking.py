@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from c3_common import (ACCESSIBLE_DEFAULT, angle_class, c3_params, fail_rec, gate, load_carrier_files,  # noqa: E402
                        min_rotated_rect, parse_file_args, src25_required)
 from location_common import closed_polygons, plot_polygons, shapely_mods, xy  # noqa: E402
-from road_common import EXIT_OK, atomic_write_json, emit, main_guard, read_json, rules_index, term_hits  # noqa: E402
+from road_common import (EXIT_OK, atomic_write_json, emit, main_guard, param, read_json, rules_index,  # noqa: E402
+                         term_hits, tol)
 
 SIZES = {
     "parallel": {"rule": "ROD-059", "w": 2.5, "L": 6.0, "tier2_L": 6.5},
@@ -174,16 +175,17 @@ def main(argv=None):
                 if rule is None:
                     not_run.append({"rule_id": "ROD-059", "phase": "C3", "reason": ph})
                     continue
-                ok = abs(w - 2.5) <= 1e-9 and L + 1e-9 >= 6.0
-                # allow width tolerance via width_m param — none → exact / use small eps for float
-                ok = (abs(w - 2.5) <= 1e-6 or w + 1e-9 >= 2.5) and L + 1e-9 >= 6.0
-                # TJ7: 2.5×6.0 pass, 2.3×5.5 listed — so width must be ≥ 2.5 (or eq with tol 0)
-                ok = w + 1e-9 >= 2.5 and L + 1e-9 >= 6.0
+                p_w = param(rule, "width") or param(rule, "width_min") or {"value": 2.5, "tolerance": {"value": 0}}
+                req_w = float(p_w["value"])
+                t_w = tol(p_w)
+                # width ± width_m (eq with tolerance); length ≥ 6.0
+                ok = abs(w - req_w) <= t_w + 1e-9 and L + 1e-9 >= 6.0
                 rec = fail_rec("ROD-059", "size", f"parallel bay {bay.get('handle') or bay.get('id')}",
-                               {"width": round(w, 3), "length": round(L, 3)}, {"width": 2.5, "length": 6.0},
-                               "ge", "m", src, handles=[bay.get("handle")], xy_pt=bay["xy"],
-                               extract=f"parallel bay {w:g}×{L:g} m", result="pass" if ok else "fail",
-                               mode_tag="c3_parking")
+                               {"width": round(w, 3), "length": round(L, 3)}, {"width": req_w, "length": 6.0},
+                               "eq", "m", src, handles=[bay.get("handle")], xy_pt=bay["xy"],
+                               extract=f"parallel bay {w:g}×{L:g} m (width ± {t_w:g})",
+                               result="pass" if ok else "fail", mode_tag="c3_parking")
+                rec["tolerance"] = t_w
                 (passed if ok else checks).append(rec)
                 if L + 1e-9 < 6.5 and not tier2_len_once:
                     tier2_len_once = True
@@ -233,6 +235,14 @@ def main(argv=None):
                                mode_tag="c3_parking")
                 (passed if ok else checks).append(rec)
 
+        if not bays:
+            for rid in ("ROD-059", "ROD-060", "ROD-061"):
+                rule, ph = gate(rules, skipped, rid, stage_map, a.stage)
+                if rule is None:
+                    not_run.append({"rule_id": rid, "phase": "C3", "reason": ph})
+                else:
+                    not_run.append({"rule_id": rid, "phase": "C3", "reason": "no parking bay element on the plan"})
+
         # ROD-062 counts per parking area
         rule, ph = gate(rules, skipped, "ROD-062", stage_map, a.stage)
         if rule is None:
@@ -245,6 +255,9 @@ def main(argv=None):
                     areas = [{"id": "PA001", "total": len(bays),
                               "accessible": sum(1 for b in bays if b.get("accessible")),
                               "land_use": "residential", "xy": bays[0]["xy"]}]
+            if not areas:
+                not_run.append({"rule_id": "ROD-062", "phase": "C3",
+                                "reason": "no parking area / no bay element"})
             for area in areas:
                 total = int(area["total"])
                 acc = int(area["accessible"])

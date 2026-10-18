@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from c3_common import (c3_params, fail_rec, gate, load_carrier_files, merge_calming, nearest_road,  # noqa: E402
-                       parse_file_args, phase_of)
+from c3_common import (c3_params, fail_rec, gate, grade_at_station, load_carrier_files, merge_calming,  # noqa: E402
+                       nearest_road, parse_file_args, phase_of)
 from location_common import closed_polygons, shapely_mods, xy  # noqa: E402
 from road_common import (EXIT_OK, RoadError, applies, atomic_write_json, emit, main_guard, param,  # noqa: E402
                          read_json, rules_index, source_of, tol)
@@ -156,7 +156,7 @@ def placement_checks(devices, net, class_doc, rules, skipped, stage_map, stage, 
                     elif isinstance(cell, (int, float)):
                         posted[cls] = cell
 
-    # chainage per road
+    # chainage per road; posted speed ≤ 50 km/h (§4.13G.5)
     by_road = {}
     for d in humps:
         pt = g.Point(d["xy"])
@@ -169,6 +169,19 @@ def placement_checks(devices, net, class_doc, rules, skipped, stage_map, stage, 
         if cls and cls != "local_access":
             not_run.append({"rule_id": "ROD-044", "phase": "C3",
                             "reason": f"{d['id']}: placement only on local roads (class {cls})"})
+            continue
+        ps = posted.get(cls) if cls else None
+        if ps is None and criteria:
+            for row in (criteria.get("rows") or []):
+                if row.get("criterion") == "posted_speed":
+                    cell = (row.get("by_class") or {}).get(cls or "local_access")
+                    if isinstance(cell, dict) and cell.get("values"):
+                        ps = cell["values"][0]
+                    elif isinstance(cell, (int, float)):
+                        ps = cell
+        if ps is not None and float(ps) > 50 + 1e-9:
+            not_run.append({"rule_id": "ROD-044", "phase": "C3",
+                            "reason": f"{d['id']}: posted speed {ps:g} km/h > 50 — placement not applicable"})
             continue
         by_road.setdefault(road, []).append((ch, d, cls))
 
@@ -246,17 +259,51 @@ def placement_checks(devices, net, class_doc, rules, skipped, stage_map, stage, 
             else:
                 passed.append({"rule_id": "ROD-044", "parameter": "tier2_on_curve", "subject": d["id"], "result": "pass"})
 
-    # grade from LandXML profile samples if provided as landxml content helper file
+    # grade from LandXML design profiles at hump chainage (§4.13G.5); optional hump_grades test hook
     if landxml:
-        grades = landxml.get("hump_grades") or []  # test hook: [{id, grade_pct}]
-        for item in grades:
-            if float(item.get("grade_pct", 0)) > 6 + 1e-9:
-                d = next((x for x in humps if x["id"] == item.get("id")), humps[0])
-                checks.append(fail_rec("ROD-044", "tier2_grade", f"{d['id']} grade", item["grade_pct"], 6, "le", "%",
-                                       {"source_type": "landxml", "path": landxml.get("path"),
-                                        "sha256": landxml.get("sha256"), "xy": d["xy"]},
-                                       xy_pt=d["xy"], extract=f"design-profile grade {item['grade_pct']} % > 6 %",
-                                       mode_tag="c3_placement", note="advisory placement (Observation)"))
+        src_lx = {"source_type": "landxml", "path": (landxml.get("source") or landxml).get("path")
+                  if isinstance(landxml.get("source"), dict) else landxml.get("path"),
+                  "sha256": (landxml.get("source") or landxml).get("sha256")
+                  if isinstance(landxml.get("source"), dict) else landxml.get("sha256")}
+        content = landxml.get("content") or {}
+        graded = set()
+        for prof in content.get("profiles") or []:
+            if prof.get("kind") != "design":
+                continue
+            aname = prof.get("alignment") or ""
+            for road, items in by_road.items():
+                if aname != road and road.split("(")[0].strip() not in aname and aname not in road:
+                    continue
+                for ch, d, cls in items:
+                    g_pct = grade_at_station(prof, ch)
+                    if g_pct is None:
+                        continue
+                    graded.add(d["id"])
+                    if g_pct > 6 + 1e-9:
+                        checks.append(fail_rec(
+                            "ROD-044", "tier2_grade", f"{d['id']} grade", round(g_pct, 3), 6, "le", "%",
+                            {**src_lx, "xy": d["xy"]}, xy_pt=d["xy"],
+                            extract=f"design-profile grade {g_pct:g} % at sta {ch:.3f} on {aname} > 6 %",
+                            mode_tag="c3_placement", note="advisory placement (Observation)"))
+                    else:
+                        passed.append({"rule_id": "ROD-044", "parameter": "tier2_grade", "subject": d["id"],
+                                       "observed": g_pct, "result": "pass"})
+        # legacy / synthetic hook when no profile content
+        for item in landxml.get("hump_grades") or []:
+            d = next((x for x in humps if x["id"] == item.get("id")), None)
+            if d is None or d["id"] in graded:
+                continue
+            g_pct = float(item.get("grade_pct", 0))
+            graded.add(d["id"])
+            if g_pct > 6 + 1e-9:
+                checks.append(fail_rec(
+                    "ROD-044", "tier2_grade", f"{d['id']} grade", g_pct, 6, "le", "%",
+                    {**src_lx, "xy": d["xy"]}, xy_pt=d["xy"],
+                    extract=f"design-profile grade {g_pct} % > 6 % (hook)",
+                    mode_tag="c3_placement", note="advisory placement (Observation)"))
+        if not graded and not (content.get("profiles") or landxml.get("hump_grades")):
+            not_run.append({"rule_id": "ROD-044", "parameter": "tier2_grade", "phase": "C3",
+                            "reason": "LandXML given but no design profile grade at hump stations"})
     else:
         not_run.append({"rule_id": "ROD-044", "parameter": "tier2_grade", "phase": "C3",
                         "reason": "grade check needs LandXML design profile (DD)"})
@@ -347,50 +394,33 @@ def chicane_checks(devices, files, net, rules, skipped, stage_map, stage, g):
             not_run.append({"rule_id": "ROD-047", "phase": "C3", "reason": f"{d['id']}: road has no geometry"})
             continue
         centre = g.LineString([tuple(p[:2]) for p in road_geom])
-        # sides: left/right of centreline direction at device
+        measured_any = False
+        # sides: left/right of centreline — measure curb lateral shift first (DJ-5)
         for side_name, sign in (("left", 1), ("right", -1)):
-            # curb lines near device
             near = [(ln, src, h, ly) for ln, src, h, ly in curb_lines if ln.distance(pt) < 40]
             side_lines = []
             for ln, src, h, ly in near:
-                # side by cross product of centre bearing vs vector to curb midpoint
                 mid = ln.interpolate(0.5, normalized=True)
                 proj = centre.project(mid)
-                if proj <= 0 or proj >= centre.length:
-                    bearing_p = centre.interpolate(min(centre.length, max(0, proj)))
-                else:
-                    bearing_p = centre.interpolate(proj)
-                # determine side using a small step along centre
-                a = centre.interpolate(max(0, proj - 1))
+                bearing_p = centre.interpolate(min(centre.length, max(0.0, proj)))
+                a = centre.interpolate(max(0.0, proj - 1))
                 b = centre.interpolate(min(centre.length, proj + 1))
                 vx, vy = b.x - a.x, b.y - a.y
                 wx, wy = mid.x - bearing_p.x, mid.y - bearing_p.y
-                cross = vx * wy - vy * wx
-                if cross * sign > 0:
+                if (vx * wy - vy * wx) * sign > 0:
                     side_lines.append((ln, src, h, ly))
-            # synthetic override (TJ4): one result per device when shift is pre-measured
-            if d.get("chicane_shift_m") is not None:
-                if side_name == "right":
-                    continue  # report once per device
-                shift = float(d["chicane_shift_m"])
-                src = d.get("src") or {"source_type": "dwg_vector"}
-                ok = 0.6 - 1e-9 <= shift <= 0.8 + 1e-9
-                rec = fail_rec("ROD-047", "chicane_shift", f"{d['id']}", shift, "0.6–0.8", "in", "m",
-                               {**src, "source_type": "dwg_vector"}, handles=d.get("handles"), xy_pt=d["xy"],
-                               extract=f"chicane lateral shift {shift:g} m",
-                               result="pass" if ok else "fail", mode_tag="c3_chicane")
-                (passed if ok else checks).append(rec)
-                continue
             if not side_lines:
                 not_run.append({"rule_id": "ROD-047", "parameter": "chicane_shift", "phase": "C3",
                                 "reason": f"{d['id']} {side_name}: no curb line work"})
                 continue
-            # lateral shift: compare curb within ±20 m of device to straight through curb points 20–40 m before/after
             ln, src, h, ly = min(side_lines, key=lambda t: t[0].distance(pt))
             samples = []
-            for s in range(0, int(ln.length) + 1, 1):
+            step = max(0.5, ln.length / 80)
+            s = 0.0
+            while s <= ln.length + 1e-9:
                 q = ln.interpolate(s)
                 samples.append((centre.project(q), q))
+                s += step
             samples.sort()
             ch0 = centre.project(pt)
             before = [q for c, q in samples if ch0 - 40 <= c <= ch0 - 20]
@@ -404,10 +434,21 @@ def chicane_checks(devices, files, net, rules, skipped, stage_map, stage, g):
             a0 = g.Point(sum(p.x for p in after) / len(after), sum(p.y for p in after) / len(after))
             straight = g.LineString([(b0.x, b0.y), (a0.x, a0.y)])
             shift = max(straight.distance(q) for q in mid)
+            measured_any = True
             ok = 0.6 - 1e-9 <= shift <= 0.8 + 1e-9
             rec = fail_rec("ROD-047", "chicane_shift", f"{d['id']} {side_name}", round(shift, 3), "0.6–0.8", "in", "m",
                            {**src, "source_type": "dwg_vector"}, handles=[h], xy_pt=d["xy"],
                            extract=f"chicane lateral shift {shift:g} m ({side_name}, layer {ly})",
+                           result="pass" if ok else "fail", mode_tag="c3_chicane")
+            (passed if ok else checks).append(rec)
+        # fallback only when curb measurement produced no side result (synthetic / incomplete linework)
+        if not measured_any and d.get("chicane_shift_m") is not None:
+            shift = float(d["chicane_shift_m"])
+            src = d.get("src") or {"source_type": "dwg_vector"}
+            ok = 0.6 - 1e-9 <= shift <= 0.8 + 1e-9
+            rec = fail_rec("ROD-047", "chicane_shift", f"{d['id']}", shift, "0.6–0.8", "in", "m",
+                           {**src, "source_type": "dwg_vector"}, handles=d.get("handles"), xy_pt=d["xy"],
+                           extract=f"chicane lateral shift {shift:g} m (no measurable curb; pre-measured)",
                            result="pass" if ok else "fail", mode_tag="c3_chicane")
             (passed if ok else checks).append(rec)
     return checks, not_run, passed

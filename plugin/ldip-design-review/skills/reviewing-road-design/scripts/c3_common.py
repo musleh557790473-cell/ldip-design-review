@@ -231,6 +231,24 @@ def angle_class(ang_to_curb, classes):
     return "other"
 
 
+def grade_at_station(prof, sta):
+    """Absolute design-profile grade (%) at an alignment station from tangents or PVI slopes."""
+    for t in prof.get("tangents") or []:
+        a, b = float(t.get("sta_from", 0)), float(t.get("sta_to", 0))
+        lo, hi = (a, b) if a <= b else (b, a)
+        if lo - 1e-6 <= float(sta) <= hi + 1e-6 and t.get("grade_pct") is not None:
+            return abs(float(t["grade_pct"]))
+    pvis = sorted([p for p in (prof.get("pvis") or []) if p.get("sta") is not None], key=lambda p: p["sta"])
+    for i in range(len(pvis) - 1):
+        a, b = pvis[i], pvis[i + 1]
+        if a["sta"] - 1e-6 <= float(sta) <= b["sta"] + 1e-6:
+            ds = b["sta"] - a["sta"]
+            if abs(ds) < 1e-9:
+                continue
+            return abs((float(b["elev"]) - float(a["elev"])) / ds * 100.0)
+    return None
+
+
 def parse_len_height(text):
     """Return list of {kind_guess, value, unit, raw} from a detail value string."""
     t = text.strip()
