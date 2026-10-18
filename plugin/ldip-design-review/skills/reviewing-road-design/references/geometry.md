@@ -66,7 +66,7 @@ it is listed in `not_run`. Without a stated speed, the ER minimum alone is used.
   - junction checks → `script_output`, with the junction position;
   - ROD-037 → `landxml`.
 - **Severity:** a check of an **advisory** rule carries `severity_override` Observation (DH-7; ROD-036 in rules_v6).
-- **Findings** (`build_candidates.py` 0.5.0) are grouped as follows:
+- **Findings** (`build_candidates.py` 0.5.0 and later) are grouped as follows:
   - ROD-019 / 020 (speed-keyed): one finding per rule and class;
   - ROD-017 / 018 drawn curves: one finding per rule;
   - others: one finding per rule, parameter and class.

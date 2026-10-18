@@ -20,13 +20,18 @@ location. The version is the skill version (agent_versions).
 0.5.0 (SPC-0006 Rev H §4.13E, DH-1 ... DH-10): takes geometry_checks.json (check_geometry.py, phase C1); a check
 may carry `severity_override` (Observation for an advisory rule, DH-7); the drawn-curve checks of ROD-017 / 018
 carry `mode_tag` drawn_curves, so they form their own finding apart from the phase-A stated-criteria one (DH-2).
+0.6.0 (SPC-0006 Rev I §4.13F, DI-1 ... DI-10): takes layout_checks.json (check_layout.py, phase C2: corner returns
+and design vehicle, roundabout ICD / entry width / splitter islands / apron, DD driveways and sight triangles)
+unchanged: one finding per (rule, parameter, class or junction type); the DD absences carry `status_override`
+Missing information and `issue_type` missing_information; the advisory splitter-island length carries
+`severity_override` Observation.
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import argparse
 import json

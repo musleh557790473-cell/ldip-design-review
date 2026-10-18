@@ -9,15 +9,17 @@ description: >-
   the presence of required road elements (sidewalks, crossings, ramps,
   markings, signs, parking lanes and others), the drawn plan geometry of
   the setting-out tables (curve radii and lengths, spirals, junction
-  angles and spacing, grade near junctions), and raises missing road
-  information by design stage. Use for any LDIP road geometry, road
+  angles and spacing, grade near junctions), junction and roundabout
+  layout from the curb line work (corner radii, design vehicle,
+  roundabout diameter, entry width, splitter islands, apron), and raises
+  missing road information by design stage. Use for any LDIP road geometry, road
   design-criteria or missing road element check.
 metadata:
-  version: "0.5.0"
-  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev H §4.13E (phase C1); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
+  version: "0.6.0"
+  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev H §4.13E (phase C1), Rev I §4.13F (phase C2, K25); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
 ---
 
-# Reviewing road design (phases A, B1, B2 and C1)
+# Reviewing road design (phases A, B1, B2, C1 and C2)
 
 This skill compares what Parsons states and draws for its roads with the road rules of the approved
 rulebook and writes candidate findings (agent code `RDE`). It reads only ingestion files written by skills
@@ -38,8 +40,11 @@ presence rules per location (per road, junction, roundabout approach and dead en
 drawn alignment and junction geometry on the same network: curve radii (ROD-017 / 018, apart from the
 stated-criteria check of phase A), arc lengths (ROD-019), spirals (ROD-020), junction angles (ROD-035),
 junction spacing (ROD-036) and, at DD, the grade near junctions (ROD-037); tangents are listed as
-information. Junction and roundabout layout (C2), calming / crossings / parking (C3), details and reports
-(D) are later phases.
+information. Phase C2 checks junction and roundabout layout from the curb line work of the plan: corner
+(curb-return) radii by junction class and the stated design vehicle (ROD-032), roundabout inscribed
+diameter (ROD-039), entry width and splitter islands where islands are drawn (ROD-040, 042) and the apron
+(ROD-043); at DD also driveway returns (ROD-033) and sight triangles (ROD-034). ROD-041 (entry deflection)
+is not run. Calming / crossings / parking (C3) and details and reports (D) are later phases.
 
 Packages: Python 3.11+, `jsonschema`, `pypdfium2` and `Pillow` (evidence crops, as skill 2); phase B2 also
 `shapely`, `numpy` and `scipy`.
@@ -109,9 +114,14 @@ LandXML `<X>.xml.json`.
 5c. **Plan geometry (phase C1)** — on the same network and position source as 5a:
    `python "<SK>/check_geometry.py" --setout "<EV>/setout.json" --network "<EV>/network.json" --class "<EV>/road_class.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --criteria "<EV>/criteria.json" --cross-check "<EV>/cross_check.json" --out "<EV>/geometry_checks.json"`
    At DD use `--setout "<EV>/landxml_network.json"` and add `--landxml "<X>.xml.json"` (design profiles, ROD-037).
-   Without setting-out tables or LandXML alignments, skip 5a–5c and report it in `gaps`.
+5d. **Junction and roundabout layout (phase C2)** — on the same network, with the plan DWGs (and their line
+   work) as `plan_geometry`; at DD also the landscape plan:
+   `python "<SK>/check_layout.py" --network "<EV>/network.json" --class "<EV>/road_class.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --file plan_geometry="<P>.dwg.json" [--file landscape_plan="<L>.dwg.json"] --criteria "<EV>/criteria.json" --out "<EV>/layout_checks.json"`
+   The curb layers of the site come from `references/road_class_params.json` (`curb_layers`); a site
+   without them gives "curb layer not set" — report it, do not name layers yourself.
+   Without setting-out tables or LandXML alignments, skip 5a–5d and report it in `gaps`.
 6. **Required inputs** — `python "<SK>/check_required.py" --stage "<stage name>" --rules "<EV>/rules_RDE.json" --register "<EV>/road_register.json" --criteria "<EV>/criteria.json" --sections "<EV>/section_checks.json" --landxml "<X>.xml.json" --out "<EV>/required_inputs.json"`
-7. **Findings** — `python "<SK>/build_candidates.py" --results "<EV>/criteria_checks.json" "<EV>/section_checks.json" "<EV>/alignment_checks.json" "<EV>/road_register.json" "<EV>/required_inputs.json" "<EV>/presence_checks.json" "<EV>/cross_check.json" "<EV>/road_class.json" "<EV>/location_checks.json" "<EV>/geometry_checks.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
+7. **Findings** — `python "<SK>/build_candidates.py" --results "<EV>/criteria_checks.json" "<EV>/section_checks.json" "<EV>/alignment_checks.json" "<EV>/road_register.json" "<EV>/required_inputs.json" "<EV>/presence_checks.json" "<EV>/cross_check.json" "<EV>/road_class.json" "<EV>/location_checks.json" "<EV>/geometry_checks.json" "<EV>/layout_checks.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
    (list only the result files that exist).
 8. **Validate** — `python "<SK>/validate_findings.py" --findings "<EV>/candidates.json" --rules "<EV>/rules_RDE.json"`
    Exit 4 lists the problems; do not edit the file.
@@ -124,11 +134,13 @@ before use.
 `criteria.json`, `road_register.json`, `criteria_checks.json`, `section_checks.json`, `alignment_checks.json`,
 `required_inputs.json`, `presence.json`, `presence_checks.json`, `setout.json`, `network.json`,
 `cross_check.json`, `road_class.json`, `landxml_network.json`, `low_points.json`, `location_checks.json`,
-`geometry_checks.json` (with the tangent list), `candidates.json` and PNG crops of the PDF
+`geometry_checks.json` (with the tangent list), `layout_checks.json` (with the corner-radius histogram and
+the roundabout table), `candidates.json` and PNG crops of the PDF
 evidence. Every script prints one JSON line.
 Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4 schema failure.
 
 What each check reads, the class synonyms, how section values are assigned, status caps and the limits of
 phase A: `references/road_checks.md`. The presence terms, stage and condition logic of phase B1:
 `references/presence_terms.md`. The location register: `references/locations.md`. Phase C1 (arm rule, speeds,
-spacing, limits): `references/geometry.md`. The finding skeleton: `templates/finding.json`.
+spacing, limits): `references/geometry.md`. Phase C2 (arc fit, corners, roundabouts, limits):
+`references/layout.md`. The finding skeleton: `templates/finding.json`.

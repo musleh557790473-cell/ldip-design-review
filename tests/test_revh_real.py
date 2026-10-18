@@ -119,11 +119,13 @@ def test_th8_qrwn(tmp_path):
     net = load(tmp_path / "network.json")["counts"]
     assert (net["junctions"], net["roundabouts"], net["roundabout_approaches"]) == (329, 7, 26)
     cls = load(tmp_path / "class.json")["summary"]
-    assert cls["classes"] == {"local_access": 210, "sub_collector": 21} and cls["class_unknown"] == 9
+    # K25 (SPC-0006 Rev I §4.13F.6, build 18 Oct 2026): the QRWN typical sections are now read, so the 20 m local
+    # section maps the E roads (M6): 210 -> 219 local, 9 -> 0 unknown; ROD-036 local 307 / 358 -> 325 / 382
+    assert cls["classes"] == {"local_access": 219, "sub_collector": 21} and cls["class_unknown"] == 0
     assert len(fails(g, "ROD-018")) == 73 and min(c["observed"] for c in fails(g, "ROD-018")) == 13.0
     assert not fails(g, "ROD-017") and sum(1 for c in g["checks"] if c["rule_id"] == "ROD-017") == 17
     assert (len(fails(g, "ROD-019", "local_access")), len(fails(g, "ROD-019", "sub_collector"))) == (20, 4)
     f35 = sorted(c["observed"] for c in fails(g, "ROD-035"))
     assert len(f35) == 16 and f35[0] == 42.2
-    assert (len(fails(g, "ROD-036", "local_access")), len(fails(g, "ROD-036", "sub_collector"))) == (307, 64)
+    assert (len(fails(g, "ROD-036", "local_access")), len(fails(g, "ROD-036", "sub_collector"))) == (325, 64)
     assert g["counts"]["tangents"] == 335 and g["counts"]["reverse_tangents"] == 12

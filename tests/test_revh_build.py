@@ -220,7 +220,7 @@ def test_th2_arc_length_and_spirals(tmp_path):
     assert len(r20) == 1 and r20[0]["statement"].startswith("1 occurrence(s)") and r20[0]["proposed_status"] == "Probable"
     r17 = [x for x in f if x["reference"]["rule_id"] == "ROD-017"]
     assert len(r17) == 1 and r17[0]["severity"] == "Major" and "dwg" in r17[0]["location"]
-    assert r20[0]["agent_versions"]["reviewing-road-design"] == "0.5.0"
+    assert r20[0]["agent_versions"]["reviewing-road-design"] == "0.6.0"
     rc, o = run("validate_findings.py", "--findings", tmp_path / "cand.json", "--rules", tmp_path / "rules_RDE.json")
     assert rc == 0, o
 
