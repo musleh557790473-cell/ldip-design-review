@@ -10,6 +10,38 @@
   "cross_check_min_share": 0.95,
   "site_exit_reach_m": 50.0
  },
+ "c3": {
+  "status": "PROPOSED DJ-1…DJ-10 (DJ-5 AGREED); owner authorized session 27 build 18 Oct 2026",
+  "crosswalk_search_m": 30.0,
+  "zebra_gap_m": 1.0,
+  "mini_rb_max_d_m": 25.0,
+  "mini_rb_search_m": 15.0,
+  "bay_area_m2": [10, 40],
+  "angle_classes_deg": {
+   "parallel_max": 20,
+   "angle_lo": 45,
+   "angle_hi": 75,
+   "perp_min": 75
+  },
+  "commercial_land_uses": [
+   "commercial",
+   "retail",
+   "shop",
+   "mixed.?use"
+  ],
+  "detail_terms": {
+   "speed_hump": ["speed\\s+humps?"],
+   "speed_table": ["speed\\s+tables?", "raised\\s+crossings?", "raised\\s+crosswalks?"],
+   "raised_intersection": ["raised\\s+intersections?"]
+  },
+  "accessible_terms": [
+   "wheelchair",
+   "\\bisa\\b",
+   "accessible",
+   "disabled",
+   "handicap"
+  ]
+ },
  "b2": {
   "status": "AGREED DF-6 (owner 15 Oct 2026 23:58); tuned in the build on synthetic data",
   "radius_junction_m": 25.0,

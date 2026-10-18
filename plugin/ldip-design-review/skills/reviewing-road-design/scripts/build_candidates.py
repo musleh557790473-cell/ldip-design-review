@@ -25,13 +25,15 @@ and design vehicle, roundabout ICD / entry width / splitter islands / apron, DD 
 unchanged: one finding per (rule, parameter, class or junction type); the DD absences carry `status_override`
 Missing information and `issue_type` missing_information; the advisory splitter-island length carries
 `severity_override` Observation.
+0.7.0 (SPC-0006 Rev J §4.13G): also takes calming_checks.json, pedestrian_checks.json and parking_checks.json
+(phase C3). Advisory / tier-2 parameters keep Observation severity.
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 import argparse
 import json
