@@ -14,12 +14,18 @@ finding at Probable (D10-3). A value equal to a dimension measurement of the dra
 Rules: ROD-002 / 003 / 004 (ROW), 010 / 011 / 012 (lanes, incl. tier-2 observation), 014 / 016
 (median), 021 (crossfall), 048 (sidewalk: land use not known -> only the lowest required width is
 enforced; a width between the lowest and the highest is not run), 057 (curb height from
-"CURB (150 mm)" text).
+"CURB (150 mm)" text), 059 (parking lane width — 0.3.0, SPC-0006 Rev J §4.13G.9).
+
+0.3.0 (SPC-0006 Rev J §4.13F.6 [AGREED] 18 Oct 2026 14:09, §4.13G.9):
+- element `parking` from labels PARKING / PARKING LANE / PARALLEL PARKING (ROD-059);
+  "WITHOUT PARALLEL PARKING" in the title → no parking element;
+- QRWN band-above-title: section stands above its title; "R.O.W." / "nn.nn (R.O.W.)" count as ROW
+  marks; without element labels a value on the centre line is the median.
 
 Usage: python check_sections.py --sections <a.dwg.json> [...] --rules <rules_RDE.json> --out <section_checks.json>
 Exit: 0 written · 2 input error. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 import argparse
 import re
@@ -30,10 +36,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from road_common import (EXIT_INPUT, EXIT_OK, RoadError, applies, atomic_write_json, class_of, emit,  # noqa: E402
                          main_guard, param, read_json, rules_index, source_of, tol)
 
-VALUE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(%)?\s*(\(RIGHT OF WAY\))?\s*$", re.I)
+VALUE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(%)?\s*(\((?:RIGHT OF WAY|R\.?O\.?W\.?)\))?\s*$", re.I)
 TITLE_W = re.compile(r"(\d+(?:\.\d+)?)\s*(?:m\b|meter|metre)", re.I)
 CURB = re.compile(r"curb\s*\(\s*(\d+(?:\.\d+)?)\s*mm\s*\)", re.I)
-LABELS = {"DRIVING LANE": "lane", "SIDE WALK": "sidewalk", "SIDEWALK": "sidewalk", "MEDIAN": "median"}
+ROW_MARK = re.compile(r"^(?:RIGHT OF WAY|R\.?O\.?W\.?)$", re.I)
+ROW_VALUE_MARK = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*\(\s*R\.?O\.?W\.?\s*\)\s*$", re.I)
+NO_PARKING = re.compile(r"without\s+parallel\s+parking", re.I)
+LABELS = {"DRIVING LANE": "lane", "SIDE WALK": "sidewalk", "SIDEWALK": "sidewalk", "MEDIAN": "median",
+          "PARKING": "parking", "PARKING LANE": "parking", "PARALLEL PARKING": "parking"}
 CHECKS = {
     "row": [("ROD-002", "row_min", "ge"), ("ROD-002", "row_max", "le"), ("ROD-003", "row_min", "ge"),
             ("ROD-003", "row_max", "le"), ("ROD-004", "row_min", "ge"), ("ROD-004", "row_max", "le")],
@@ -44,6 +54,7 @@ CHECKS = {
                ("ROD-014", "tier2_median_momra", "ge"), ("ROD-016", "separator_min", "ge")],
     "crossfall": [("ROD-021", "crossfall", "eq")],
     "curb": [("ROD-057", "height", "eq")],
+    "parking": [("ROD-059", "width", "eq"), ("ROD-059", "width_min", "ge")],
 }
 
 
@@ -59,13 +70,32 @@ def compare(obs, req, op, t):
     return abs(obs - req) <= t + 1e-9
 
 
+def _is_row_mark(t):
+    s = t["text"].strip()
+    if ROW_MARK.match(s):
+        return True
+    if ROW_VALUE_MARK.match(s):
+        return True
+    return s.upper() == "RIGHT OF WAY"
+
+
 def sections_of(ing):
     texts = [t for t in (ing.get("content") or {}).get("texts", [])
-             if t.get("space", "model") == "model" and isinstance(t.get("text"), str) and t.get("insert")]
+             if t.get("space", "model") == "model" and isinstance(t.get("text"), str) and t.get("insert")
+             and str(t.get("text")).strip() and float(t.get("height") or 1) > 0]
+    # drop exact duplicate texts at the same point (Rev J §4.13F.6)
+    seen_txt, uniq = set(), []
+    for t in texts:
+        key = (round(xy(t)[0], 3), round(xy(t)[1], 3), t["text"].strip())
+        if key in seen_txt:
+            continue
+        seen_txt.add(key)
+        uniq.append(t)
+    texts = uniq
     dims = {round(float(d["measurement"]), 2) for d in (ing.get("content") or {}).get("dimensions", [])
             if isinstance(d.get("measurement"), (int, float))}
-    marks = [t for t in texts if t["text"].strip().upper() == "RIGHT OF WAY"
-             and abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5]
+    marks = [t for t in texts if _is_row_mark(t)
+             and (abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5 or ROW_VALUE_MARK.match(t["text"].strip()))]
     bands, used = [], set()
     for m in sorted(marks, key=lambda t: (round(xy(t)[1], 0), xy(t)[0])):
         if m["handle"] in used:
@@ -79,14 +109,41 @@ def sections_of(ing):
         bands.append({"left": xy(m)[0], "right": xy(o)[0], "y": (xy(m)[1] + xy(o)[1]) / 2, "marks": [m, o]})
     out = []
     for b in bands:
-        cands = [t for t in texts if class_of(t["text"]) and "ROAD" in t["text"].upper()
+        # title below the band (legacy) or title below with section above (QRWN / Rev J §4.13F.6)
+        below = [t for t in texts if class_of(t["text"]) and "ROAD" in t["text"].upper()
                  and b["left"] - 3 <= xy(t)[0] <= b["right"] + 3 and b["y"] - 8 <= xy(t)[1] < b["y"] - 0.5]
-        title = max(cands, key=lambda t: xy(t)[1]) if cands else None
-        y0 = xy(title)[1] if title else b["y"] - 8
-        inside = [t for t in texts if b["left"] - 0.5 <= xy(t)[0] <= b["right"] + 0.5 and y0 <= xy(t)[1] <= b["y"] + 6]
-        labels = [(LABELS[t["text"].strip().upper()], t) for t in inside if t["text"].strip().upper() in LABELS]
+        above_titles = [t for t in texts if class_of(t["text"]) and "ROAD" in t["text"].upper()
+                        and b["left"] - 3 <= xy(t)[0] <= b["right"] + 3 and b["y"] + 0.5 < xy(t)[1] <= b["y"] + 40]
+        title = None
+        y_lo, y_hi = b["y"] - 8, b["y"] + 6
+        if below:
+            title = max(below, key=lambda t: xy(t)[1])
+            y_lo = xy(title)[1]
+        elif above_titles:
+            # band-above-title: the title is below the marks; find title under the band
+            under = [t for t in texts if class_of(t["text"])
+                     and b["left"] - 3 <= xy(t)[0] <= b["right"] + 3 and xy(t)[1] < b["y"] - 0.5]
+            title = max(under, key=lambda t: xy(t)[1]) if under else None
+            if title:
+                # next title above in the same column bounds the top
+                col = [t for t in texts if class_of(t["text"]) and abs(xy(t)[0] - xy(title)[0]) < 40
+                       and xy(t)[1] > xy(title)[1] + 0.5]
+                y_hi = min(xy(t)[1] for t in col) - 0.5 if col else b["y"] + 6
+                y_lo = xy(title)[1]
+        inside = [t for t in texts if b["left"] - 0.5 <= xy(t)[0] <= b["right"] + 0.5 and y_lo <= xy(t)[1] <= y_hi]
+        if title and NO_PARKING.search(title["text"]):
+            labels = [(LABELS[t["text"].strip().upper()], t) for t in inside
+                      if t["text"].strip().upper() in LABELS and LABELS[t["text"].strip().upper()] != "parking"]
+        else:
+            labels = [(LABELS[t["text"].strip().upper()], t) for t in inside if t["text"].strip().upper() in LABELS]
         values = []
         for t in inside:
+            rm = ROW_VALUE_MARK.match(t["text"].strip())
+            if rm:
+                values.append({"value": float(rm.group(1)), "pct": False, "row_label": True, "text": t,
+                               "element": None, "assigned": None,
+                               "dimension_match": round(float(rm.group(1)), 2) in dims})
+                continue
             m = VALUE.match(t["text"])
             if not m:
                 continue
@@ -116,6 +173,12 @@ def sections_of(ing):
             for v in lengths:
                 if v["element"] is None and 2.5 <= v["value"] <= 4.0:
                     v["element"], v["assigned"] = "lane", "positional"
+        # centre-line value → median when unlabelled (Rev J §4.13F.6)
+        if not any(v["element"] == "median" for v in values) and not labels:
+            mid_x = (b["left"] + b["right"]) / 2
+            for v in lengths:
+                if v["element"] is None and abs(xy(v["text"])[0] - mid_x) < 1.0 and 0.5 <= v["value"] <= 8:
+                    v["element"], v["assigned"] = "median", "positional"
         lanes = [v for v in values if v["element"] == "lane"]
         if lanes:
             lo = min(xy(v["text"])[0] for v in lanes) - 0.5

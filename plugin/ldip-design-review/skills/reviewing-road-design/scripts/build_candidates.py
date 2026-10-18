@@ -17,13 +17,15 @@ location (first sample), and the other locations are listed in the statement and
 0.4.0 (SPC-0006 Rev G §4.13D): the phase B2 part 2 location kinds (low points, parking areas, calming devices,
 school frontages) come through location_checks.json unchanged; a LandXML position [e, n] gives an EPSG:32638
 location. The version is the skill version (agent_versions).
+0.7.0 (SPC-0006 Rev J §4.13G): also takes calming_checks.json, pedestrian_checks.json and parking_checks.json
+(phase C3). Advisory / tier-2 parameters keep Observation severity.
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.4.0"
+__version__ = "0.7.0"
 
 import argparse
 import json
