@@ -36,7 +36,7 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 - Positional detail values → *Probable*
 - DD device without a detail of its type → *Missing information*
 - Advisory placement, tier-2, ER ambiguity → Observation (`tier2_*` parameters)
-- Surface gradient / bay slope → not run (phase D)
+- Surface gradient / bay slope → phase D (`check_surfaces.py`; see `surfaces_phase_d.md`)
 
 ## 5 Limits
 
