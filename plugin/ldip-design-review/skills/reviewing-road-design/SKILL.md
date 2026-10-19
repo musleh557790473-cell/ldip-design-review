@@ -12,10 +12,10 @@ description: >-
   design-criteria or missing road element check.
 metadata:
   version: "0.7.0"
-  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev J §4.13G (phase C3); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
+  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev J §4.13G (phase C3), §4.13H draft (phase D first slice); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
 ---
 
-# Reviewing road design (phases A, B1, B2 and C3)
+# Reviewing road design (phases A, B1, B2, C3 and D surface slice)
 
 This skill compares what Parsons states and draws for its roads with the road rules of the approved
 rulebook and writes candidate findings (agent code `RDE`). It reads only ingestion files written by skills
@@ -109,8 +109,11 @@ LandXML `<X>.xml.json`.
    `python "<SK>/check_pedestrian.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file signing_marking_plan="<G>.dwg.json" [--corner-returns "<EV>/corner_returns.json"] [--class "<EV>/road_class.json"] [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/pedestrian_checks.json"`
    `python "<SK>/check_parking.py" --network "<EV>/network.json" --class "<EV>/road_class.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file plan_geometry="<P>.dwg.json" [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/parking_checks.json"`
    (At PD, C3 DD rules are listed not run; typical-section parking is still covered by step 4 `check_sections.py`.)
+5f. **Surface gradient / slope / roundabout crossfall-drainage (phase D first slice)** — LandXML design TIN over C3-accepted polygons (§4.13H / DK-1…DK-4). Does **not** activate C3 rules or package 0.10.0:
+   `python "<SK>/check_surfaces.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --landxml "<X>.xml.json" [--surface-index N] [--elements "<EV>/surface_elements.json"] [--file drainage_plan="<D>.dwg.json"] --out "<EV>/surface_checks.json"`
+   (Or pass `--surface "<stem>.surface-1.json"` instead of `--landxml`. Refuge / accessible-bay polygons from `network.c3_refuges` / `c3_accessible_bays` or `--elements`. ROD-043 numeric limits require `rules_v7` parameters — [GAP] if absent → not_run. Apron is out of D.)
 6. **Required inputs** — `python "<SK>/check_required.py" --stage "<stage name>" --rules "<EV>/rules_RDE.json" --register "<EV>/road_register.json" --criteria "<EV>/criteria.json" --sections "<EV>/section_checks.json" --landxml "<X>.xml.json" --out "<EV>/required_inputs.json"`
-7. **Findings** — `python "<SK>/build_candidates.py" --results "<EV>/criteria_checks.json" "<EV>/section_checks.json" "<EV>/alignment_checks.json" "<EV>/road_register.json" "<EV>/required_inputs.json" "<EV>/presence_checks.json" "<EV>/cross_check.json" "<EV>/road_class.json" "<EV>/location_checks.json" "<EV>/calming_checks.json" "<EV>/pedestrian_checks.json" "<EV>/parking_checks.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
+7. **Findings** — `python "<SK>/build_candidates.py" --results "<EV>/criteria_checks.json" "<EV>/section_checks.json" "<EV>/alignment_checks.json" "<EV>/road_register.json" "<EV>/required_inputs.json" "<EV>/presence_checks.json" "<EV>/cross_check.json" "<EV>/road_class.json" "<EV>/location_checks.json" "<EV>/calming_checks.json" "<EV>/pedestrian_checks.json" "<EV>/parking_checks.json" "<EV>/surface_checks.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
    (list only the result files that exist).
 8. **Validate** — `python "<SK>/validate_findings.py" --findings "<EV>/candidates.json" --rules "<EV>/rules_RDE.json"`
    Exit 4 lists the problems; do not edit the file.
@@ -124,11 +127,12 @@ before use.
 `required_inputs.json`, `presence.json`, `presence_checks.json`, `setout.json`, `network.json`,
 `cross_check.json`, `road_class.json`, `landxml_network.json`, `low_points.json`, `location_checks.json`,
 `details.json`, `calming_checks.json`, `pedestrian_checks.json`, `parking_checks.json`,
-`candidates.json` and PNG crops of the PDF
+`surface_checks.json`, `candidates.json` and PNG crops of the PDF
 evidence. Every script prints one JSON line.
 Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4 schema failure.
 
 What each check reads, the class synonyms, how section values are assigned, status caps and the limits of
 phase A: `references/road_checks.md`. The presence terms, stage and condition logic of phase B1:
 `references/presence_terms.md`. Phase B2 location register: `references/locations.md`. Phase C3 calming,
-crossings and parking: `references/calming_crossings_parking.md`. The finding skeleton: `templates/finding.json`.
+crossings and parking: `references/calming_crossings_parking.md`. Phase D surface slice:
+`references/surfaces_phase_d.md`. The finding skeleton: `templates/finding.json`.
