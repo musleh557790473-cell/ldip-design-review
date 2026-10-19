@@ -11,8 +11,8 @@ description: >-
   information by design stage. Use for any LDIP road geometry, road
   design-criteria or missing road element check.
 metadata:
-  version: "0.7.0"
-  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev J §4.13G (phase C3), §4.13H draft (phase D first slice); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
+  version: "0.10.0"
+  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev J §4.13G (phase C3), §4.13H (phase D first slice); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B — packaged in plugin 0.10.0 (DJ-10 / DK-5); C3/D rules remain inactive until 60 % (DJ-9 / R37)"
 ---
 
 # Reviewing road design (phases A, B1, B2, C3 and D surface slice)
@@ -109,7 +109,7 @@ LandXML `<X>.xml.json`.
    `python "<SK>/check_pedestrian.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file signing_marking_plan="<G>.dwg.json" [--corner-returns "<EV>/corner_returns.json"] [--class "<EV>/road_class.json"] [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/pedestrian_checks.json"`
    `python "<SK>/check_parking.py" --network "<EV>/network.json" --class "<EV>/road_class.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file plan_geometry="<P>.dwg.json" [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/parking_checks.json"`
    (At PD, C3 DD rules are listed not run; typical-section parking is still covered by step 4 `check_sections.py`.)
-5f. **Surface gradient / slope / roundabout crossfall-drainage (phase D first slice)** — LandXML design TIN over C3-accepted polygons (§4.13H / DK-1…DK-4). Does **not** activate C3 rules or package 0.10.0:
+5f. **Surface gradient / slope / roundabout crossfall-drainage (phase D first slice)** — LandXML design TIN over C3-accepted polygons (§4.13H / DK-1…DK-4). Packaged in **0.10.0** with C3 (DJ-10 / DK-5); does **not** activate C3/D rules (DJ-9 / R37):
    `python "<SK>/check_surfaces.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --landxml "<X>.xml.json" [--surface-index N] [--elements "<EV>/surface_elements.json"] [--file drainage_plan="<D>.dwg.json"] --out "<EV>/surface_checks.json"`
    (Or pass `--surface "<stem>.surface-1.json"` instead of `--landxml`. Refuge / accessible-bay polygons from `network.c3_refuges` / `c3_accessible_bays` or `--elements`. ROD-043 numeric limits require `rules_v7` parameters — [GAP] if absent → not_run. Apron is out of D.)
 6. **Required inputs** — `python "<SK>/check_required.py" --stage "<stage name>" --rules "<EV>/rules_RDE.json" --register "<EV>/road_register.json" --criteria "<EV>/criteria.json" --sections "<EV>/section_checks.json" --landxml "<X>.xml.json" --out "<EV>/required_inputs.json"`
