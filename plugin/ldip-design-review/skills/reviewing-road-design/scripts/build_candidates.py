@@ -19,13 +19,15 @@ school frontages) come through location_checks.json unchanged; a LandXML positio
 location. The version is the skill version (agent_versions).
 0.7.0 (SPC-0006 Rev J §4.13G): also takes calming_checks.json, pedestrian_checks.json and parking_checks.json
 (phase C3). Advisory / tier-2 parameters keep Observation severity.
+0.10.0 (SPC-0001 Rev J §6.5 row 10 / DJ-10 / DK-5): packages C3 + D first slice; also takes surface_checks.json
+(phase D). Rulebook activation is unchanged — C3/D rules stay inactive until the first 60 % package (DJ-9 / R37).
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.7.0"
+__version__ = "0.10.0"
 
 import argparse
 import json

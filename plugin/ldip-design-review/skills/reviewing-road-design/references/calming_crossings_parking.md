@@ -43,7 +43,7 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 - No C3 element at 30 % on the three sites → synthetic DD tests; TJ8 synthetic PD harness always runs; real TJ8 when `LDIP_REVIEW` is set
 - ROD-044 grade is read from LandXML design-profile tangents / PVIs at hump chainage (optional `hump_grades` hook only as fallback)
 - ROD-047 chicane: curb lateral-shift measurement is primary; `chicane_shift_m` is fallback when no curb samples
-- ROD-047 stays inactive in the rulebook until first 60 % chicane confirm (R-J1); built and tested on synthetic data
+- ROD-047 stays inactive in the rulebook until first 60 % chicane confirm (R-J1); built and tested on synthetic data. C3 rules remain inactive in **0.10.0** packaging (DJ-9); activation ≠ packaging (DK-5)
 - Parking schedule format unknown (R-J2) → plan counts only
 - Bridge clearance for humps not run (R-J4)
 - C1/C2 scripts are not in this repository checkout; C3 accepts C2 corner returns as a JSON input
