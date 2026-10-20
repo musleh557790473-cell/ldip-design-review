@@ -21,7 +21,9 @@ jobs:
       - name: Run plugin / skill tests (no project data)
         run: |
           python -m pytest tests/test_revj_build.py tests/test_revj_real.py tests/test_phase_d_surfaces.py \
-            tests/test_revg_build.py tests/test_road_presence.py tests/test_plugin_layout.py \
+            tests/test_revg_build.py tests/test_revh_build.py tests/test_revh_real.py \
+            tests/test_revi_build.py tests/test_revi_real.py \
+            tests/test_road_presence.py tests/test_plugin_layout.py \
             tests/test_check_suite.py tests/test_d11_bash_lines.py -q --tb=line
       - name: No project data in Git
         run: python tools/check_no_data.py
