@@ -2,7 +2,7 @@
 
 Contents: 1 Scope · 2 Sampling · 3 Checks · 4 ROD-043 [GAP] · 5 Limits
 
-Spec: AICC-BIM-SPC-0006 §4.13H (owner-approved draft; first slice DK-1…DK-4). Plugin version stays pre-0.10.0; C3 rules are **not** activated here.
+Spec: AICC-BIM-SPC-0006 §4.13H (owner-approved draft; first slice DK-1…DK-4). Skill/plugin stay at **0.7.0** / **0.9.0** on this rebuild (SPC-0001 **0.10.0** reserved until skill 10 is complete; premature 0.10.0 on `main` was experimental). C3/D rules are **not** activated here (DJ-9 / R37); no `rules_v8`.
 
 ## 1 Scope (DK-1)
 
@@ -48,7 +48,7 @@ When parameters later appear on the rule object, the script compares max TIN fac
 
 ## 5 Limits
 
-- No 0.10.0 packaging; no C3 / ROD-043 activation (DJ-9 / DJ-10 / R37)
+- Code ships C3+D on build-027 at skill **0.7.0** (not claiming 0.10.0); no C3 / ROD-043 activation and no `rules_v8` (DJ-9 / R37)
 - Design-profile `grade_at_station` is **not** the island/bay surface metric
 - ROD-021 section crossfall ≠ ROD-043
 - Real 30 % sites: expect D surface params `not_run` or no element (no false D findings)
