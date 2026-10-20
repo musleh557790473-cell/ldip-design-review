@@ -4,10 +4,16 @@ Load a design-surface side file (`landxml_surface.schema.json`), select faces wh
 lies inside an element polygon, and report face slope % from the fitted plane
 z = ax + by + c → 100 * sqrt(a² + b²). Reported element value = maximum face slope %.
 
-No network, no shell calls. Multi-surface choice when several design surfaces exist is [GAP]
-unless the caller passes an explicit index.
+No network, no shell calls.
+
+Multi-surface policy (DK-4 — no naming heuristic invented):
+  · 0 surfaces → not_run ("no design surface in the package")
+  · 1 surface  → use it (CLI default; no --surface-index needed)
+  · >1 surfaces and no --surface-index → not_run [GAP]
+  · --surface-index N → pick content.surfaces[].index == N
+  · --surface <path> bypasses LandXML multi-surface choice entirely
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import hashlib
 import math
@@ -28,11 +34,20 @@ def tin_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+MULTI_SURFACE_GAP = (
+    "multiple design surfaces present; no default preference is stated in Rev J / §4.13H.3 "
+    "(DK-4) — pass --surface-index <content.surfaces[].index> (or --surface <tin side file>)"
+)
+
+
 def resolve_tin_from_landxml(landxml_path, surface_index=None):
     """Pick one TIN side file next to a LandXML ingestion JSON.
 
     Returns (tin_path, surface_meta, reason_or_none).
-    When several surfaces exist and surface_index is None → reason documents [GAP].
+
+    Default when exactly one surface is listed: use that surface (no index required).
+    When several surfaces exist and surface_index is None → reason documents [GAP]
+    (do not invent FG/name heuristics).
     """
     ing = read_json(landxml_path)
     surfaces = (ing.get("content") or {}).get("surfaces") or []
@@ -51,8 +66,7 @@ def resolve_tin_from_landxml(landxml_path, surface_index=None):
             return None, None, f"tin_file not found: {tin_name}"
         return str(path), match, None
     if len(surfaces) > 1:
-        return None, None, ("multiple design surfaces present; which surface to prefer is "
-                            "[GAP] (SPC-0006 §4.13H.3 / DK-4) — pass --surface-index")
+        return None, None, MULTI_SURFACE_GAP
     s0 = surfaces[0]
     tin_name = s0.get("tin_file")
     if not tin_name:

@@ -8,6 +8,14 @@ ROD-043 apron is out of D. Numeric crossfall/drainage limits come only from the 
 or an optional rulebook path (`--rulebook` / `LDIP_RULEBOOK`) — if absent → not_run [GAP],
 never invented. Loading parameters does **not** activate inactive rules (DJ-9 / R37).
 
+Multi-surface (DK-4): sole `content.surfaces[]` entry is the default; when several exist,
+pass `--surface-index` (or `--surface`). No FG/name preference is invented.
+
+ROD-043 footprint: rules_v7 names `circulatory_crossfall` → circulatory carriageway only
+(not apron). Intake = `network.c3_crossfall_footprints` / `--elements.crossfall_footprints`.
+Do not invent a ring from `roundabouts[].centre`+`radius` (width not in deposit; network
+drops the temporary ring before write).
+
 Usage: python check_surfaces.py --network <network.json> --rules <rules_RDE.json> --stage <name>
            --site <SITE> [--landxml <X>.xml.json] [--surface <side.json>] [--surface-index N]
            [--elements <elements.json>] [--file drainage_plan=<dwg.json>]
@@ -15,7 +23,7 @@ Usage: python check_surfaces.py --network <network.json> --rules <rules_RDE.json
            --out <surface_checks.json>
 Exit: 0 written · 2 input · 3 dependency. No network, no shell calls.
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import argparse
 import os
@@ -27,8 +35,8 @@ from c3_common import fail_rec, gate, parse_file_args  # noqa: E402
 from location_common import shapely_mods, xy  # noqa: E402
 from road_common import (EXIT_OK, atomic_write_json, emit, main_guard,  # noqa: E402
                          param, read_json, rules_index)
-from tin_surface import (load_tin, max_face_slope_in_polygon, min_face_slope_in_polygon,  # noqa: E402
-                         resolve_tin_from_landxml, tin_sha256)
+from tin_surface import (MULTI_SURFACE_GAP, load_tin, max_face_slope_in_polygon,  # noqa: E402
+                         min_face_slope_in_polygon, resolve_tin_from_landxml, tin_sha256)
 
 LIMIT_056_062 = 2.0  # % — Rev J / §4.13H.3
 # Real names from rules_v7 ROD-043 (see tests/fixtures/rod043_excerpt.json). Do not invent.
@@ -36,6 +44,14 @@ CROSSFALL_PARAM_NAMES = ("circulatory_crossfall", "crossfall", "crossfall_max", 
 GAP_043 = ("ROD-043 crossfall/drainage parameters not available — pass --rulebook "
            "<rules_vN.json|excerpt> or set LDIP_RULEBOOK (full rules_v*.json stays out of Git; "
            "CI uses tests/fixtures/rod043_excerpt.json) [GAP — do not invent limits]")
+# Settled from ROD-043 parameter name + statement (rules_v7); apron out of D (§4.8E / DK-3).
+FOOTPRINT_KIND = "circulatory"
+GAP_FOOTPRINT = (
+    "no circulatory crossfall footprint — provide network.c3_crossfall_footprints or "
+    "--elements.crossfall_footprints (kind=circulatory). Apron rings are out of D. "
+    "network.roundabouts[].centre+radius alone are not used (carriageway width not in "
+    "deposit; build_network drops the temporary ring) [GAP: circulatory outline producer]"
+)
 
 
 def resolve_rulebook_path(cli_path=None):
@@ -116,13 +132,47 @@ def _poly(g, ring):
     return poly if poly.is_valid and poly.area > 0 else None
 
 
+def _footprint_kind(el):
+    """Normalize optional kind/role on a footprint element."""
+    raw = el.get("kind") or el.get("role") or el.get("footprint") or ""
+    return str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _circulatory_footprints(raw_list):
+    """Keep circulatory footprints; drop apron (out of D); accept unmarked as circulatory.
+
+    Settled from rules_v7 ROD-043: parameter `circulatory_crossfall` + statement
+    "circulatory crossfall …"; apron is the separate 60 % path (§4.8E / DK-3).
+    Remaining [GAP]: nothing on main populates c3_crossfall_footprints from drawings yet.
+    """
+    kept, skipped = [], []
+    for el in raw_list or []:
+        kind = _footprint_kind(el)
+        if kind in ("apron", "apron_ring", "mountable_apron"):
+            skipped.append(el)
+            continue
+        # Unmarked or explicitly circulatory / carriageway → keep
+        if kind in ("", FOOTPRINT_KIND, "carriageway", "circulatory_carriageway",
+                    "circulatory_outline"):
+            kept.append(el)
+            continue
+        # Unknown kind — do not invent mapping; skip with no silent reuse
+        skipped.append(el)
+    return kept, skipped
+
+
 def _elements_from(net, elements_doc):
-    """Merge --elements JSON over network.c3_* hooks (C3-accepted geometry)."""
+    """Merge --elements JSON over network.c3_* hooks (C3-accepted geometry).
+
+    Crossfall footprints: circulatory only (see `_circulatory_footprints`). Does **not**
+    invent polygons from `network.roundabouts[]` centre/radius.
+    """
     src = dict(elements_doc or {})
     refuges = list(src.get("refuges") or net.get("c3_refuges") or [])
     bays = list(src.get("accessible_bays") or net.get("c3_accessible_bays") or [])
-    footprints = list(src.get("crossfall_footprints") or net.get("c3_crossfall_footprints") or [])
-    return refuges, bays, footprints
+    raw_fp = list(src.get("crossfall_footprints") or net.get("c3_crossfall_footprints") or [])
+    footprints, skipped = _circulatory_footprints(raw_fp)
+    return refuges, bays, footprints, skipped
 
 
 def _surface_evidence(tin_path, tin_meta, slope, n_faces, handle=None, extra="", *, slope_label="max_slope_pct"):
@@ -230,9 +280,11 @@ def main(argv=None):
     ap.add_argument("--landxml", default=None, help="LandXML ingestion JSON with content.surfaces[]")
     ap.add_argument("--surface", default=None, help="Direct TIN side-file path (overrides --landxml pick)")
     ap.add_argument("--surface-index", type=int, default=None,
-                    help="When several surfaces exist, pick by content.surfaces[].index ([GAP] otherwise)")
+                    help="Required when content.surfaces[] length > 1 (sole surface is the default; "
+                         "no FG/name preference invented — DK-4)")
     ap.add_argument("--elements", default=None,
-                    help="JSON with refuges / accessible_bays / crossfall_footprints (C3-accepted)")
+                    help="JSON with refuges / accessible_bays / crossfall_footprints "
+                         "(circulatory kind for ROD-043; apron kind ignored)")
     ap.add_argument("--file", action="append", default=[], help="carrier=path (drainage_plan for ROD-043)")
     ap.add_argument("--rulebook", default=None,
                     help="Full rules_vN.json or ROD-043 excerpt for numeric params "
@@ -245,7 +297,7 @@ def main(argv=None):
         net = read_json(a.network)
         rules, skipped, stage_map = rules_index(read_json(a.rules))
         elements_doc = read_json(a.elements) if a.elements else {}
-        refuges, bays, footprints = _elements_from(net, elements_doc)
+        refuges, bays, footprints, skipped_fp = _elements_from(net, elements_doc)
         carriers = {c: p for c, p in parse_file_args(a.file)}
         checks, not_run, passed = [], [], []
         rulebook_path = resolve_rulebook_path(a.rulebook)
@@ -314,9 +366,12 @@ def main(argv=None):
                                 "reason": f"Missing information (rule parameters) — {reason}",
                                 "status_hint": "Missing information"})
             elif not footprints:
+                reason = GAP_FOOTPRINT
+                if skipped_fp:
+                    reason = (f"{GAP_FOOTPRINT}; skipped {len(skipped_fp)} non-circulatory/"
+                              f"apron footprint(s)")
                 not_run.append({"rule_id": "ROD-043", "parameter": cf_name or "crossfall", "phase": "D",
-                                "reason": ("no crossfall footprint [GAP: exact polygon source — circulatory "
-                                           "outline vs apron ring — not in deposit without rule text]")})
+                                "reason": reason})
             elif tin is None:
                 not_run.append({"rule_id": "ROD-043", "parameter": cf_name or "crossfall", "phase": "D",
                                 "reason": surf_reason or "no design surface in the package"})
@@ -368,9 +423,12 @@ def main(argv=None):
                                             "reason": surf_reason or "no design surface in the package"})
                             continue
                         if not footprints:
+                            reason = GAP_FOOTPRINT
+                            if skipped_fp:
+                                reason = (f"{GAP_FOOTPRINT}; skipped {len(skipped_fp)} non-circulatory/"
+                                          f"apron footprint(s)")
                             not_run.append({"rule_id": "ROD-043", "parameter": pname, "phase": "D",
-                                            "reason": ("no drainage footprint [GAP: circulatory outline "
-                                                       "vs apron ring — not fixed without rule text]")})
+                                            "reason": reason})
                             continue
                         op = _drainage_op(pname, p)
                         for i, el in enumerate(footprints, 1):
@@ -391,7 +449,19 @@ def main(argv=None):
                                   "gap_notes": {
                                       "ROD-043_params": GAP_043,
                                       "ROD-043_params_source": params_source,
-                                      "multi_surface": "prefer --surface-index when content.surfaces[] length > 1",
+                                      "multi_surface": (
+                                          "CLI default: sole content.surfaces[] entry. "
+                                          "Several surfaces → require --surface-index or --surface "
+                                          f"({MULTI_SURFACE_GAP})"
+                                      ),
+                                      "crossfall_footprint": (
+                                          "Settled kind=circulatory (ROD-043 circulatory_crossfall); "
+                                          "apron out of D. Hook: c3_crossfall_footprints / "
+                                          "--elements. Remaining [GAP]: circulatory outline "
+                                          "producer (do not invent from roundabouts centre+radius)."
+                                      ),
+                                      "crossfall_footprints_used": len(footprints),
+                                      "crossfall_footprints_skipped": len(skipped_fp),
                                       "activation": "loading --rulebook / LDIP_RULEBOOK does not activate inactive ROD-043",
                                   }})
         emit({"status": "ok", "out": a.out, "checks": len(checks),

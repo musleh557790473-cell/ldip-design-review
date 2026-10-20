@@ -360,4 +360,73 @@ def test_multi_surface_gap_without_index(tmp_path):
                   "--out", tmp_path / "ms.json")
     assert rc == 0, out
     ms = load(tmp_path / "ms.json")
-    assert any("multiple design surfaces" in (n.get("reason") or "") for n in ms["not_run"])
+    assert any("multiple design surfaces" in (n.get("reason") or "")
+               and "--surface-index" in (n.get("reason") or "") for n in ms["not_run"])
+    assert "sole content.surfaces" in (ms["gap_notes"].get("multi_surface") or "")
+
+
+def test_multi_surface_index_selects(tmp_path):
+    """--surface-index picks among several; sole-surface default needs no index (TD1 covers that)."""
+    tin1 = write_tin(tmp_path, "s1", (659995, 2749995), (10, 20), rise_e=0.3)  # 3 % → fail if picked
+    tin2 = write_tin(tmp_path, "s2", (659995, 2749995), (10, 20), rise_e=0.1)  # 1 % → pass
+    tin2b = tmp_path / "s2.surface-2.json"
+    tin2b.write_text(tin2.read_text())
+    write_net(tmp_path, {"c3_refuges": [{"id": "RF1", "polygon": box(660000, 2750000, 660010, 2750012)}]})
+    rules = rules_d(tmp_path)
+    lx = tmp_path / "design.xml.json"
+    lx.write_text(json.dumps({
+        "source": {"path": "design.xml", "sha256": "a" * 64, "file_type": "xml"},
+        "content": {"surfaces": [
+            {"name": "A", "index": 1, "tin_file": tin1.name,
+             "tin_sha256": hashlib.sha256(tin1.read_bytes()).hexdigest()},
+            {"name": "B", "index": 2, "tin_file": tin2b.name,
+             "tin_sha256": hashlib.sha256(tin2b.read_bytes()).hexdigest()},
+        ]}}))
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx, "--surface-index", "2",
+                  "--out", tmp_path / "idx.json")
+    assert rc == 0, out
+    doc = load(tmp_path / "idx.json")
+    assert any(c["rule_id"] == "ROD-056" and c["parameter"] == "gradient" and c["result"] == "pass"
+               for c in doc["passed"])
+
+
+def test_crossfall_footprint_missing_and_apron_skipped(tmp_path):
+    """Kind settled=circulatory; apron footprints ignored; no invent from roundabouts centre+radius."""
+    tin = write_tin(tmp_path, "cf", (659995, 2749995), (10, 20), rise_e=0.1)
+    # Network has roundabout centre+radius but no c3_crossfall_footprints → not_run (no invent)
+    rules, lx = _surface_args(tmp_path, tin, {
+        "roundabouts": [{"name": "RA-1", "centre": [660005.0, 2750006.0], "radius": 20.0, "approaches": []}],
+    })
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx,
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "nofp.json")
+    assert rc == 0, out
+    nofp = load(tmp_path / "nofp.json")
+    assert any(n.get("rule_id") == "ROD-043" and "circulatory" in (n.get("reason") or "").lower()
+               and "GAP" in (n.get("reason") or "") for n in nofp["not_run"])
+    assert "circulatory" in (nofp["gap_notes"].get("crossfall_footprint") or "")
+
+    # Apron-only footprints → still not_run (out of D)
+    write_net(tmp_path, {"c3_crossfall_footprints": [
+        {"id": "AP1", "kind": "apron", "polygon": box(660000, 2750000, 660010, 2750012)}]})
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx,
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "apron.json")
+    assert rc == 0, out
+    apron = load(tmp_path / "apron.json")
+    assert apron["gap_notes"].get("crossfall_footprints_skipped") == 1
+    assert any(n.get("rule_id") == "ROD-043" and "apron" in (n.get("reason") or "").lower()
+               for n in apron["not_run"] if n.get("parameter") in ("circulatory_crossfall", "crossfall"))
+
+    # Explicit circulatory footprint → runs
+    write_net(tmp_path, {"c3_crossfall_footprints": [
+        {"id": "RA1", "kind": "circulatory", "polygon": box(660000, 2750000, 660010, 2750012)}]})
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx,
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "circ.json")
+    assert rc == 0, out
+    circ = load(tmp_path / "circ.json")
+    assert circ["gap_notes"].get("crossfall_footprints_used") == 1
+    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "circulatory_crossfall"
+               and c["result"] == "pass" for c in circ["passed"])
