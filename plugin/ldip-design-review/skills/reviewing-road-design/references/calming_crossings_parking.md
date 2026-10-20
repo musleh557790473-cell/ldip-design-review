@@ -46,5 +46,5 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 - ROD-047 stays inactive in the rulebook until first 60 % chicane confirm (R-J1); built and tested on synthetic data. C3 rules remain inactive in **0.10.0** packaging (DJ-9); activation ≠ packaging (DK-5)
 - Parking schedule format unknown (R-J2) → plan counts only
 - Bridge clearance for humps not run (R-J4)
-- C1/C2 scripts are not in this repository checkout; C3 accepts C2 corner returns as a JSON input
+- C1/C2 scripts are not in this repository checkout; C3 accepts C2 corner returns as a JSON input (see `c1_c2_restore.md` — optional restore inventory; no invented phases)
 - Detail *box* bands (when sheets use boxed details) are not yet separate from the column-above-title band

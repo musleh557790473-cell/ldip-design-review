@@ -1,0 +1,13 @@
+{
+  "comment": "C3 corner-returns contract only (from check_pedestrian.py / TJ5). Not produced by restored C2 scripts — those remain missing. Top-level key for --corner-returns files is returns; network.json uses corner_returns.",
+  "returns": [
+    {
+      "junction": "J001",
+      "tangent_point": [660104.5, 2750000.0]
+    },
+    {
+      "junction": "J002",
+      "tangent_point": [660043.0, 2750000.0]
+    }
+  ]
+}
