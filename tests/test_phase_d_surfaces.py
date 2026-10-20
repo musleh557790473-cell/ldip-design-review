@@ -1,11 +1,12 @@
 """Phase D first-slice tests (SPC-0006 §4.13H / DK-1…DK-4): TD1–TD8.
 
 ROD-056 gradient, ROD-062 slope, ROD-043 crossfall/drainage. Synthetic TIN only.
-ROD-043 numeric limits are [GAP] without rules_v7 — TD5/TD6 assert not_run GAP path;
-optional synthetics labelled TEST-ONLY prove comparison wiring when params are injected.
+ROD-043 numeric limits load from tests/fixtures/rod043_excerpt.json (rules_v7 deposit
+excerpt) via --rulebook / LDIP_RULEBOOK — never invented. Full rules_v*.json stays out of Git.
 """
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,11 +17,16 @@ pytest.importorskip("shapely")
 
 REPO = Path(__file__).resolve().parents[1]
 SK10 = REPO / "plugin/ldip-design-review/skills/reviewing-road-design/scripts"
+FIXTURE_043 = REPO / "tests/fixtures/rod043_excerpt.json"
 PY = sys.executable
 
 
-def run(script, *args):
-    p = subprocess.run([PY, str(SK10 / script), *map(str, args)], capture_output=True, text=True)
+def run(script, *args, env=None):
+    e = os.environ.copy()
+    if env:
+        e.update(env)
+    p = subprocess.run([PY, str(SK10 / script), *map(str, args)],
+                       capture_output=True, text=True, env=e)
     out = p.stdout.strip().splitlines()
     return p.returncode, (json.loads(out[-1]) if out else {"stderr": p.stderr[-2000:]})
 
@@ -79,7 +85,8 @@ def rules_d(tmp, *, rod043_params=None, rod043_state="active"):
           carriers=["plan_geometry", "landxml_surface"]),
         R("ROD-062", {"ratio": (0.04, None), "slope": (2.0, "%")}, carriers=["plan_geometry", "landxml_surface"]),
     ]
-    # ROD-043: default active in synthetic harness with NO numeric params → GAP not_run
+    # ROD-043: synthetic harness may be active for D wiring tests; real rulebook keeps inactive.
+    # Empty params → load from --rulebook / LDIP_RULEBOOK fixture (real v7 numbers).
     p043 = dict(rod043_params or {})
     rs.append(R("ROD-043", p043, state=rod043_state,
                 carriers=["drainage_plan", "landxml_surface"]))
@@ -107,13 +114,17 @@ def _surface_args(tmp, tin_path, net_extra, rules_kwargs=None):
     return rules, lx
 
 
+def _fixture_limits():
+    assert FIXTURE_043.is_file(), "CI fixture tests/fixtures/rod043_excerpt.json required"
+    doc = load(FIXTURE_043)
+    p = doc["parameters"]
+    return float(p["circulatory_crossfall"]["value"]), float(p["drainage_g_min"]["value"])
+
+
 # ------------------------------------------------------------------ TD1
 def test_td1_refuge_gradient_pass_and_fail(tmp_path):
     # 1 % grade: rise 0.1 m over 10 m E → pass; 3 %: rise 0.3 m → listed
     refuge = {"id": "RF1", "handle": "H1", "polygon": box(660000, 2750000, 660010, 2750012)}
-    tin_ok = write_tin(tmp_path, "ok", (659995, 2749995), (20, 20), rise_e=0.1)  # 0.1/10 ≈ 1% on 10m
-    # Actually slope is over the face diagonal of the TIN rectangle of size 20 → rise_e/20 = 0.5%
-    # Rebuild: size 10 m in E so rise_e=0.1 → 1 %; rise_e=0.3 → 3 %
     tin_ok = write_tin(tmp_path, "ok1", (659995, 2749995), (10, 20), rise_e=0.1)
     rules, lx = _surface_args(tmp_path, tin_ok, {"c3_refuges": [refuge]})
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
@@ -126,7 +137,6 @@ def test_td1_refuge_gradient_pass_and_fail(tmp_path):
 
     tin_bad = write_tin(tmp_path, "bad", (659995, 2749995), (10, 20), rise_e=0.3)
     lx2 = write_landxml(tmp_path, tin_bad)
-    # overwrite network already there
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx2,
                   "--out", tmp_path / "s2.json")
@@ -169,8 +179,6 @@ def test_td3_refuge_uncovered_not_run(tmp_path):
 def test_td4_bay_slope_aisle_steep_ignored(tmp_path):
     # Bay polygon over flat 1 % TIN region; aisle-only steep faces outside bay → ignored
     bay = {"id": "AB1", "handle": "B1", "polygon": box(660000, 2750000, 660005, 2750006)}
-    # TIN covers bay at 1 % and extends east with a steep patch outside bay
-    # Build custom TIN: west quad flat-ish 1%, east steep 10%
     tin = {
         "template": "landxml-surface-1.0", "surface": "FG", "index": 1,
         "points": [
@@ -208,10 +216,11 @@ def test_td4_bay_slope_aisle_steep_ignored(tmp_path):
 
 
 # ------------------------------------------------------------------ TD5
-def test_td5_rod043_crossfall_gap_and_optional_fixture(tmp_path):
-    tin = write_tin(tmp_path, "cf", (659995, 2749995), (10, 20), rise_e=0.1)
+def test_td5_rod043_crossfall_gap_and_fixture(tmp_path):
+    cf_limit, _ = _fixture_limits()
+    tin = write_tin(tmp_path, "cf", (659995, 2749995), (10, 20), rise_e=0.1)  # 1 % < 2 %
     fp = {"id": "RA1", "polygon": box(660000, 2750000, 660010, 2750012)}
-    # Without params → GAP not_run (rules_v7 not deposited)
+    # Without params and without rulebook → GAP not_run
     rules, lx = _surface_args(tmp_path, tin, {"c3_crossfall_footprints": [fp]})
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
@@ -222,32 +231,38 @@ def test_td5_rod043_crossfall_gap_and_optional_fixture(tmp_path):
                and "GAP" in (n.get("reason") or "") for n in gap["not_run"])
     assert any(n.get("parameter") == "apron" for n in gap["not_run"])
 
-    # TEST-ONLY fixture params (NOT rules_v7) — prove comparison when numbers exist
-    rules2 = rules_d(tmp_path, rod043_params={"crossfall": (2.0, "%")})
-    # rename rules file written into same tmp — rules_d overwrites rules_RDE.json
-    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules2,
+    # Real rules_v7 numbers via --rulebook fixture (circulatory_crossfall = 2.0 %)
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
-                  "--out", tmp_path / "ok.json")
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "ok.json")
     assert rc == 0, out
     ok = load(tmp_path / "ok.json")
-    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "crossfall" and c["result"] == "pass"
-               for c in ok["passed"])
+    assert ok["gap_notes"].get("ROD-043_params_source")
+    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "circulatory_crossfall"
+               and c["result"] == "pass" and c["required"] == cf_limit for c in ok["passed"])
 
-    tin_hi = write_tin(tmp_path, "cfhi", (659995, 2749995), (10, 20), rise_e=0.3)
+    # Env LDIP_RULEBOOK equivalent
+    tin_hi = write_tin(tmp_path, "cfhi", (659995, 2749995), (10, 20), rise_e=0.3)  # 3 % > 2 %
     lx_hi = write_landxml(tmp_path, tin_hi)
-    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules2,
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx_hi,
-                  "--out", tmp_path / "fail.json")
+                  "--out", tmp_path / "fail.json",
+                  env={"LDIP_RULEBOOK": str(FIXTURE_043)})
     assert rc == 0, out
     fail = load(tmp_path / "fail.json")
-    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "crossfall" and c["result"] == "fail"
-               for c in fail["checks"])
+    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "circulatory_crossfall"
+               and c["result"] == "fail" for c in fail["checks"])
 
 
 # ------------------------------------------------------------------ TD6
-def test_td6_rod043_drainage_gap_and_missing_plan(tmp_path):
-    tin = write_tin(tmp_path, "dr", (659995, 2749995), (10, 20), rise_e=0.05)
-    rules, lx = _surface_args(tmp_path, tin, {})
+def test_td6_rod043_drainage_g_min_from_fixture(tmp_path):
+    _, g_min = _fixture_limits()
+    fp = {"id": "RA1", "polygon": box(660000, 2750000, 660010, 2750012)}
+    # Flat-ish 1 % ≥ 0.5 % → pass; near-flat 0.2 % < 0.5 % → fail
+    tin_ok = write_tin(tmp_path, "dr_ok", (659995, 2749995), (10, 20), rise_e=0.1)  # 1 %
+    rules, lx = _surface_args(tmp_path, tin_ok, {"c3_crossfall_footprints": [fp]})
+
+    # No rulebook → GAP
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
                   "--out", tmp_path / "gap.json")
@@ -256,27 +271,42 @@ def test_td6_rod043_drainage_gap_and_missing_plan(tmp_path):
     assert any(n.get("rule_id") == "ROD-043" and n.get("parameter") == "drainage"
                and "GAP" in (n.get("reason") or "") for n in gap["not_run"])
 
-    # TEST-ONLY presence param + missing plan → not_run MI
-    rules2 = rules_d(tmp_path, rod043_params={"drainage_plan": (True, None)})
-    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules2,
+    # Fixture drainage_g_min = 0.5 %; min face slope ≥ limit
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
-                  "--out", tmp_path / "mi.json")
-    assert rc == 0, out
-    mi = load(tmp_path / "mi.json")
-    assert any(n.get("rule_id") == "ROD-043" and "drainage" in (n.get("parameter") or "")
-               and "missing" in (n.get("reason") or "").lower() for n in mi["not_run"])
-
-    # With plan → pass
-    plan = tmp_path / "drain.dwg.json"
-    plan.write_text(json.dumps({
-        "source": {"path": "d.dwg", "sha256": "b" * 64, "file_type": "dwg"},
-        "content": {"texts": [], "polylines": [], "layers": []}}))
-    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules2,
-                  "--stage", "60%", "--site", "NRJS", "--landxml", lx,
-                  "--file", f"drainage_plan={plan}", "--out", tmp_path / "ok.json")
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "ok.json")
     assert rc == 0, out
     ok = load(tmp_path / "ok.json")
-    assert any(c["rule_id"] == "ROD-043" and c["result"] == "pass" for c in ok["passed"])
+    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "drainage_g_min"
+               and c["result"] == "pass" and c["comparison"] == "ge"
+               and c["required"] == g_min for c in ok["passed"])
+
+    tin_lo = write_tin(tmp_path, "dr_lo", (659995, 2749995), (10, 20), rise_e=0.02)  # 0.2 %
+    lx_lo = write_landxml(tmp_path, tin_lo)
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx_lo,
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "fail.json")
+    assert rc == 0, out
+    fail = load(tmp_path / "fail.json")
+    assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "drainage_g_min"
+               and c["result"] == "fail" for c in fail["checks"])
+
+
+def test_rod043_inactive_not_run_even_with_rulebook(tmp_path):
+    """Loading params must not activate inactive ROD-043 (DJ-9 / R37)."""
+    tin = write_tin(tmp_path, "inact", (659995, 2749995), (10, 20), rise_e=0.1)
+    fp = {"id": "RA1", "polygon": box(660000, 2750000, 660010, 2750012)}
+    rules, lx = _surface_args(tmp_path, tin, {"c3_crossfall_footprints": [fp]},
+                              rules_kwargs={"rod043_state": "inactive"})
+    rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
+                  "--stage", "60%", "--site", "NRJS", "--landxml", lx,
+                  "--rulebook", FIXTURE_043, "--out", tmp_path / "inact.json")
+    assert rc == 0, out
+    doc = load(tmp_path / "inact.json")
+    assert any(n.get("rule_id") == "ROD-043" and n.get("parameter") == "crossfall"
+               and "inactive" in (n.get("reason") or "").lower() for n in doc["not_run"])
+    assert not any(c["rule_id"] == "ROD-043" for c in doc["checks"] + doc["passed"]
+                   if c.get("parameter") != "apron")
 
 
 # ------------------------------------------------------------------ TD7
@@ -312,7 +342,6 @@ def test_td8_determinism(tmp_path):
 def test_multi_surface_gap_without_index(tmp_path):
     tin1 = write_tin(tmp_path, "s1", (659995, 2749995), (10, 20), rise_e=0.1)
     tin2 = write_tin(tmp_path, "s2", (659995, 2749995), (10, 20), rise_e=0.05)
-    # place second next to first with distinct name
     tin2b = tmp_path / "s2.surface-2.json"
     tin2b.write_text(tin2.read_text())
     write_net(tmp_path, {"c3_refuges": [{"id": "RF1", "polygon": box(660000, 2750000, 660010, 2750012)}]})
