@@ -129,6 +129,19 @@ def max_face_slope_in_polygon(tin, polygon, g):
     return max_s, n
 
 
+def min_face_slope_in_polygon(tin, polygon, g):
+    """Return (min_slope_pct, face_count) or (None, 0) when no face centroid is inside.
+
+    Used for drainage minimum grade (e.g. ROD-043 drainage_g_min): conservative vs "≥ N %".
+    """
+    min_s, n = None, 0
+    for _ids, slope, _c in faces_in_polygon(tin, polygon, g):
+        n += 1
+        if min_s is None or slope < min_s:
+            min_s = slope
+    return min_s, n
+
+
 def make_flat_tin(origin_e, origin_n, size_e, size_n, z00, z10, z01, z11=None, *, surface="SYN", index=1):
     """Build a compact 2-triangle TIN rectangle for synthetic tests (not a full schema doc).
 

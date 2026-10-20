@@ -1,0 +1,38 @@
+{
+  "rulebook_version": "v7",
+  "rule_id": "ROD-043",
+  "title": "Roundabout apron, circulatory crossfall and drainage",
+  "statement": "The central island shall have a 1.5–2.0 m mountable apron; circulatory crossfall 2 %; drainage gradient at least 0.5 %.",
+  "parameters": {
+    "apron_width": {
+      "value": [1.5, 2.0],
+      "unit": "m",
+      "tag": "AGREED",
+      "source_id": "SRC-07",
+      "clause": "§7.12(c) p.59",
+      "blocking": false,
+      "tolerance_ref": "width_m",
+      "note": "Curb Type D. Out of phase D — 60 % path."
+    },
+    "circulatory_crossfall": {
+      "value": 2.0,
+      "unit": "%",
+      "tag": "AGREED",
+      "source_id": "SRC-07",
+      "clause": "§7.12(c) p.59",
+      "blocking": false,
+      "tolerance_ref": "crossfall_pct"
+    },
+    "drainage_g_min": {
+      "value": 0.5,
+      "unit": "%",
+      "tag": "AGREED",
+      "source_id": "SRC-07",
+      "clause": "§7.12(c) p.59",
+      "blocking": false,
+      "tolerance_ref": "grade_pct"
+    }
+  },
+  "state": "inactive",
+  "note": "Minimal CI fixture derived from owner-deposited rules_v7 ROD-043 excerpt. Full rules_v7.json is not in Git (rules_v*.json gitignored). Loading params ≠ activation."
+}
