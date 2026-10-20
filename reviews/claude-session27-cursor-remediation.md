@@ -5,7 +5,8 @@
 | Date | 20 Oct 2026 |
 | Owner | «نعم اعتمد» — Claude remediation plan adopted |
 | Branch | `claude/build-027-c1-c2` |
-| Head | `f6d93ca` |
+| C1+C2 head (bundle) | `f6d93ca` |
+| Branch tip (with `reviews/`) | see tip commit on this branch |
 | Base (prerequisite) | `cfa4b20` (v0.9.0 tree on GitHub) |
 | Bundle | build-027-c1-c2 (sha256 `7a2e4ad0…4c42`) |
 
