@@ -30,6 +30,16 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 | `check_pedestrian.py` | ROD-055, 056 |
 | `check_parking.py` | ROD-059 (plan), 060, 061, 062 |
 
+### Parking plan bays (G-1 / Rev J §4.13G.9)
+
+- **Layers:** only closed polygons on per-site `parking_layers` in `road_class_params.json` (same style as C2 `curb_layers`, R-I3). Regex fallbacks on layer names are not used.
+- **Missing list:** if `parking_layers` is empty / unset for the site → the plan is **not** read for bays; ROD-059…062 report `not_run` with reason `no parking_layers list for site <SITE> (G-1 / R-J3)`. Owner must supply NMAR / QRWN / NRJS names — **do not guess** (R-J3 GAP).
+- **Candidate gates** (before ROD size checks; not rule activation):
+  - area `c3.bay_area_m2` default **[10, 40] m²** (Rev J §4.13G.9);
+  - width `c3.bay_width_m` default **[2.0, 6.0] m** and length `c3.bay_length_m` default **[4.5, 7.0] m** — bracket ROD-059/060/061 tables (parallel 2.5×6.0 … accessible angle 5.45×6.35) with headroom for undersize fail cases.
+- Network `c3_bays` / `c3_parking_areas` remain available for synthetic harnesses when layers are unset.
+- ROD-059…062 stay **inactive** in the rulebook until the 60 % package (DJ-9); this scoping only stops false positives.
+
 ## 4 Status
 
 - Drawing positions / classes → *Probable*
@@ -45,6 +55,7 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 - ROD-047 chicane: curb lateral-shift measurement is primary; `chicane_shift_m` is fallback when no curb samples
 - ROD-047 stays inactive in the rulebook until first 60 % chicane confirm (R-J1); built and tested on synthetic data. C3 rules remain inactive when C3+D code ships (DJ-9); activation ≠ packaging (DK-5)
 - Parking schedule format unknown (R-J2) → plan counts only
+- Parking / marking layer names in DD packages unknown (R-J3) → `parking_layers` empty per site until owner supplies them (G-1)
 - Bridge clearance for humps not run (R-J4)
 - C1/C2 scripts are not in this repository checkout; C3 accepts C2 corner returns as a JSON input
 - Detail *box* bands (when sheets use boxed details) are not yet separate from the column-above-title band
