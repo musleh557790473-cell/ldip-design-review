@@ -2,7 +2,7 @@
 
 Contents: 1 Scope · 2 Sampling · 3 Multi-surface · 4 Checks · 5 ROD-043 parameters · 6 Footprint · 7 Limits
 
-Spec: AICC-BIM-SPC-0006 §4.13H (owner-approved draft; first slice DK-1…DK-4). Skill/plugin stay at **0.7.0** / **0.9.0** on this rebuild (SPC-0001 **0.10.0** reserved until skill 10 is complete; premature 0.10.0 on `main` was experimental). C3/D rules are **not** activated here (DJ-9 / R37); no `rules_v8`.
+Spec: AICC-BIM-SPC-0006 §4.13H (owner-approved draft; first slice DK-1…DK-4). Packaged in plugin / skill **0.10.0** with C3 (SPC-0001 Rev K / DJ-10 / DK-5). **C3 and D rules are NOT activated** until the 60 % package (R37 / DJ-9); no `rules_v8`.
 
 ## 1 Scope (DK-1)
 
@@ -79,7 +79,7 @@ Without `--rules` params and without `--rulebook` / `LDIP_RULEBOOK` → `not_run
 
 ## 7 Limits
 
-- Code ships C3+D on build-027 at skill **0.7.0** (not claiming 0.10.0); no C3 / ROD-043 activation and no `rules_v8` (DJ-9 / R37)
+- Packaged in **0.10.0** (code only; SPC-0001 Rev K); **C3 and D rules are NOT activated** until the 60 % package (R37 / DJ-9); no `rules_v8`
 - Design-profile `grade_at_station` is **not** the island/bay surface metric
 - ROD-021 section crossfall ≠ ROD-043
 - Real 30 % sites: expect D surface params `not_run` or no element (no false D findings)

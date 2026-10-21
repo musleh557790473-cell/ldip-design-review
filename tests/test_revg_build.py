@@ -274,7 +274,7 @@ def test_td5_findings_and_caps(tmp_path):
     assert by["ROD-107"]["proposed_status"] == "Missing information"                    # LandXML low points keep the rule cap
     assert by["ROD-108"]["proposed_status"] == "Probable" and by["ROD-113"]["proposed_status"] == "Probable"
     assert by["ROD-107"]["statement"].startswith("2 occurrence(s)") and by["ROD-107"]["location"]["xy"]["crs"] == "EPSG:32638"
-    assert by["ROD-107"]["agent_versions"] == {"reviewing-road-design": "0.7.0"}
+    assert by["ROD-107"]["agent_versions"] == {"reviewing-road-design": "0.10.0"}
     assert run(SK10, "validate_findings.py", "--findings", tmp_path / "cand.json", "--rules", tmp_path / "rules_RDE.json")[0] == 0
 
 
