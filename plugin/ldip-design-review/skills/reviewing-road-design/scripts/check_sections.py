@@ -27,10 +27,9 @@ enforced; a width between the lowest and the highest is not run), 057 (curb heig
 0.3.0 (SPC-0006 Rev J §4.13F.6 [AGREED] 18 Oct 2026 14:09, §4.13G.9; rebuilt on build-027 C1+C2):
 - element `parking` from labels PARKING / PARKING LANE / PARALLEL PARKING (ROD-059);
   "WITHOUT PARALLEL PARKING" in the title → no parking element;
-- QRWN band-above-title when ROW/R.O.W. mark pairs exist: section stands above its title;
-  "R.O.W." / "nn.nn (R.O.W.)" count as ROW marks; without element labels a value on the centre
-  line is the median;
-- K25 title-anchor fallback (0.2.0) kept when no mark pairs are found.
+- pair-anchor marks = rotated "RIGHT OF WAY" only (as 0.2.0); "R.O.W." / "nn.nn (R.O.W.)"
+  stay with the K25 title anchor (QRWN), so they do not form false pair bands;
+- K25 title-anchor fallback when no "RIGHT OF WAY" pairs are found.
 
 Usage: python check_sections.py --sections <a.dwg.json> [...] --rules <rules_RDE.json> --out <section_checks.json>
 Exit: 0 written · 2 input error. No network, no shell calls.
@@ -109,8 +108,9 @@ def sections_of(ing):
     texts = uniq
     dims = {round(float(d["measurement"]), 2) for d in (ing.get("content") or {}).get("dimensions", [])
             if isinstance(d.get("measurement"), (int, float))}
-    marks = [t for t in texts if _is_row_mark(t)
-             and (abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5 or ROW_VALUE_MARK.match(t["text"].strip()))]
+    # pair anchor (NMAR): rotated "RIGHT OF WAY" only, as 0.2.0. "R.O.W." marks belong to the K25 title anchor.
+    marks = [t for t in texts if t["text"].strip().upper() == "RIGHT OF WAY"
+             and abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5]
     bands, used = [], set()
     for m in sorted(marks, key=lambda t: (round(xy(t)[1], 0), xy(t)[0])):
         if m["handle"] in used:

@@ -383,3 +383,67 @@ def test_ti4_entry_width_advisory(tmp_path):
     ew = checks(d, "ROD-040")
     assert ew and all(c["severity_override"] == "Observation" for c in ew)
     assert all("severity_override" not in c for c in checks(d, "ROD-042", "length_min"))
+
+
+def test_ti9_k25_sections_synthetic_qrwn(tmp_path):
+    """QRWN layout: R.O.W. / nn.nn (R.O.W.) above titles → K25 title anchor (6 sections).
+
+    Pair-anchor must use rotated RIGHT OF WAY only; otherwise value-marks form false bands and
+    the title-anchor fallback never runs (K25 / DI-8). Synthetic only — no real drawings.
+    """
+    def T(text, x, y, h, rot=0, height=1.0):
+        return {"handle": h, "insert": [x, y, 0.0], "layer": "SC-RD-DIM", "rotation": rot,
+                "space": "model", "text": text, "type": "TEXT", "height": height}
+
+    specs = [
+        ("15 METER LOCAL ROAD", 15.0),
+        ("18 METER LOCAL ROAD", 18.0),
+        ("20 METER LOCAL ROAD", 20.0),
+        ("25m NEIGHBOURHOOD COLLECTOR ROAD", 25.0),
+        ("30m NEIGHBOURHOOD COLLECTOR ROAD", 30.0),
+        ("36m NEIGHBOURHOOD COLLECTOR ROAD", 36.0),
+    ]
+    texts = []
+    for i, (title, w) in enumerate(specs):
+        y = float(i * 20)
+        # title at column x=100; R.O.W. marks and ROW value stand above the title (QRWN)
+        texts += [
+            T(title, 100.0, y, f"T{i}", height=2.0),
+            T("R.O.W.", 85.0, y + 8.0, f"L{i}"),
+            T("R.O.W.", 130.0, y + 8.0, f"R{i}"),
+            T(f"{w:.2f} (R.O.W.)", 105.0, y + 5.0, f"V{i}"),
+            T("3.30", 95.0, y + 4.0, f"A{i}"),
+            T("3.30", 115.0, y + 4.0, f"B{i}"),
+        ]
+    put(tmp_path / "qrwn_sections.dwg.json", {
+        "template_version": "1.0",
+        "source": {"path": "submittals/QRWN/T0001/SYNTH-QRWN-30000-001-00.dwg", "sha256": "c" * 64,
+                   "bytes": 1, "document_no": "SYNTH-QRWN-30000-001-00", "revision": None, "file_type": "dwg"},
+        "content": {"texts": texts, "dimensions": [], "layers": [], "open_polylines_by_layer": {}},
+    })
+    # Minimal active rules so check_sections can run (values synthetic — not rules_v7).
+    put(tmp_path / "rules_RDE.json", {
+        "agent": "RDE", "rules": [{
+            "rule_id": "ROD-002", "title": "ROW", "skill": "reviewing-road-design", "state": "active",
+            "cap": "Confirmed", "statement": "Synthetic.", "method": "test",
+            "inputs": ["typical_section"], "parameters": {
+                "row_min": {"value": 10.0, "unit": "m", "tag": "SYNTHETIC", "source_id": "SYNTH-CI",
+                            "clause": "SYNTH-CI", "blocking": False, "tolerance_ref": "width_m"},
+                "row_max": {"value": 50.0, "unit": "m", "tag": "SYNTHETIC", "source_id": "SYNTH-CI",
+                            "clause": "SYNTH-CI", "blocking": False, "tolerance_ref": "width_m"},
+            },
+            "skip_subchecks_for": [], "advisory_parameters": [], "code_lists": {},
+            "severity_default": "Minor", "issue_type": "design_error",
+            "default_status": {"dwg_vector": "Confirmed"}, "applies_to": {"classes": ["all"]},
+        }],
+        "rules_skipped": [],
+    })
+    rc, out = run("check_sections.py", "--sections", tmp_path / "qrwn_sections.dwg.json",
+                  "--rules", tmp_path / "rules_RDE.json", "--out", tmp_path / "sc.json")
+    assert rc == 0, out
+    sc = load(tmp_path / "sc.json")
+    assert len(sc["sections"]) == 6
+    assert all(s.get("anchor") == "title" for s in sc["sections"])
+    prefixes = sorted(s["title"][:6] for s in sc["sections"])
+    assert prefixes == ["15 MET", "18 MET", "20 MET", "25m NE", "30m NE", "36m NE"]
+
