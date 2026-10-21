@@ -1,12 +1,12 @@
 """Shared helpers for the skill 10 location register (SPC-0006 Rev F §4.13C; K17-1, K19-1 ... 5, RC-1 ... 4;
-Rev G §4.13D, DG-1 ... DG-5).
+Rev G §4.13D, DG-1 ... DG-5; Rev I §4.13F: circle fit and curved-run splitter for phase C2).
 
 Geometry of setting-out segments (tangents and circular curves rebuilt from PC / PI / PT and radius),
 linework side files of skill 1, and the skill parameters in references/road_class_params.json (per site:
 layer names, naming code, PDF legend colours; network radii and tolerances). shapely is required.
 No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import json
 import math
@@ -193,3 +193,110 @@ def plot_polygons(ings, polygon_layers, text_layers):
                 plots.append({"id": labels[0], "polygon": poly, "handle": p.get("handle"), "layer": p.get("layer"),
                               "path": src.get("path"), "sha256": src.get("sha256")})
     return plots, unl, amb
+
+
+# ---------------------------------------------------------------- Rev I §4.13F (phase C2): arcs of curb line work
+def fit_circle(pts):
+    """Least-squares (algebraic) circle through pts -> ((cx, cy), r, largest radial residual); None if degenerate."""
+    n = len(pts)
+    if n < 3:
+        return None
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    q = [(p[0] - mx, p[1] - my) for p in pts]          # centred for numerical stability
+    suu = sum(u * u for u, _ in q)
+    svv = sum(v * v for _, v in q)
+    suv = sum(u * v for u, v in q)
+    suuu = sum(u ** 3 for u, _ in q)
+    svvv = sum(v ** 3 for _, v in q)
+    suvv = sum(u * v * v for u, v in q)
+    svuu = sum(v * u * u for u, v in q)
+    det = suu * svv - suv * suv
+    if abs(det) < 1e-12:
+        return None
+    b1 = (suuu + suvv) / 2
+    b2 = (svvv + svuu) / 2
+    uc = (b1 * svv - b2 * suv) / det
+    vc = (b2 * suu - b1 * suv) / det
+    r = math.sqrt(uc * uc + vc * vc + (suu + svv) / n)
+    cx, cy = uc + mx, vc + my
+    res = max(abs(math.dist((cx, cy), p) - r) for p in pts)
+    return (cx, cy), r, res
+
+
+def curved_runs(pts, seg_max=3.0, min_turn_deg=0.2):
+    """Runs of consecutive short segments (< seg_max) turning the same way inside a polyline (bulges flattened by
+    skill 1, or curves drawn as short chords). Each run has at least 4 distinct points."""
+    runs, cur, sgn = [], [], 0
+    for i in range(1, len(pts) - 1):
+        l1, l2 = math.dist(pts[i - 1], pts[i]), math.dist(pts[i], pts[i + 1])
+        a = math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0])
+        b = math.atan2(pts[i + 1][1] - pts[i][1], pts[i + 1][0] - pts[i][0])
+        d = math.degrees((b - a + math.pi) % (2 * math.pi) - math.pi)
+        s = 1 if d > 0 else -1
+        ok = 0 < l1 < seg_max and 0 < l2 < seg_max and abs(d) > min_turn_deg
+        if ok and cur and s == sgn:
+            cur.append(pts[i + 1])
+        else:
+            if len(cur) >= 4:
+                runs.append(cur)
+            cur, sgn = ([pts[i - 1], pts[i], pts[i + 1]], s) if ok else ([], 0)
+    if len(cur) >= 4:
+        runs.append(cur)
+    out = []
+    for r in runs:
+        q = [r[0]]
+        for p in r[1:]:
+            if math.dist(p, q[-1]) > 1e-6:
+                q.append(p)
+        if len(q) >= 4:
+            out.append(q)
+    return out
+
+
+def arc_geometry(run, c, r):
+    """Sweep (degrees, unsigned), mid point, ends, tangent intersection point (PI) and length of an arc run."""
+    ang = [math.atan2(p[1] - c[1], p[0] - c[0]) for p in run]
+    tot = 0.0
+    for a0, a1 in zip(ang, ang[1:]):
+        tot += (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+    am = ang[0] + tot / 2
+    mid = (c[0] + r * math.cos(am), c[1] + r * math.sin(am))
+    half = abs(tot) / 2
+    pi = None
+    if 1e-6 < half < math.radians(89.5):
+        k = r / math.cos(half)
+        pi = (c[0] + k * math.cos(am), c[1] + k * math.sin(am))
+    return {"sweep": math.degrees(abs(tot)), "mid": mid, "p0": tuple(run[0]), "p1": tuple(run[-1]), "pi": pi,
+            "length": r * abs(tot)}
+
+
+def fitted_arcs(records, patterns, fit_tol=0.05, seg_max=3.0, r_max=200.0):
+    """Arcs of the line work on the given layers: ARC records, CIRCLE records (full) and curved runs of polylines,
+    each fitted with a least-squares circle and accepted when the largest residual is <= fit_tol x R.
+    records: [(record, source path, source sha)] (load_linework)."""
+    out = []
+    for r, path, sha in records:
+        if not layer_match(r, patterns) or len(r.get("points") or []) < 3:
+            continue
+        pts = [tuple(p[:2]) for p in r["points"]]
+        if r["type"] in ("ARC", "CIRCLE"):
+            runs = [pts]
+        elif r["type"] in ("LWPOLYLINE", "POLYLINE"):
+            runs = curved_runs(pts, seg_max)
+        else:
+            continue
+        for k, run in enumerate(runs):
+            f = fit_circle(run)
+            if f is None:
+                continue
+            c, R, res = f
+            if R >= r_max or res > fit_tol * max(R, 1.0):
+                continue
+            full = r["type"] == "CIRCLE" or (math.dist(run[0], run[-1]) < 0.5 and len(run) > 8)
+            geo = arc_geometry(run, c, R)
+            if full:
+                geo.update(sweep=360.0, pi=None, length=2 * math.pi * R)
+            out.append({"handle": r.get("handle"), "layer": r.get("layer_short") or r.get("layer"), "type": r["type"],
+                        "closed": bool(r.get("closed")), "run": k, "c": c, "R": R, "residual": res, "full": full, "path": path, "sha256": sha, **geo})
+    return sorted(out, key=lambda a: (str(a["path"]), str(a["handle"]), a["run"]))

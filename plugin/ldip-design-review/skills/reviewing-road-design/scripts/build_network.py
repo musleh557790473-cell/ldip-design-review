@@ -18,12 +18,16 @@ finds, with the parameters of references/road_class_params.json (K19-3; [PROPOSE
 Positions from drawings cap at Probable (K19-1).
 0.2.0 (SPC-0006 Rev G §4.13D.3, DG-1): the input may also be the LandXML network of read_landxml_network.py
 (same format, `spiral` segments flattened); `position_source` (tables / landxml) is carried to network.json.
+0.3.0 (SPC-0006 Rev H §4.13E.7 - 4.13E.8, DH-3): leg bearings are taken `angle_offset_m` (10 m, references c1) from
+the junction; a road whose pieces do not merge into one line (discontinuous) gets each location's chainage from
+the stations of the setting-out row (or LandXML element) of the nearest piece plus the distance along it
+(`chainage_basis: stations`); a location still without a chainage is listed in `not_positioned`.
 
 Usage: python build_network.py --setout <setout.json | landxml_network.json> --site <SITE> [--linework <plan.dwg.json | x.linework.json> ...]
            [--site-boundary <boundary.geojson>] --out <network.json>
 Exit: 0 written · 2 input error · 3 shapely missing. No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import math
@@ -53,6 +57,26 @@ def ray_hit(parts, end, target, reach, g):
     ray = g.LineString([a, (a[0] + dx / L * reach, a[1] + dy / L * reach)])
     hit = ray.intersection(target)
     return None if hit.is_empty else P.distance(hit)
+
+
+STA = re.compile(r"^\s*(\d+)\+(\d+(?:\.\d+)?)\s*$")
+
+
+def station_value(s):
+    """'0+063.460' -> 63.46; a number stays a number; anything else -> None."""
+    if isinstance(s, (int, float)):
+        return float(s)
+    m = STA.match(str(s or ""))
+    return float(m.group(1)) * 1000 + float(m.group(2)) if m else None
+
+
+def seg_start_station(seg):
+    """Station at the start of a setting-out row (first printed station) or LandXML element (sta_start)."""
+    for s in seg.get("stations") or []:
+        v = station_value(s)
+        if v is not None:
+            return v
+    return station_value(seg.get("sta_start"))
 
 
 def circle_from_linework(pt, radius, cl_lines, g):
@@ -86,6 +110,7 @@ def main(argv=None):
         sp, P = site_params(a.site)
         N = P["network"]
         tol_end, clus, gap_m = N["end_on_alignment_m"], N["junction_cluster_m"], N["drafting_gap_m"]
+        offset = float((P.get("c1") or {}).get("angle_offset_m", 10.0))
         so = read_json(a.setout)
         warnings = []
         lw = load_linework(a.linework) if a.linework else []
@@ -125,7 +150,7 @@ def main(argv=None):
                                "basis": "table" if len(distinct) != 1 else "table + plan centreline ring",
                                "evidence": al.get("evidence")})
                 continue
-            parts, tags = [], []
+            parts, tags, sta0 = [], [], []
             for s in segs:
                 p = segment_points(s)
                 if p is None:
@@ -133,11 +158,12 @@ def main(argv=None):
                     continue
                 parts.append(g.LineString(p))
                 tags.append(s["tag"])
+                sta0.append(seg_start_station(s))
             if not parts:
                 continue
             u = ops.unary_union(parts)
             merged = ops.linemerge(u) if u.geom_type == "MultiLineString" else u
-            roads[name] = {"parts": parts, "tags": tags, "geom": merged, "evidence": al.get("evidence"),
+            roads[name] = {"parts": parts, "tags": tags, "sta0": sta0, "geom": merged, "evidence": al.get("evidence"),
                            "length": round(sum(x.length for x in parts), 3)}
         names = sorted(roads)
         geom_all = {n: roads[n]["geom"] for n in names}
@@ -186,7 +212,7 @@ def main(argv=None):
                         continue
                     d = ln.project(J)
                     for sign in (1, -1):
-                        t = d + sign * 10.0
+                        t = d + sign * offset
                         if 0 <= t <= ln.length:
                             q = ln.interpolate(t)
                             brs.append((round(math.degrees(math.atan2(q.x - cx, q.y - cy)) % 360, 1), r))
@@ -223,18 +249,36 @@ def main(argv=None):
             out_ends.append({"id": f"E{i:03d}", "road": n, "xy": xy(c), "type": typ, "basis": basis,
                              "exit_checked": boundary is not None or outside is not None})
         # per road: junctions / roundabouts with chainage (DF-12)
-        per_road = {}
+        per_road, not_positioned = {}, []
+
+        def chain(n, line, pt):
+            """(chainage, basis): along the merged line, or for a discontinuous road from the stations of the nearest
+            piece plus the distance along it (Rev H §4.13E.8 item 3)."""
+            P_ = g.Point(pt)
+            if line is not None:
+                return round(line.project(P_), 1), "line"
+            r = roads[n]
+            k = min(range(len(r["parts"])), key=lambda i: r["parts"][i].distance(P_))
+            if r["sta0"][k] is None:
+                return None, None
+            return round(r["sta0"][k] + r["parts"][k].project(P_), 1), "stations"
+
         for n in names:
             geom = roads[n]["geom"]
             line = geom if geom.geom_type == "LineString" else None
             items = []
             for j in junctions:
                 if n in j["roads"]:
-                    items.append({"location": j["id"], "chainage": round(line.project(g.Point(j["xy"])), 1) if line else None})
+                    c_, b_ = chain(n, line, j["xy"])
+                    items.append({"location": j["id"], "chainage": c_, **({"chainage_basis": b_} if b_ == "stations" else {})})
             for rb in rbouts:
                 for ap_ in rb.get("approaches", []):
                     if ap_["road"] == n:
-                        items.append({"location": rb["name"], "chainage": round(line.project(g.Point(ap_["xy"])), 1) if line else None})
+                        c_, b_ = chain(n, line, ap_["xy"])
+                        items.append({"location": rb["name"], "chainage": c_, **({"chainage_basis": b_} if b_ == "stations" else {})})
+            for it in items:
+                if it["chainage"] is None:
+                    not_positioned.append({"road": n, "location": it["location"], "reason": "discontinuous road without stations"})
             items.sort(key=lambda x: (x["chainage"] is None, x["chainage"] or 0))
             per_road[n] = {"length": roads[n]["length"], "segments": len(roads[n]["parts"]),
                            "continuous": geom.geom_type == "LineString", "locations": items,
@@ -251,6 +295,7 @@ def main(argv=None):
                "params_status": N.get("status", "PROPOSED"),
                "inputs": {"setout": a.setout, "linework": a.linework, "site_boundary": a.site_boundary},
                "roads": per_road, "junctions": junctions, "roundabouts": rbouts, "ends": out_ends,
+               "not_positioned": not_positioned, "angle_offset_m": offset,
                "warnings": warnings,
                "counts": {"roads": len(per_road), "length_m": round(sum(r["length"] for r in per_road.values())),
                           "junctions": len(junctions), "roundabouts": len(rbouts),

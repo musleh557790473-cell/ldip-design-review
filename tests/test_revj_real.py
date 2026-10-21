@@ -18,9 +18,20 @@ pytest.importorskip("shapely")
 REPO = Path(__file__).resolve().parents[1]
 SK10 = REPO / "plugin/ldip-design-review/skills/reviewing-road-design/scripts"
 PY = sys.executable
-ROOT = Path(os.environ["LDIP_REVIEW"]) if os.environ.get("LDIP_REVIEW") else None
+_LDIP_REVIEW_RAW = os.environ.get("LDIP_REVIEW")
+ROOT = Path(_LDIP_REVIEW_RAW) if _LDIP_REVIEW_RAW else None
 C3_RULES = ["ROD-044", "ROD-045", "ROD-046", "ROD-047", "ROD-055", "ROD-056",
             "ROD-059", "ROD-060", "ROD-061", "ROD-062"]
+
+# Shown when LDIP_REVIEW is unset (skip) or set but unusable (fail). Do not invent site data.
+_LDIP_REVIEW_HELP = (
+    "Set LDIP_REVIEW to the absolute path of the local LDIP_Review root "
+    "(submittals/{NMAR,QRWN,NRJS}/… and 0.ai_context/{SITE}/…/*.dwg.json). "
+    "Real 30 % drawings stay out of Git (brief §10.2). "
+    "On the owner machine they live under OneDrive …/TAWAZUN PROGRAM/Claude/LDIP_Review — "
+    "a local worker is required; cloud agents without that mount cannot run real TJ8. "
+    "See docs/tj8-real-data-plan.md in the Project store."
+)
 
 
 def run(script, *args):
@@ -152,16 +163,34 @@ def test_tj8_synthetic_pd_30_percent(tmp_path):
                         load(tmp_path / "sec.json"), load(tmp_path / "cand.json"))
 
 
-@pytest.mark.skipif(ROOT is None or not (ROOT and ROOT.is_dir()),
-                    reason="LDIP_REVIEW not set — real 30 % drawings stay out of Git")
+@pytest.mark.skipif(
+    ROOT is None,
+    reason="LDIP_REVIEW not set — real 30 % drawings stay out of Git. " + _LDIP_REVIEW_HELP,
+)
 def test_tj8_real_ldip_review_pd(tmp_path):
     """When LDIP_REVIEW is set, run C3 scripts at 30 % on whatever ingestions are present and assert TJ8."""
     assert ROOT is not None
+    if not ROOT.is_dir():
+        pytest.fail(
+            f"LDIP_REVIEW={_LDIP_REVIEW_RAW!r} is set but is not an existing directory. "
+            + _LDIP_REVIEW_HELP
+        )
     rules = rules_c3(tmp_path)
-    # discover a few DWG ingestions; skip if none
-    dwgs = sorted(ROOT.rglob("*.dwg.json"))[:6]
+    # Prefer site trees when present; otherwise any *.dwg.json under the review root.
+    dwgs = []
+    for site in ("NMAR", "QRWN", "NRJS"):
+        site_ctx = ROOT / "0.ai_context" / site
+        if site_ctx.is_dir():
+            dwgs.extend(sorted(site_ctx.rglob("*.dwg.json")))
     if not dwgs:
-        pytest.skip("no *.dwg.json under LDIP_REVIEW")
+        dwgs = sorted(ROOT.rglob("*.dwg.json"))
+    dwgs = dwgs[:6]
+    if not dwgs:
+        pytest.fail(
+            f"LDIP_REVIEW={ROOT} has no *.dwg.json ingestions "
+            f"(expected under 0.ai_context/{{NMAR,QRWN,NRJS}}/<sub>/b<nn>/). "
+            + _LDIP_REVIEW_HELP
+        )
     det = dwgs[0]
     plan = dwgs[min(1, len(dwgs) - 1)]
     # minimal network so scripts can run

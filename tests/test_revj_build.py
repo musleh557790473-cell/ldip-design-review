@@ -468,7 +468,7 @@ def test_tj9_accessible_counts_and_determinism(tmp_path):
 
 
 def test_build_candidates_reads_c3(tmp_path):
-    """Skill version 0.10.0; C3 fail checks become findings."""
+    """Skill version 0.7.0; C3 fail checks become findings."""
     write_net(tmp_path, {"c3_parking_areas": [
         {"id": "PA1", "total": 40, "accessible": 1, "land_use": "residential", "xy": [660000, 2750000]}]})
     (tmp_path / "class.json").write_text(json.dumps({"roads": {}}))
@@ -482,4 +482,4 @@ def test_build_candidates_reads_c3(tmp_path):
                   "--evidence-dir", tmp_path / "ev", "--out", tmp_path / "cand.json")
     assert rc == 0, out
     cands = load(tmp_path / "cand.json")
-    assert cands and cands[0]["agent_versions"] == {"reviewing-road-design": "0.10.0"}
+    assert cands and cands[0]["agent_versions"] == {"reviewing-road-design": "0.7.0"}

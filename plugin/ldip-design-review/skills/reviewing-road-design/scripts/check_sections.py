@@ -11,16 +11,25 @@ value on each side is the sidewalk and inner values of 2.5-4.0 m are lanes — `
 finding at Probable (D10-3). A value equal to a dimension measurement of the drawing is flagged
 `dimension_match` (information). Percent values between the lanes are the carriageway crossfall.
 
+0.2.0 (SPC-0006 Rev I §4.13F.6, K25 / DI-8): a second section anchor, used only for a file in which no
+"RIGHT OF WAY" pair is found (QRWN layout): each class title text opens a section; its band is the text
+area from the title up to the next title above it in the same column, between the "R.O.W." marks of the
+band (else a fixed width around the title). Without element labels, a value on the centre line (x of the
+ROW value) is the median (positional). Widths written "30.00 (R.O.W.)" count as ROW labels. Zero-height
+ghost texts of nested blocks (height < 0.05) and duplicate texts are dropped. A file with "RIGHT OF WAY"
+pairs (NMAR) is read exactly as in 0.1.x.
+
 Rules: ROD-002 / 003 / 004 (ROW), 010 / 011 / 012 (lanes, incl. tier-2 observation), 014 / 016
 (median), 021 (crossfall), 048 (sidewalk: land use not known -> only the lowest required width is
 enforced; a width between the lowest and the highest is not run), 057 (curb height from
 "CURB (150 mm)" text), 059 (parking lane width — 0.3.0, SPC-0006 Rev J §4.13G.9).
 
-0.3.0 (SPC-0006 Rev J §4.13F.6 [AGREED] 18 Oct 2026 14:09, §4.13G.9):
+0.3.0 (SPC-0006 Rev J §4.13F.6 [AGREED] 18 Oct 2026 14:09, §4.13G.9; rebuilt on build-027 C1+C2):
 - element `parking` from labels PARKING / PARKING LANE / PARALLEL PARKING (ROD-059);
   "WITHOUT PARALLEL PARKING" in the title → no parking element;
-- QRWN band-above-title: section stands above its title; "R.O.W." / "nn.nn (R.O.W.)" count as ROW
-  marks; without element labels a value on the centre line is the median.
+- pair-anchor marks = rotated "RIGHT OF WAY" only (as 0.2.0); "R.O.W." / "nn.nn (R.O.W.)"
+  stay with the K25 title anchor (QRWN), so they do not form false pair bands;
+- K25 title-anchor fallback when no "RIGHT OF WAY" pairs are found.
 
 Usage: python check_sections.py --sections <a.dwg.json> [...] --rules <rules_RDE.json> --out <section_checks.json>
 Exit: 0 written · 2 input error. No network, no shell calls.
@@ -42,6 +51,11 @@ CURB = re.compile(r"curb\s*\(\s*(\d+(?:\.\d+)?)\s*mm\s*\)", re.I)
 ROW_MARK = re.compile(r"^(?:RIGHT OF WAY|R\.?O\.?W\.?)$", re.I)
 ROW_VALUE_MARK = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*\(\s*R\.?O\.?W\.?\s*\)\s*$", re.I)
 NO_PARKING = re.compile(r"without\s+parallel\s+parking", re.I)
+GHOST_H = 0.05          # K25: texts of zero-scale nested blocks
+TITLE_MIN_H = 0.1
+COLUMN_DX = 30.0        # titles closer than this in x share a column
+BAND_TOP_M = 15.0       # band height above the top title of a column
+BAND_X = (-15.0, 35.0)  # band x extent around the title when the band has fewer than two R.O.W. marks
 LABELS = {"DRIVING LANE": "lane", "SIDE WALK": "sidewalk", "SIDEWALK": "sidewalk", "MEDIAN": "median",
           "PARKING": "parking", "PARKING LANE": "parking", "PARALLEL PARKING": "parking"}
 CHECKS = {
@@ -94,8 +108,9 @@ def sections_of(ing):
     texts = uniq
     dims = {round(float(d["measurement"]), 2) for d in (ing.get("content") or {}).get("dimensions", [])
             if isinstance(d.get("measurement"), (int, float))}
-    marks = [t for t in texts if _is_row_mark(t)
-             and (abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5 or ROW_VALUE_MARK.match(t["text"].strip()))]
+    # pair anchor (NMAR): rotated "RIGHT OF WAY" only, as 0.2.0. "R.O.W." marks belong to the K25 title anchor.
+    marks = [t for t in texts if t["text"].strip().upper() == "RIGHT OF WAY"
+             and abs(abs(float(t.get("rotation") or 0)) % 180 - 90) < 5]
     bands, used = [], set()
     for m in sorted(marks, key=lambda t: (round(xy(t)[1], 0), xy(t)[0])):
         if m["handle"] in used:
@@ -193,7 +208,109 @@ def sections_of(ing):
         out.append({"title": title["text"].replace("\n", " ") if title else None,
                     "title_handle": title["handle"] if title else None, "class": class_of(title["text"]) if title else None,
                     "title_width_m": title_w, "values": values})
+    if not bands:                                   # K25 (Rev I §4.13F.6): QRWN layout, title-anchored bands
+        for title, inside in title_bands(texts):
+            s = analyse(title, inside, dims, centre_median=True)
+            s["anchor"] = "title"
+            out.append(s)
     return out
+
+
+def dedupe(texts):
+    seen, out = set(), []
+    for t in texts:
+        k = (t["text"].strip(), round(xy(t)[0], 2), round(xy(t)[1], 2))
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
+
+
+def title_bands(texts):
+    """K25: [(title, texts of its band)] — a band runs from the title up to the next title above it in the same
+    column; its x extent is given by the R.O.W. marks inside it (else BAND_X around the title)."""
+    vis = dedupe([t for t in texts if t.get("height") is None or float(t["height"]) >= GHOST_H])
+    titles = [t for t in vis if class_of(t["text"]) and "ROAD" in t["text"].upper() and TITLE_W.search(t["text"])
+              and (t.get("height") is None or float(t["height"]) >= TITLE_MIN_H)]
+    out = []
+    for t in sorted(titles, key=lambda t: (-xy(t)[1], xy(t)[0])):
+        x0, y0 = xy(t)
+        above = [xy(o)[1] for o in titles if xy(o)[1] > y0 + 0.5 and abs(xy(o)[0] - x0) < COLUMN_DX]
+        top = min(above) - 0.3 if above else y0 + BAND_TOP_M
+        band = [o for o in vis if y0 <= xy(o)[1] < top and abs(xy(o)[0] - x0) < COLUMN_DX + 20]
+        marks = [o for o in band if ROW_MARK.match(o["text"].strip())]
+        if len(marks) >= 2:
+            lo, hi = min(xy(o)[0] for o in marks) - 1.0, max(xy(o)[0] for o in marks) + 1.0
+        else:
+            lo, hi = x0 + BAND_X[0], x0 + BAND_X[1]
+        out.append((t, [o for o in band if lo <= xy(o)[0] <= hi]))
+    return out
+
+
+def analyse(title, inside, dims, centre_median=False):
+    """Element values of one section band (K25 title anchor). centre_median: without element labels, a value
+    on the centre line (x of the ROW value) is the median, positional. Parking labels honor NO_PARKING."""
+    if title and NO_PARKING.search(title["text"]):
+        labels = [(LABELS[t["text"].strip().upper()], t) for t in inside
+                  if t["text"].strip().upper() in LABELS and LABELS[t["text"].strip().upper()] != "parking"]
+    else:
+        labels = [(LABELS[t["text"].strip().upper()], t) for t in inside if t["text"].strip().upper() in LABELS]
+    values = []
+    for t in inside:
+        rm = ROW_VALUE_MARK.match(t["text"].strip())
+        if rm:
+            values.append({"value": float(rm.group(1)), "pct": False, "row_label": True, "text": t,
+                           "element": None, "assigned": None,
+                           "dimension_match": round(float(rm.group(1)), 2) in dims})
+            continue
+        m = VALUE.match(t["text"])
+        if not m:
+            continue
+        v = {"value": float(m.group(1)), "pct": bool(m.group(2)), "row_label": bool(m.group(3)), "text": t,
+             "element": None, "assigned": None, "dimension_match": round(float(m.group(1)), 2) in dims}
+        for kind, lab in labels:
+            if abs(xy(lab)[0] - xy(t)[0]) < 0.8 and 0 < xy(t)[1] - xy(lab)[1] < 1.0:
+                v["element"], v["assigned"] = kind, "labelled"
+        values.append(v)
+    tw = TITLE_W.search(title["text"]) if title else None
+    title_w = float(tw.group(1)) if tw else None
+    lengths = [v for v in values if not v["pct"]]
+    row = [v for v in lengths if v["row_label"]]
+    if not row and lengths:
+        big = max(lengths, key=lambda v: v["value"])
+        if big["value"] >= 10:
+            row = [big]
+    for v in row:
+        v["element"] = "row"
+        v["assigned"] = "labelled" if (v["row_label"] or (title_w is not None and abs(v["value"] - title_w) < 0.01)) else "positional"
+    free = [v for v in lengths if v["element"] is None]
+    if free and not any(v["element"] == "sidewalk" for v in values):
+        for side in (min(free, key=lambda v: xy(v["text"])[0]), max(free, key=lambda v: xy(v["text"])[0])):
+            if side["value"] >= 1.0 and side["element"] is None:
+                side["element"], side["assigned"] = "sidewalk", "positional"
+    if centre_median and row and not any(v["element"] == "median" for v in values):
+        cx = xy(row[0]["text"])[0]
+        for v in lengths:
+            if v["element"] is None and v["value"] >= 1.0 and abs(xy(v["text"])[0] - cx) < 0.5:
+                v["element"], v["assigned"] = "median", "positional"
+    if not any(v["element"] == "lane" for v in values):
+        for v in lengths:
+            if v["element"] is None and 2.5 <= v["value"] <= 4.0:
+                v["element"], v["assigned"] = "lane", "positional"
+    lanes = [v for v in values if v["element"] == "lane"]
+    if lanes:
+        lo = min(xy(v["text"])[0] for v in lanes) - 0.5
+        hi = max(xy(v["text"])[0] for v in lanes) + 0.5
+        for v in values:
+            if v["pct"] and lo <= xy(v["text"])[0] <= hi:
+                v["element"], v["assigned"] = "crossfall", "positional"
+    curbs = [t for t in inside if CURB.search(t["text"])]
+    for t in curbs:
+        values.append({"value": float(CURB.search(t["text"]).group(1)), "pct": False, "row_label": False, "text": t,
+                       "element": "curb", "assigned": "labelled", "dimension_match": False})
+    return {"title": title["text"].replace("\n", " ") if title else None,
+            "title_handle": title["handle"] if title else None, "class": class_of(title["text"]) if title else None,
+            "title_width_m": title_w, "values": values}
 
 
 def run_checks(ings, rules):
@@ -202,7 +319,7 @@ def run_checks(ings, rules):
         src = source_of(ing)
         for s in sections_of(ing):
             sections.append({"source": src["path"], "title": s["title"], "class": s["class"],
-                             "title_width_m": s["title_width_m"],
+                             "title_width_m": s["title_width_m"], **({"anchor": s["anchor"]} if s.get("anchor") else {}),
                              "elements": [{"element": v["element"], "value": v["value"], "assigned": v["assigned"],
                                            "handle": v["text"]["handle"], "dimension_match": v["dimension_match"]}
                                           for v in s["values"] if v["element"]]})

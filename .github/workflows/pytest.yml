@@ -17,11 +17,11 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest shapely numpy scipy jsonschema lxml ezdxf pypdfium2 Pillow
-      - name: Run plugin / skill tests (no project data)
+          pip install pytest shapely numpy scipy jsonschema lxml ezdxf pypdfium2 Pillow \
+            openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
+      - name: Full suite via check_suite (expect recorded count)
         run: |
-          python -m pytest tests/test_revj_build.py tests/test_revj_real.py tests/test_phase_d_surfaces.py \
-            tests/test_revg_build.py tests/test_road_presence.py tests/test_plugin_layout.py \
-            tests/test_check_suite.py tests/test_d11_bash_lines.py -q --tb=line
-      - name: No project data in Git
-        run: python tools/check_no_data.py
+          # 534 = full collect with CI deps incl. PyYAML + K25 synthetic QRWN test. Bump when tests change.
+          python tools/check_suite.py --expect 534 --tests tests
+      - name: No project data in Git (name + content fingerprints)
+        run: python tools/check_no_data.py --all

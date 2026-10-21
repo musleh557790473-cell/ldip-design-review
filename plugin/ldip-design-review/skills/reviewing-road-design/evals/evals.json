@@ -204,6 +204,100 @@
     "NMAR: 19 dead ends without turning-area evidence",
     "QRWN: 82 listed, DEP-05 / DEP-06 quoted"
    ]
+  },
+  {
+   "id": "TH1-TH6-geometry-synthetic",
+   "query": "Run phase C1 (plan geometry) on the synthetic setting-out tables of tests/test_revh_build.py.",
+   "files": [
+    "tests/test_revh_build.py (generated in the test)"
+   ],
+   "expected": [
+    "RD-A C-1 R 40 m below the local 50 m minimum; RA-1 not checked; RD-X not judged (no class)",
+    "RD-D arc 14.7 m below 20 m at 30 km/h; 20 km/h not a key (not run)",
+    "RD-S R 100 m needs a spiral at 50 km/h only; RD-T with spirals passes",
+    "T junction at 60° listed; crossroads with two names on the through line passes (one arm)",
+    "spacings 30 m and 120 m on a local road listed as Observation (advisory)"
+   ]
+  },
+  {
+   "id": "TH7-NMAR-30pct-geometry",
+   "query": "Check the drawn plan geometry of the Namar 30 % roads (ROD-017 ... 037).",
+   "files": [
+    "setting-out sheets 60000-001 ... 003, hierarchy plan 00003, typical sections 30000, design report (local only)"
+   ],
+   "expected": [
+    "ROD-018 12 local curves and ROD-017 4 sub-collector curves below the minimum radius",
+    "ROD-019 5 local + 3 sub-collector arcs; ROD-020 7 (4 curves, 40 and 50 km/h); J047 61.2°",
+    "ROD-036 44 / 50 local and 15 / 16 collector pairs below the agreed spacing; 67 tangents, 3 reverse"
+   ]
+  },
+  {
+   "id": "TI1-corner-returns",
+   "query": "Check the curb-return radii at the junctions of this plan (ROD-032).",
+   "files": [
+    "synthetic plan with curb line work, network and classes (tests/test_revi_build.py)"
+   ],
+   "expected": [
+    "corners found from ARC records and from polyline chords; a road bend 40 m away and a 20° arc ignored",
+    "the highest class at the junction sets the range (DI-2 a): R 13 at a collector / local junction passes",
+    "one finding per class, Probable"
+   ]
+  },
+  {
+   "id": "TI2-design-vehicle",
+   "query": "Is the design vehicle of the criteria table acceptable (ROD-032)?",
+   "files": [
+    "synthetic criteria.json with a DEP-04 departure"
+   ],
+   "expected": [
+    "'Passenger Vehicle' listed; the DEP-04 departure quoted and not cancelling",
+    "not stated: not run at PD, Missing information at DD (C5)"
+   ]
+  },
+  {
+   "id": "TI3-TI5-roundabouts",
+   "query": "Check the roundabout layout (ROD-039, 040, 042, 043).",
+   "files": [
+    "synthetic roundabout: island R 12, outer curb R 20.2, two splitter islands"
+   ],
+   "expected": [
+    "ICD 40.4 m: C-L listed, C-C passes; no outer curb -> setting-out radius, noted; unknown class -> not run",
+    "island 4.3 × 7.3 m length listed; entry width 5.2 m L-L passes, 6.5 m listed; no island -> not run",
+    "apron 1.7 m passes, 1.0 m listed; none at PD not run, at DD Missing information"
+   ]
+  },
+  {
+   "id": "TI6-driveways-sight-triangles",
+   "query": "At DD, check driveway returns and sight triangles (ROD-033, 034).",
+   "files": [
+    "synthetic DD plan with a plot outline and a palm block"
+   ],
+   "expected": [
+    "driveway R 4 local passes, R 6 listed; the triangle with the palm block listed; both not run at PD"
+   ]
+  },
+  {
+   "id": "TI8-real-30pct-layout",
+   "query": "Check junction and roundabout layout of the Namar, Al-Qairawan and Al-Narjis 30 % plans.",
+   "files": [
+    "road plans 00003 / 15000 with line work, setting-out sheets, typical sections, design reports (local only)"
+   ],
+   "expected": [
+    "NMAR 104 corners: local 69 / 69 and collector 27 / 35 outside the range; RA-01 ICD 40.4 m C-L listed",
+    "QRWN 740 corners (after K25): local 558 / 558, collector 116 / 158; RA-1 / 4 / 6 C-L listed; 3 splitter islands shorter than 15 m",
+    "NRJS 14 corners, all outside 6-9 m; design vehicle listed with DEP-04 quoted (NMAR, QRWN)"
+   ]
+  },
+  {
+   "id": "TI9-K25-QRWN-sections",
+   "query": "Read the QRWN typical sections 30000-001.",
+   "files": [
+    "QRWN typical sections 30000-001 (local only)"
+   ],
+   "expected": [
+    "six sections (15, 18, 20 m local; 25, 30, 36 m collector) with ROW values; NMAR unchanged",
+    "QRWN classes 219 local / 21 collector, 0 unknown (was 210 / 21 / 9)"
+   ]
   }
  ]
 }

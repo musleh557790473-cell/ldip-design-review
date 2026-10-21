@@ -17,17 +17,27 @@ location (first sample), and the other locations are listed in the statement and
 0.4.0 (SPC-0006 Rev G §4.13D): the phase B2 part 2 location kinds (low points, parking areas, calming devices,
 school frontages) come through location_checks.json unchanged; a LandXML position [e, n] gives an EPSG:32638
 location. The version is the skill version (agent_versions).
+0.5.0 (SPC-0006 Rev H §4.13E, DH-1 ... DH-10): takes geometry_checks.json (check_geometry.py, phase C1); a check
+may carry `severity_override` (Observation for an advisory rule, DH-7); the drawn-curve checks of ROD-017 / 018
+carry `mode_tag` drawn_curves, so they form their own finding apart from the phase-A stated-criteria one (DH-2).
+0.6.0 (SPC-0006 Rev I §4.13F, DI-1 ... DI-10): takes layout_checks.json (check_layout.py, phase C2: corner returns
+and design vehicle, roundabout ICD / entry width / splitter islands / apron, DD driveways and sight triangles)
+unchanged: one finding per (rule, parameter, class or junction type); the DD absences carry `status_override`
+Missing information and `issue_type` missing_information; the advisory splitter-island length carries
+`severity_override` Observation.
 0.7.0 (SPC-0006 Rev J §4.13G): also takes calming_checks.json, pedestrian_checks.json and parking_checks.json
 (phase C3). Advisory / tier-2 parameters keep Observation severity.
-0.10.0 (SPC-0001 Rev J §6.5 row 10 / DJ-10 / DK-5): packages C3 + D first slice; also takes surface_checks.json
-(phase D). Rulebook activation is unchanged — C3/D rules stay inactive until the first 60 % package (DJ-9 / R37).
+0.7.0+D (SPC-0006 §4.13H / DK-1…DK-5, rebuilt on build-027): also takes surface_checks.json (phase D first
+slice). Skill/plugin version stays **0.7.0** — do not claim SPC-0001 0.10.0 until skill 10 is complete;
+premature 0.10.0 on main was experimental (Claude remediation, owner «نعم اعتمد» 20 Oct 2026). Rulebook
+activation unchanged — C3/D rules stay inactive until the first 60 % package (DJ-9 / R37).
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.10.0"
+__version__ = "0.7.0"
 
 import argparse
 import json
@@ -160,7 +170,7 @@ class Builder:
             if s.get("link_cap"):
                 status = lower(status, s["link_cap"])
         tier2 = pname.startswith("tier2_") or pname == "er_difference"
-        severity = "Observation" if tier2 else rule["severity_default"]
+        severity = "Observation" if tier2 else (s0.get("severity_override") or rule["severity_default"])
         cls = sorted({s.get("class") for s in samples if s.get("class")})
         obs = "; ".join(f"{s['subject']}: {fmt(s['observed'])}" + (f" {s['unit']}" if s.get("unit") else "")
                         + (f" (required {OP.get(s['comparison'], s['comparison'])} {fmt(s['required'])})"

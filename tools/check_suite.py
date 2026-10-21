@@ -29,6 +29,10 @@ def main(argv=None):
     collected = int(m.group(1)) if m else None
     res = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", a.tests], capture_output=True, text=True)
     skips = [ln.split("SKIPPED", 1)[1].strip() for ln in res.stdout.splitlines() if ln.startswith("SKIPPED")]
+    failed = [ln.split("FAILED", 1)[1].strip() for ln in res.stdout.splitlines() if "FAILED" in ln and "::" in ln]
+    # pytest -q summary lines like "FAILED tests/foo.py::test_x - AssertionError"
+    if not failed:
+        failed = [ln.strip() for ln in res.stdout.splitlines() if ln.startswith("FAILED ")]
     tail = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
     problems = []
     if collected is None:
@@ -36,7 +40,7 @@ def main(argv=None):
     elif a.expect is not None and collected != a.expect:
         problems.append(f"collected {collected} tests, expected {a.expect}")
     problems += [f"package skip: {s}" for s in skips if PACKAGE_SKIP.search(s)]
-    out = {"collected": collected, "result": tail, "skips": skips, "problems": problems}
+    out = {"collected": collected, "result": tail, "skips": skips, "failed": failed, "problems": problems}
     print(json.dumps(out, ensure_ascii=False))
     if res.returncode not in (0, 5):
         return 1
