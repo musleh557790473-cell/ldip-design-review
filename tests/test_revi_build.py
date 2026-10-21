@@ -204,7 +204,7 @@ def test_ti1_corner_returns(tmp_path):
     f = load(tmp_path / "cand.json")
     r32 = [x for x in f if x["reference"]["rule_id"] == "ROD-032"]
     assert len(r32) == 1 and r32[0]["proposed_status"] == "Probable" and r32[0]["severity"] == "Major"
-    assert r32[0]["agent_versions"]["reviewing-road-design"] == "0.7.0" and "dwg" in r32[0]["location"]
+    assert r32[0]["agent_versions"]["reviewing-road-design"] == "0.10.0" and "dwg" in r32[0]["location"]
     rc, o = run("validate_findings.py", "--findings", tmp_path / "cand.json", "--rules", tmp_path / "rules_RDE.json")
     assert rc == 0, o
 

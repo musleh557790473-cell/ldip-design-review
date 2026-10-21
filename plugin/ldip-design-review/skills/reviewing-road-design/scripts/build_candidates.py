@@ -27,17 +27,16 @@ Missing information and `issue_type` missing_information; the advisory splitter-
 `severity_override` Observation.
 0.7.0 (SPC-0006 Rev J §4.13G): also takes calming_checks.json, pedestrian_checks.json and parking_checks.json
 (phase C3). Advisory / tier-2 parameters keep Observation severity.
-0.7.0+D (SPC-0006 §4.13H / DK-1…DK-5, rebuilt on build-027): also takes surface_checks.json (phase D first
-slice). Skill/plugin version stays **0.7.0** — do not claim SPC-0001 0.10.0 until skill 10 is complete;
-premature 0.10.0 on main was experimental (Claude remediation, owner «نعم اعتمد» 20 Oct 2026). Rulebook
-activation unchanged — C3/D rules stay inactive until the first 60 % package (DJ-9 / R37).
+0.10.0 (SPC-0001 Rev K / Rev J §6.5 row 10 / DJ-10 / DK-5; rebuilt on build-027): packages C3 + D first slice;
+also takes surface_checks.json (phase D). Skill 10 is complete; **0.10.0 ships with deferred activation** —
+C3 and D rules are NOT activated until the 60 % package (R37 / DJ-9); no `rules_v8`.
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json> --run <run-id> --site <SITE>
            --sub <sub-id> --evidence-dir <dir> [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.7.0"
+__version__ = "0.10.0"
 
 import argparse
 import json

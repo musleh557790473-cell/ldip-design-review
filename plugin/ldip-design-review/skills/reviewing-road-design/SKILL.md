@@ -16,8 +16,8 @@ description: >-
   information by design stage. Use for any LDIP road geometry, road
   design-criteria or missing road element check.
 metadata:
-  version: "0.7.0"
-  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev H §4.13E (phase C1), Rev I §4.13F (phase C2, K25), Rev J §4.13G (phase C3), §4.13H (phase D first slice); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B"
+  version: "0.10.0"
+  spec: "AICC-BIM-SPC-0006 Rev D §4.13 (phase A), Rev E §4.13B (phase B1), Rev F §4.13C (phase B2) and §4.13.6 (K24), Rev G §4.13D (phase B2 part 2), Rev H §4.13E (phase C1), Rev I §4.13F (phase C2, K25), Rev J §4.13G (phase C3), §4.13H (phase D first slice); AICC-BIM-SPC-0004 Rev E §5.8-5.14, §7A, §7B — packaged in plugin / skill 0.10.0 (SPC-0001 Rev K / DJ-10 / DK-5); C3 and D rules are NOT activated until the 60 % package (R37 / DJ-9); no rules_v8"
 ---
 
 # Reviewing road design (phases A, B1, B2, C1, C2, C3 and D surface slice)
@@ -131,7 +131,7 @@ LandXML `<X>.xml.json`.
    `python "<SK>/check_pedestrian.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file signing_marking_plan="<G>.dwg.json" [--corner-returns "<EV>/corner_returns.json"] [--class "<EV>/road_class.json"] [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/pedestrian_checks.json"`
    `python "<SK>/check_parking.py" --network "<EV>/network.json" --class "<EV>/road_class.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --file plan_geometry="<P>.dwg.json" [--plots "<CAD>.dwg.json" --dlus "<EV>/dlus.json" --plot-label-source "<EV>/rules_GIS.json"] --out "<EV>/parking_checks.json"`
    (At PD, C3 DD rules are listed not run; typical-section parking is still covered by step 4 `check_sections.py`.)
-5f. **Surface gradient / slope / roundabout crossfall-drainage (phase D first slice)** — LandXML design TIN over C3-accepted polygons (§4.13H / DK-1…DK-4). Ships with C3 at skill **0.7.0** (SPC-0001 **0.10.0** reserved until skill 10 complete); does **not** activate C3/D rules (DJ-9 / R37):
+5f. **Surface gradient / slope / roundabout crossfall-drainage (phase D first slice)** — LandXML design TIN over C3-accepted polygons (§4.13H / DK-1…DK-4). Packaged in skill / plugin **0.10.0** with C3 (SPC-0001 Rev K / DJ-10 / DK-5); **C3 and D rules are NOT activated** until the 60 % package (R37 / DJ-9); no `rules_v8`:
    `python "<SK>/check_surfaces.py" --network "<EV>/network.json" --rules "<EV>/rules_RDE.json" --stage "<stage name>" --site <SITE> --landxml "<X>.xml.json" [--surface-index N] [--elements "<EV>/surface_elements.json"] [--file drainage_plan="<D>.dwg.json"] [--rulebook "<rulebook/rules_v7.json>"] --out "<EV>/surface_checks.json"`
    (Or pass `--surface "<stem>.surface-1.json"` instead of `--landxml`. **Multi-surface:** sole `content.surfaces[]` entry is the default; when several exist, pass `--surface-index` — no FG/name preference invented. Refuge / accessible-bay polygons from `network.c3_refuges` / `c3_accessible_bays` or `--elements`. ROD-043 footprint = **circulatory** via `c3_crossfall_footprints` / `--elements` (`kind=apron` ignored); do not invent a ring from `roundabouts` centre+radius. ROD-043 numbers from the RDE rule object or `--rulebook` / `LDIP_RULEBOOK` — full `rules_v*.json` stays out of Git; CI uses **synthetic** `tests/fixtures/rod043_excerpt.json` (not deposited rulebook numbers). Missing params or circulatory footprint → not_run. Loading params does **not** activate inactive ROD-043. Apron is out of D.)
    Without setting-out tables or LandXML alignments, skip 5a–5f and report it in `gaps`.
