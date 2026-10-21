@@ -18,10 +18,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest shapely numpy scipy jsonschema lxml ezdxf pypdfium2 Pillow \
-            openpyxl pdfplumber reportlab python-docx ezdwg
+            openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # Bump --expect when tests are added/removed (see tools/check_suite.py).
+          # 533 = full collect with CI deps incl. PyYAML (test_plugin_layout). Bump when tests change.
           python tools/check_suite.py --expect 533 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
