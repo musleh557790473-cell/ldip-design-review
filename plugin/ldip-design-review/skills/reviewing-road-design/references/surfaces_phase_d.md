@@ -53,19 +53,19 @@ Optional rulebook for ROD-043 numbers (does **not** activate inactive rules):
 
 ## 5 ROD-043 parameters
 
-Full `rules_v7.json` is **not in Git** (`rules_v*.json` gitignored; local / Project-store deposit). CI uses the minimal excerpt `tests/fixtures/rod043_excerpt.json` (same parameter names/values as the deposited rule).
+Full `rules_v*.json` is **not in Git** (gitignored; local / Project-store deposit). CI uses `tests/fixtures/rod043_excerpt.json` — **synthetic** values that exercise the loader shape only (deliberately **not** deposited rulebook numbers). `tools/check_no_data.py` blocks deposited ROD-043 text/numeric fingerprints.
 
-| Parameter | Value (rules_v7) | D behaviour |
+| Parameter | Source | D behaviour |
 |---|---|---|
-| `apron_width` | 1.5–2.0 m | Always `not_run` (out of D) |
-| `circulatory_crossfall` | 2.0 % | Max TIN face slope ≤ 2 % on **circulatory** footprint |
-| `drainage_g_min` | 0.5 % | Min TIN face slope ≥ 0.5 % on same footprint |
+| `apron_width` | deposited rulebook (not in Git) | Always `not_run` (out of D) |
+| `circulatory_crossfall` | deposited rulebook / `--rulebook` | Max TIN face slope ≤ limit on **circulatory** footprint |
+| `drainage_g_min` | deposited rulebook / `--rulebook` | Min TIN face slope ≥ limit on same footprint |
 
-Without `--rules` params and without `--rulebook` / `LDIP_RULEBOOK` → `not_run` + *Missing information* (rule parameters). Numbers are never invented. **Loading a rulebook does not change `state`** — real ROD-043 stays **inactive** until 60 % / R37.
+Without `--rules` params and without `--rulebook` / `LDIP_RULEBOOK` → `not_run` + *Missing information* (rule parameters). Numbers are never invented. **Loading a rulebook does not change `state`** — ROD-043 stays **inactive** until 60 % / R37.
 
 ## 6 Crossfall / drainage footprint
 
-**Settled from ROD-043 (rules_v7):** the parameter is named `circulatory_crossfall` and the statement says “circulatory crossfall …”. Apron is a separate parameter and is **out of D** (SPC-0004 §4.8E / DK-3). So the D footprint kind is **circulatory**, not the apron ring.
+**Settled from ROD-043 parameter naming:** the parameter is named `circulatory_crossfall` (statement refers to circulatory crossfall). Apron is a separate parameter and is **out of D** (SPC-0004 §4.8E / DK-3). So the D footprint kind is **circulatory**, not the apron ring.
 
 | Intake | Role |
 |---|---|

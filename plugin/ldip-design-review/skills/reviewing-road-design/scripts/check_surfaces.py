@@ -39,7 +39,7 @@ from tin_surface import (MULTI_SURFACE_GAP, load_tin, max_face_slope_in_polygon,
                          min_face_slope_in_polygon, resolve_tin_from_landxml, tin_sha256)
 
 LIMIT_056_062 = 2.0  # % — Rev J / §4.13H.3
-# Real names from rules_v7 ROD-043 (see tests/fixtures/rod043_excerpt.json). Do not invent.
+# Parameter name candidates for ROD-043 crossfall (loader). CI fixture is synthetic — do not invent.
 CROSSFALL_PARAM_NAMES = ("circulatory_crossfall", "crossfall", "crossfall_max", "crossfall_pct")
 GAP_043 = ("ROD-043 crossfall/drainage parameters not available — pass --rulebook "
            "<rules_vN.json|excerpt> or set LDIP_RULEBOOK (full rules_v*.json stays out of Git; "

@@ -147,7 +147,9 @@ def test_ocr_scanned_page(tmp_path, pdf):
     assert run("validate_ingestion.py", "--files", out, base=SK1)[0] == 0
 
 
+@pytest.mark.skipif(not HAS_TESS, reason="tesseract not installed")
 def test_ocr_refuses_other_pdf(tmp_path, pdf):
+    # Without tesseract the script exits 3 (dependency) before the PDF-identity check.
     _, _, out = extract(tmp_path, pdf)
     other = make_pdf(tmp_path / "other.pdf", scanned_page=False)
     rc, res = run("ocr_tiles.py", "--ingestion", out, "--pdf", other)

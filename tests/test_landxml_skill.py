@@ -260,12 +260,25 @@ def test_geom_unit():
     assert abs(g.to_degrees("45.3015", "decimal dd.mm.ss") - (45 + 30 / 60 + 15 / 3600)) < 1e-9
 
 
-def test_data_guard_blocks_xml():
+def test_data_guard_blocks_xml(tmp_path):
     sys.path.insert(0, str(REPO / "tools"))
     import check_no_data as c
     assert ".xml" in c.BLOCK_EXT
     assert c.SYNTHETIC_OK.match("plugin/ldip-design-review/skills/parsing-landxml/evals/synthetic_t5.xml")
     assert not c.SYNTHETIC_OK.match("plugin/ldip-design-review/skills/parsing-landxml/evals/RCRC-survey.xml")
+    # Content fingerprints: deposited ROD-043 numbers/text blocked; synthetic CI fixture allowed
+    fake = tmp_path / "rod043_realish.json"
+    fake.write_text(json.dumps({
+        "rule_id": "ROD-043",
+        "parameters": {
+            "circulatory_crossfall": {"value": 2.0, "unit": "%"},
+            "drainage_g_min": {"value": 0.5, "unit": "%"},
+            "apron_width": {"value": [1.5, 2.0], "unit": "m"},
+        },
+    }))
+    assert any("deposited rules_v7" in h or "ROD-043" in h for h in c.content_hits(str(fake), fake))
+    synth = Path(__file__).resolve().parents[1] / "tests/fixtures/rod043_excerpt.json"
+    assert synth.is_file() and c.content_hits("tests/fixtures/rod043_excerpt.json", synth) == []
     assert not c.SYNTHETIC_OK.match("golden_set/inputs/synthetic_t5.xml")
 
 

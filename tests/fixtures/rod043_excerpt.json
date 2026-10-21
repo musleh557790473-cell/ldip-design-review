@@ -1,38 +1,40 @@
 {
-  "rulebook_version": "v7",
+  "rulebook_version": "v7-synthetic-ci",
   "rule_id": "ROD-043",
-  "title": "Roundabout apron, circulatory crossfall and drainage",
-  "statement": "The central island shall have a 1.5–2.0 m mountable apron; circulatory crossfall 2 %; drainage gradient at least 0.5 %.",
+  "title": "SYNTHETIC CI ONLY — roundabout crossfall/drainage loader shape",
+  "statement": "SYNTHETIC CI FIXTURE — not rules_v7. Circulatory crossfall SYNTH_CF %; drainage gradient at least SYNTH_G_MIN %. Apron width out of phase D.",
   "parameters": {
     "apron_width": {
-      "value": [1.5, 2.0],
+      "value": [3.0, 4.0],
       "unit": "m",
-      "tag": "AGREED",
-      "source_id": "SRC-07",
-      "clause": "§7.12(c) p.59",
+      "tag": "SYNTHETIC",
+      "source_id": "SYNTH-CI",
+      "clause": "SYNTH-CI",
       "blocking": false,
       "tolerance_ref": "width_m",
-      "note": "Curb Type D. Out of phase D — 60 % path."
+      "note": "Synthetic CI only — not deposited rules_v7 values. Out of phase D."
     },
     "circulatory_crossfall": {
-      "value": 2.0,
+      "value": 3.25,
       "unit": "%",
-      "tag": "AGREED",
-      "source_id": "SRC-07",
-      "clause": "§7.12(c) p.59",
+      "tag": "SYNTHETIC",
+      "source_id": "SYNTH-CI",
+      "clause": "SYNTH-CI",
       "blocking": false,
-      "tolerance_ref": "crossfall_pct"
+      "tolerance_ref": "crossfall_pct",
+      "note": "Synthetic CI only — deliberately not the deposited rules_v7 number."
     },
     "drainage_g_min": {
-      "value": 0.5,
+      "value": 0.8,
       "unit": "%",
-      "tag": "AGREED",
-      "source_id": "SRC-07",
-      "clause": "§7.12(c) p.59",
+      "tag": "SYNTHETIC",
+      "source_id": "SYNTH-CI",
+      "clause": "SYNTH-CI",
       "blocking": false,
-      "tolerance_ref": "grade_pct"
+      "tolerance_ref": "grade_pct",
+      "note": "Synthetic CI only — deliberately not the deposited rules_v7 number."
     }
   },
   "state": "inactive",
-  "note": "Minimal CI fixture derived from owner-deposited rules_v7 ROD-043 excerpt. Full rules_v7.json is not in Git (rules_v*.json gitignored). Loading params ≠ activation."
+  "note": "Synthetic CI fixture for loader/shape tests only. Full rules_v*.json stays out of Git. Values must NOT match deposited rules_v7 ROD-043. Loading params ≠ activation."
 }

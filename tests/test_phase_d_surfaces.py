@@ -1,8 +1,9 @@
 """Phase D first-slice tests (SPC-0006 §4.13H / DK-1…DK-4): TD1–TD8.
 
 ROD-056 gradient, ROD-062 slope, ROD-043 crossfall/drainage. Synthetic TIN only.
-ROD-043 numeric limits load from tests/fixtures/rod043_excerpt.json (rules_v7 deposit
-excerpt) via --rulebook / LDIP_RULEBOOK — never invented. Full rules_v*.json stays out of Git.
+ROD-043 numeric limits load from tests/fixtures/rod043_excerpt.json (synthetic CI
+values — not deposited rules_v7 numbers) via --rulebook / LDIP_RULEBOOK — never invented.
+Full rules_v*.json stays out of Git; check_no_data blocks real-rule fingerprints.
 """
 import hashlib
 import json
@@ -231,7 +232,7 @@ def test_td5_rod043_crossfall_gap_and_fixture(tmp_path):
                and "GAP" in (n.get("reason") or "") for n in gap["not_run"])
     assert any(n.get("parameter") == "apron" for n in gap["not_run"])
 
-    # Real rules_v7 numbers via --rulebook fixture (circulatory_crossfall = 2.0 %)
+    # Synthetic CI fixture via --rulebook (loader shape; not deposited rules_v7 numbers)
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
                   "--rulebook", FIXTURE_043, "--out", tmp_path / "ok.json")
@@ -241,8 +242,9 @@ def test_td5_rod043_crossfall_gap_and_fixture(tmp_path):
     assert any(c["rule_id"] == "ROD-043" and c["parameter"] == "circulatory_crossfall"
                and c["result"] == "pass" and c["required"] == cf_limit for c in ok["passed"])
 
-    # Env LDIP_RULEBOOK equivalent
-    tin_hi = write_tin(tmp_path, "cfhi", (659995, 2749995), (10, 20), rise_e=0.3)  # 3 % > 2 %
+    # Env LDIP_RULEBOOK equivalent — slope above synthetic fixture limit
+    rise_fail = 0.1 * (cf_limit + 1.0)  # ~ (limit+1) % over 10 m
+    tin_hi = write_tin(tmp_path, "cfhi", (659995, 2749995), (10, 20), rise_e=rise_fail)
     lx_hi = write_landxml(tmp_path, tin_hi)
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx_hi,
@@ -258,8 +260,9 @@ def test_td5_rod043_crossfall_gap_and_fixture(tmp_path):
 def test_td6_rod043_drainage_g_min_from_fixture(tmp_path):
     _, g_min = _fixture_limits()
     fp = {"id": "RA1", "polygon": box(660000, 2750000, 660010, 2750012)}
-    # Flat-ish 1 % ≥ 0.5 % → pass; near-flat 0.2 % < 0.5 % → fail
-    tin_ok = write_tin(tmp_path, "dr_ok", (659995, 2749995), (10, 20), rise_e=0.1)  # 1 %
+    # Slope above synthetic g_min → pass; below → fail (fixture-relative)
+    rise_ok = 0.1 * (g_min + 0.2)  # slightly above g_min %
+    tin_ok = write_tin(tmp_path, "dr_ok", (659995, 2749995), (10, 20), rise_e=rise_ok)
     rules, lx = _surface_args(tmp_path, tin_ok, {"c3_crossfall_footprints": [fp]})
 
     # No rulebook → GAP
@@ -271,7 +274,7 @@ def test_td6_rod043_drainage_g_min_from_fixture(tmp_path):
     assert any(n.get("rule_id") == "ROD-043" and n.get("parameter") == "drainage"
                and "GAP" in (n.get("reason") or "") for n in gap["not_run"])
 
-    # Fixture drainage_g_min = 0.5 %; min face slope ≥ limit
+    # Synthetic fixture drainage_g_min; min face slope ≥ limit
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx,
                   "--rulebook", FIXTURE_043, "--out", tmp_path / "ok.json")
@@ -281,7 +284,8 @@ def test_td6_rod043_drainage_g_min_from_fixture(tmp_path):
                and c["result"] == "pass" and c["comparison"] == "ge"
                and c["required"] == g_min for c in ok["passed"])
 
-    tin_lo = write_tin(tmp_path, "dr_lo", (659995, 2749995), (10, 20), rise_e=0.02)  # 0.2 %
+    rise_lo = 0.1 * max(0.05, g_min * 0.25)  # clearly below g_min %
+    tin_lo = write_tin(tmp_path, "dr_lo", (659995, 2749995), (10, 20), rise_e=rise_lo)
     lx_lo = write_landxml(tmp_path, tin_lo)
     rc, out = run("check_surfaces.py", "--network", tmp_path / "network.json", "--rules", rules,
                   "--stage", "60%", "--site", "NRJS", "--landxml", lx_lo,
