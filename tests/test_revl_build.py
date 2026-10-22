@@ -1352,3 +1352,149 @@ def test_s3_drawing_carriers_by_title_not_number_range(tmp_path):
     assert rc == 0, msg
     # QRWN 10300 = contour plan → is a carrier (by title)
     assert any("AQ-ROD-DWG-10300" in m["number"] for m in load(aq)["models"])
+
+
+# --------------------------------------------------------------------------- N2 / N3 (post-merge follow-up)
+def test_n2_mi_searched_names_inventory(tmp_path):
+    """N2: MI with --inventory → statement names inventory file; never '(no file given)'."""
+    rules = rules_ewk(tmp_path)
+    design = write_tin(tmp_path, "n2", (0, 0), (10, 10), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"
+    tin["source_format"] = "ifc"
+    tin["source_file"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001", "title": "NGL",
+         "role": "existing", "formats": ["IFC", "NWC"],
+         "stage": "30% Concept Design", "milestone": 30},
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002", "title": "Grading",
+         "role": "design_grading", "formats": ["IFC", "NWC", "DWFx"],
+         "stage": "30% Concept Design", "milestone": 30},
+    ]})
+    inv_name = "files_n2.json"
+    inv = write(tmp_path / inv_name, {
+        "tool": {"name": "inventory.py", "version": "0.3.0"},
+        "files": [
+            {"path": "models/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc",
+             "format": "IFC", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"},
+        ],
+    })
+    surf = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--inventory", inv, "--site", "NMAR", "--out", surf)
+    assert rc == 0, msg
+    doc = load(surf)
+    assert doc.get("inventory", {}).get("file_name") == inv_name
+    assert doc["inventory"]["n_files"] >= 1
+    assert doc["midp_missing"]
+
+    slopes = write(tmp_path / "sl.json", {
+        "tool": {"script": "check_slopes.py", "version": "0"},
+        "ewk002_groups": [], "walls": [], "checks": [], "passed": [], "not_run": [],
+    })
+    rc, msg = run("check_presence.py", "--slopes", slopes, "--rules", rules,
+                  "--stage", "30% Concept Design", "--surfaces", surf,
+                  "--out", tmp_path / "pr.json", "--required-out", tmp_path / "req.json")
+    assert rc == 0, msg
+    items = load(tmp_path / "req.json")["items"]
+    assert len(items) == 1
+    searched = " ".join(items[0]["searched"])
+    assert inv_name in searched
+    assert "(no file given)" not in searched
+    assert "files)" in searched or "file" in searched.lower()
+
+    rc, msg = run("build_candidates.py",
+                  "--results", tmp_path / "pr.json", tmp_path / "req.json",
+                  "--rules", rules, "--run", "NMAR-test-20261022T1012", "--site", "NMAR",
+                  "--sub", "test", "--evidence-dir", tmp_path / "ev",
+                  "--out", tmp_path / "cand.json")
+    assert rc == 0, msg
+    mi = [f for f in load(tmp_path / "cand.json")
+          if f["issue_type"] == "missing_information" and "MIDP earthworks" in f["title"]]
+    assert len(mi) == 1
+    assert inv_name in mi[0]["statement"]
+    assert "(no file given)" not in mi[0]["statement"]
+    assert "Searched:" in mi[0]["statement"]
+
+
+def test_n3_inventory_skill6_files_json_shape(tmp_path):
+    """N3: --inventory accepts skill 6 inventory.py output (files[])."""
+    design = write_tin(tmp_path, "n3a", (0, 0), (5, 5), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"
+    tin["source_format"] = "ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002",
+        "title": "Site Grading", "role": "design_grading",
+        "formats": ["IFC", "DWG", "NWC"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    inv = write(tmp_path / "files.json", {
+        "tool": {"name": "inventory.py", "version": "0.3.0"},
+        "mode": "standalone", "site": "NMAR",
+        "files": [
+            {"path": "Vol04/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.ifc",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.ifc",
+             "ext": ".ifc", "format": "IFC", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00",
+             "kind": "file"},
+            {"path": "Vol04/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.dwg",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.dwg",
+             "ext": ".dwg", "format": "DWG", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00",
+             "kind": "file"},
+        ],
+    })
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--inventory", inv, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert doc["inventory_used"] is True
+    assert doc["inventory"]["file_name"] == "files.json"
+    assert doc["inventory"]["n_files"] == 2
+    miss = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert miss
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "nwc" in fm and "dwg" not in fm and "ifc" not in fm
+
+
+def test_n3_inventory_package_sheet_register_shape(tmp_path):
+    """N3: --inventory accepts skill 6 package.json sheet_register."""
+    design = write_tin(tmp_path, "n3b", (0, 0), (5, 5), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001"
+    tin["source_format"] = "ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001",
+        "title": "Roads NGL Model", "role": "existing",
+        "formats": ["IFC", "DWG", "DWFx"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    pkg = write(tmp_path / "package.json", {
+        "tool": {"name": "build_register.py", "version": "0.x"},
+        "site": "NMAR",
+        "sheet_register": [{
+            "base": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001",
+            "numbers": ["LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"],
+            "files": [
+                {"path": "models/x.ifc", "name": "x.ifc", "format": "IFC",
+                 "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+                {"path": "models/x.dwg", "name": "x.dwg", "format": "DWG",
+                 "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+            ],
+        }],
+    })
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"existing={design}",
+                  "--midp", midp, "--inventory", pkg, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert doc["inventory"]["file_name"] == "package.json"
+    assert doc["inventory"]["n_files"] >= 2
+    miss = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert miss
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "dwfx" in fm and "dwg" not in fm

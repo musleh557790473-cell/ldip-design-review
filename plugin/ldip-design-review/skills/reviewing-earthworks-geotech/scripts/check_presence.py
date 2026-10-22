@@ -12,7 +12,7 @@ Usage:
       --stage "<stage>" [--file carrier=path ...] [--site SITE]
       --out <presence.json> [--required-out <required_inputs.json>]
 """
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import argparse
 import math
@@ -195,6 +195,7 @@ def main(argv=None):
 
         # DL-15 / R5: ONE MI item per site listing all missing deliverables+formats
         # R6: clause cites EWK-001/002/003 required inputs; rule_id = EWK-001
+        # N2: when build_surfaces had --inventory, Searched names that file + surfaces
         required_items = []
         if a.surfaces and midp_30 is not False:
             misses = list(surf_doc.get("midp_missing") or [])
@@ -210,6 +211,24 @@ def main(argv=None):
                     note = miss.get("note") or ""
                     lines.append(f"{d} ({t}): {reason} — formats {', '.join(fm) or '—'}"
                                  + (f"; {note}" if note else ""))
+                inv_meta = surf_doc.get("inventory") or {}
+                surf_labels = []
+                for s in surf_doc.get("surfaces") or []:
+                    surf_labels.append(
+                        s.get("document_no") or s.get("source_file")
+                        or Path(s.get("path") or "?").name
+                    )
+                if inv_meta.get("file_name") or inv_meta.get("path"):
+                    inv_name = inv_meta.get("file_name") or Path(inv_meta["path"]).name
+                    n_inv = inv_meta.get("n_files", surf_doc.get("inventory_files", 0))
+                    searched_midp = [
+                        f"{inv_name} ({n_inv} files) + surfaces "
+                        f"{', '.join(surf_labels) if surf_labels else '(none)'}"
+                    ]
+                else:
+                    searched_midp = (
+                        [f"surfaces {', '.join(surf_labels)}"] if surf_labels else searched_all
+                    )
                 required_items.append({
                     "key": "midp:earthworks",
                     "item": "MIDP earthworks carriers at 30 %",
@@ -221,7 +240,7 @@ def main(argv=None):
                     "result": "fail",
                     "rules": ["EWK-001"],
                     "rules_needed": ["EWK-001", "EWK-002", "EWK-003"],
-                    "searched": searched_all,
+                    "searched": searched_midp,
                     "source_id": "SRC-14",
                     "clause": ("SPC-0006 Rev L Amendment L-a DL-15; required inputs for "
                                "EWK-001 / EWK-002 / EWK-003"),
