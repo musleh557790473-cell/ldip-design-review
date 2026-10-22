@@ -9,8 +9,8 @@ description: >-
   cut / fill areas and volumes as information. Use for any LDIP grading,
   earthworks, slope or plot-drainage check.
 metadata:
-  version: "0.1.1"
-  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rules_v7 (EWK inactive until rules_v8 after real 30 % tests — DL-17); no rules_v8 in this build"
+  version: "0.2.0"
+  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + Amendment L-b (format-independent slope grouping DL-19…DL-23) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rules_v7 (EWK inactive until rules_v8 after real 30 % tests — DL-17); no rules_v8 in this build"
 ---
 
 # Reviewing earthworks and geotech (skill 13)

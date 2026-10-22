@@ -1,4 +1,4 @@
-# Earthworks methods (skill 13) — SPC-0006 Rev L §4.14 + Amendment L-a
+# Earthworks methods (skill 13) — SPC-0006 Rev L §4.14 + Amendment L-a + Amendment L-b
 
 Loaded only when a step needs them. Rule values come from skill 8 (`get_rules.py --agent RDE`). Detection thresholds are in `earthworks_params.json` (not rule values).
 
@@ -22,6 +22,16 @@ Caller assigns `existing` / `design_grading` / `road_top` / `finished_grading`. 
 | Profile always (information) | Profile + candidates |
 
 EWK-102 at 30 %: height ≥ **1.0 m** (DL-18). Other thresholds as DL-5…DL-8.
+
+## Slope grouping (L-b DL-19…DL-23)
+
+- Face margin `m = max(grade_pct, u)` with `u = 100 · δz · P / (2 · A)` and
+  `δz = slope_precision_dz_m` (**1 mm**, same for IFC and LandXML).
+- **EWK-002:** clearly steep = slope > L + m; possibly steep = slope > L − m (≤ wall);
+  groups = possibly-steep faces connected by vertex **coordinates** (1 mm), not point IDs;
+  report only groups with ≥1 clearly steep face. Finding text states mean/max slope and H:V.
+- **EWK-001:** clearly / possibly flat about `g_min`; report if clearly-flat area ≥ 25 m².
+- Format invariance: same surface as IFC vs LandXML → counts within 5 % (TL11).
 
 ## Status (DL-9)
 

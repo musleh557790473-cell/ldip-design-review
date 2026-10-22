@@ -1,10 +1,10 @@
-"""Shared helpers for skill 13 reviewing-earthworks-geotech (SPC-0006 Rev L §4.14 + L-a).
+"""Shared helpers for skill 13 reviewing-earthworks-geotech (SPC-0006 Rev L §4.14 + L-a + L-b).
 
 Copied patterns from skill 10 (road_common / tin_surface / c3_common) — skills stay independent;
 do not import across skills. Rule values come only from skill 8 get_rules.py --agent RDE.
 Detection thresholds live in references/earthworks_params.json (not rule values).
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import hashlib
 import json
@@ -546,6 +546,25 @@ def face_area_2d(p1, p2, p3):
     return abs((p2[0] - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (p2[1] - p1[1])) / 2.0
 
 
+def face_perimeter_2d(p1, p2, p3):
+    """Plan perimeter of a triangular face (m)."""
+    return (math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            + math.hypot(p3[0] - p2[0], p3[1] - p2[1])
+            + math.hypot(p1[0] - p3[0], p1[1] - p3[1]))
+
+
+def slope_uncertainty_pct(area_m2, perimeter_m, dz_m):
+    """L-b DL-19: u = 100 · δz · P / (2 · A) [%]."""
+    if area_m2 <= 1e-18:
+        return float("inf")
+    return 100.0 * float(dz_m) * float(perimeter_m) / (2.0 * float(area_m2))
+
+
+def vert_coord_key(e, n, *, round_m=0.001):
+    """Vertex key rounded to millimetres (L-b DL-20)."""
+    return (int(round(float(e) / round_m)), int(round(float(n) / round_m)))
+
+
 def iter_faces(tin):
     """Yield (face_ids, p1, p2, p3, slope_pct, nz, centroid, area2d)."""
     pts = point_map(tin)
@@ -582,8 +601,13 @@ def make_flat_tin(origin_e, origin_n, size_e, size_n, z00, z10, z01, z11=None, *
             "points": points, "faces": faces, "breaklines": []}
 
 
-def group_faces_by_vertex(face_records):
-    """Union-find groups of faces that share a vertex. face_records: list of dicts with 'ids'."""
+def group_faces_by_vertex(face_records, *, coord_round_m=0.001):
+    """Union-find groups of faces that share a vertex coordinate (L-b DL-20).
+
+    Prefer rec['verts'] as iterable of (e, n[, z]); fall back to rec['ids'] (legacy).
+    Coordinates are rounded to coord_round_m (default 1 mm) so IFC/LandXML point IDs
+    do not split one physical vertex into two groups.
+    """
     parent = {}
 
     def find(x):
@@ -600,12 +624,20 @@ def group_faces_by_vertex(face_records):
 
     vert_to_faces = {}
     for i, rec in enumerate(face_records):
-        for vid in rec["ids"]:
-            if vid in vert_to_faces:
-                union(i, vert_to_faces[vid])
+        keys = []
+        verts = rec.get("verts")
+        if verts:
+            for v in verts:
+                keys.append(vert_coord_key(v[0], v[1], round_m=coord_round_m))
+        else:
+            for vid in rec.get("ids") or []:
+                keys.append(("id", str(vid)))
+        for key in keys:
+            if key in vert_to_faces:
+                union(i, vert_to_faces[key])
             else:
-                vert_to_faces[vid] = i
-            vert_to_faces[vid] = find(i)
+                vert_to_faces[key] = i
+            vert_to_faces[key] = find(i)
     groups = {}
     for i in range(len(face_records)):
         groups.setdefault(find(i), []).append(i)

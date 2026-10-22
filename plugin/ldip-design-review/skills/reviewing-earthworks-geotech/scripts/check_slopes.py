@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""EWK-001 / EWK-002 slope checks for skill 13 (SPC-0006 Rev L §4.14.7–8 + L-a DL-14/18).
+"""EWK-001 / EWK-002 slope checks for skill 13 (SPC-0006 Rev L §4.14.7–8 + L-a + L-b).
 
-EWK-001: unpaved faces < g_min − grade_pct, grouped; drop groups < ewk001_min_area_m2.
-EWK-002: unpaved faces > 100/H:V + grade_pct, grouped; drop height < ewk002_min_height_m
-         (at PD / 30 % EWK-102 uses 1.0 m — see check_presence); curbs and walls excluded.
+L-b (DL-19…DL-23): face comparisons use m = max(grade_pct, u) with
+u = 100 · δz · P / (2 · A), δz = slope_precision_dz_m (1 mm). Hysteresis grouping:
+possibly-flagged faces connected by vertex coordinates (1 mm); a group is reported
+only if it has at least one clearly-flagged face (EWK-002) or clearly-flat area
+≥ ewk001_min_area_m2 (EWK-001). Format-independent (same δz for IFC and LandXML).
+
+EWK-102 uses EWK-002 groups (height ≥ 1.0 m at PD — L-a DL-18, unchanged).
 FoS text from design_report at DD only (L-a).
 
 Usage:
@@ -11,7 +15,7 @@ Usage:
       --stage "<stage>" [--site SITE] [--report <design_report.pdf.json>]
       [--existing-dz] --out <slopes.json>
 """
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 import argparse
 import math
@@ -22,8 +26,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from ewk_common import (EXIT_OK, atomic_write_json, emit, ewk_gate,  # noqa: E402
-                        fail_rec, group_faces_by_vertex, iter_faces, load_params, load_tin,
-                        main_guard, param, read_json, rules_index, tin_raster_z, tol_value)
+                        fail_rec, face_perimeter_2d, group_faces_by_vertex, iter_faces,
+                        load_params, load_tin, main_guard, param, read_json, rules_index,
+                        slope_uncertainty_pct, tin_raster_z, tol_value)
 
 
 FOS_RE = re.compile(
@@ -57,55 +62,75 @@ def _centroid_in_paved(cx, cy, paved_idx):
     return (ix, iy) in paved_idx["cells"]
 
 
-def _collect_faces(tin, paved_idx, *, min_slope=None, wall_slope_pct=1000.0):
-    """Return face records and wall faces (slope > wall_slope_pct)."""
-    faces, walls, curb = [], [], []
-    for ids, p1, p2, p3, slope, nz, cent, area in iter_faces(tin):
-        cx, cy, cz = cent
-        in_paved = _centroid_in_paved(cx, cy, paved_idx)
-        rec = {"ids": ids, "slope": slope, "centroid": (cx, cy, cz), "area": area,
-               "z_min": min(p1[2], p2[2], p3[2]), "z_max": max(p1[2], p2[2], p3[2]),
-               "in_paved": in_paved}
-        if slope > wall_slope_pct:
-            walls.append(rec)
-            continue
-        if in_paved:
-            curb.append(rec)
-            continue
-        if min_slope is not None and slope >= min_slope:
-            continue
-        faces.append(rec)
-    return faces, walls, curb
+def _face_rec(ids, p1, p2, p3, slope, cent, area, *, in_paved, dz_m, tol_pct):
+    """Build a face record with L-b precision margin m = max(tol, u)."""
+    peri = face_perimeter_2d(p1, p2, p3)
+    u = slope_uncertainty_pct(area, peri, dz_m)
+    m = max(float(tol_pct), u)
+    cx, cy, cz = cent
+    return {
+        "ids": ids,
+        "verts": (p1, p2, p3),
+        "slope": slope,
+        "centroid": (cx, cy, cz),
+        "area": area,
+        "perimeter_m": peri,
+        "u_pct": u,
+        "m_pct": m,
+        "z_min": min(p1[2], p2[2], p3[2]),
+        "z_max": max(p1[2], p2[2], p3[2]),
+        "in_paved": in_paved,
+    }
 
 
-def _groups(face_records, *, min_area=None, min_height=None, sort_by="area"):
+def _hysteresis_groups(face_records, *, mode, min_area=None, min_height=None, sort_by="area"):
+    """L-b DL-20: group possibly-flagged faces; keep only groups with a clear flag.
+
+    mode='flat': keep if clearly-flat area ≥ min_area.
+    mode='steep': keep if ≥1 clearly-steep face and height ≥ min_height.
+    """
     if not face_records:
         return []
     idx_groups = group_faces_by_vertex(face_records)
     out = []
     for idxs in idx_groups:
         members = [face_records[i] for i in idxs]
+        clearly = [m for m in members if m.get("clearly")]
+        if mode == "steep":
+            if not clearly:
+                continue
+        elif mode == "flat":
+            clear_area = sum(m["area"] for m in clearly)
+            if min_area is not None and clear_area < min_area:
+                continue
+        else:
+            raise ValueError(mode)
         area = sum(m["area"] for m in members)
+        if area <= 0:
+            continue
         z_min = min(m["z_min"] for m in members)
         z_max = max(m["z_max"] for m in members)
         height = z_max - z_min
-        if min_area is not None and area < min_area:
-            continue
         if min_height is not None and height < min_height:
             continue
         cx = sum(m["centroid"][0] * m["area"] for m in members) / area
         cy = sum(m["centroid"][1] * m["area"] for m in members) / area
         slopes = sorted(m["slope"] for m in members)
         mean_s = sum(m["slope"] * m["area"] for m in members) / area
+        max_s = slopes[-1]
+        hv_mean = round(100.0 / mean_s, 3) if mean_s > 1e-9 else None
+        hv_max = round(100.0 / max_s, 3) if max_s > 1e-9 else None
         out.append({
             "area_m2": round(area, 3),
             "height_m": round(height, 3),
             "mean_slope_pct": round(mean_s, 3),
-            "max_slope_pct": round(slopes[-1], 3),
+            "max_slope_pct": round(max_s, 3),
             "median_slope_pct": round(slopes[len(slopes) // 2], 3),
+            "hv": hv_mean,
+            "hv_max": hv_max,
             "face_count": len(members),
+            "clear_face_count": len(clearly),
             "centroid_en": [round(cx, 3), round(cy, 3)],
-            "hv": round(100.0 / mean_s, 3) if mean_s > 1e-9 else None,
             # D4: keep face samples for area-weighted cut/fill
             "_faces": [{"centroid": m["centroid"], "area": m["area"]} for m in members],
         })
@@ -224,6 +249,7 @@ def main(argv=None):
         min_height = float(params.get("ewk002_min_height_m", 0.5))
         wall_pct = float(params.get("wall_slope_pct", 1000.0))
         cell_m = float(params.get("cell_m", 1.0))
+        dz_m = float(params.get("slope_precision_dz_m", 0.001))
         midp_30 = surf_doc.get("midp_schedules_carriers_at_30")
 
         by_role = {s["role"]: s for s in surf_doc.get("surfaces") or []}
@@ -235,7 +261,7 @@ def main(argv=None):
         existing = by_role.get("existing")
         doc_no = (design or {}).get("document_no")
 
-        # --- EWK-001 ---
+        # --- EWK-001 (L-b hysteresis) ---
         rule, phase, _ = ewk_gate(rules, skipped, "EWK-001", "g_min", stage_map, a.stage,
                                   midp_schedules_30=midp_30)
         if rule is None:
@@ -250,10 +276,20 @@ def main(argv=None):
             p = param(rule, "g_min")
             g_min = float(p["value"])
             gt = tol_value(p, tolerances, 0.05)
-            threshold = g_min - gt
             tin = load_tin(design["path"])
-            flat, _w, _c = _collect_faces(tin, paved_idx, min_slope=threshold)
-            ewk001_groups = _groups(flat, min_area=min_area, sort_by="area")
+            possibly_flat = []
+            for ids, p1, p2, p3, slope, nz, cent, area in iter_faces(tin):
+                cx, cy, cz = cent
+                if _centroid_in_paved(cx, cy, paved_idx):
+                    continue
+                rec = _face_rec(ids, p1, p2, p3, slope, cent, area,
+                                in_paved=False, dz_m=dz_m, tol_pct=gt)
+                # clearly flat = slope < g_min − m; possibly flat = slope < g_min + m
+                if slope < g_min + rec["m_pct"]:
+                    rec["clearly"] = slope < g_min - rec["m_pct"]
+                    possibly_flat.append(rec)
+            ewk001_groups = _hysteresis_groups(
+                possibly_flat, mode="flat", min_area=min_area, sort_by="area")
             src = {"path": design["path"], "sha256": design["sha256"],
                    "source_type": "script_output", "document_no": doc_no}
             if ewk001_groups:
@@ -266,14 +302,14 @@ def main(argv=None):
                         status_override="Probable", link_cap="Probable",
                         xy_pt=g["centroid_en"], tolerance=gt, total_count=total,
                         document_no=doc_no,
-                        note=f"faces={g['face_count']}",
+                        note=f"faces={g['face_count']}; mean={g['mean_slope_pct']}%",
                     )
                     checks.append(rec)
             else:
                 passed.append({"rule_id": "EWK-001", "parameter": "g_min", "result": "pass",
                                "observed": "no flat groups ≥ threshold", "required": g_min})
 
-        # --- EWK-002 slopes ---
+        # --- EWK-002 slopes (L-b hysteresis) ---
         rule, phase, milestone = ewk_gate(rules, skipped, "EWK-002", "slope_min_h_per_v",
                                           stage_map, a.stage, midp_schedules_30=midp_30)
         if rule is None:
@@ -286,24 +322,27 @@ def main(argv=None):
             h_per_v = float(p["value"])
             gt = tol_value(p, tolerances, 0.05)
             limit_pct = 100.0 / h_per_v          # D9: required = 50, not 50.05
-            steep_lim = limit_pct + gt           # flag above 50.05 %
             tin = load_tin(design["path"])
-            steep, walls, curb = [], [], []
+            possibly_steep, walls = [], []
             for ids, p1, p2, p3, slope, nz, cent, area in iter_faces(tin):
                 cx, cy, cz = cent
                 in_paved = _centroid_in_paved(cx, cy, paved_idx)
-                rec = {"ids": ids, "slope": slope, "centroid": (cx, cy, cz), "area": area,
-                       "z_min": min(p1[2], p2[2], p3[2]), "z_max": max(p1[2], p2[2], p3[2]),
-                       "in_paved": in_paved}
                 if slope > wall_pct:
-                    walls.append(rec)
+                    walls.append({"ids": ids, "slope": slope, "centroid": cent, "area": area,
+                                  "z_min": min(p1[2], p2[2], p3[2]),
+                                  "z_max": max(p1[2], p2[2], p3[2]),
+                                  "in_paved": in_paved})
                     continue
                 if in_paved:
-                    curb.append(rec)
                     continue
-                if slope > steep_lim:
-                    steep.append(rec)
-            ewk002_groups = _groups(steep, min_height=min_height, sort_by="height")
+                rec = _face_rec(ids, p1, p2, p3, slope, cent, area,
+                                in_paved=False, dz_m=dz_m, tol_pct=gt)
+                # clearly steep > L + m; possibly steep > L − m (and ≤ wall)
+                if slope > limit_pct - rec["m_pct"]:
+                    rec["clearly"] = slope > limit_pct + rec["m_pct"]
+                    possibly_steep.append(rec)
+            ewk002_groups = _hysteresis_groups(
+                possibly_steep, mode="steep", min_height=min_height, sort_by="height")
             exist_tin = load_tin(existing["path"]) if existing else None
             _cut_fill(ewk002_groups, exist_tin, cell_m=cell_m)
             src = {"path": design["path"], "sha256": design["sha256"],
@@ -311,6 +350,11 @@ def main(argv=None):
             if ewk002_groups:
                 total = len(ewk002_groups)
                 for g in ewk002_groups[:10]:
+                    # DL-23: mean and max slope and H:V
+                    hv = g.get("hv")
+                    hv_max = g.get("hv_max")
+                    note = (f"mean={g['mean_slope_pct']}% (H:V≈{hv}); "
+                            f"max={g['max_slope_pct']}% (H:V≈{hv_max})")
                     checks.append(fail_rec(
                         "EWK-002", "slope_min_h_per_v",
                         f"steep group h={g['height_m']} m {g.get('cut_fill', '?')} @ "
@@ -319,7 +363,7 @@ def main(argv=None):
                         status_override="Probable", link_cap="Probable",
                         xy_pt=g["centroid_en"], tolerance=gt, total_count=total,
                         document_no=doc_no,
-                        note=f"H:V≈{g['hv']}; max={g['max_slope_pct']}%",
+                        note=note,
                     ))
             else:
                 passed.append({"rule_id": "EWK-002", "parameter": "slope_min_h_per_v",
@@ -382,6 +426,7 @@ def main(argv=None):
             "tool": {"script": "check_slopes.py", "version": __version__},
             "mode": "slopes",
             "stage": a.stage,
+            "slope_precision_dz_m": dz_m,
             "checks": checks,
             "passed": passed,
             "not_run": not_run,

@@ -2,13 +2,13 @@
 """Turn skill 13 check results into SPC-0003 candidate findings (agent RDE).
 
 SPC-0006 Rev L §4.14.13 + L-a. Copied pattern from skill 10 — skills stay independent.
-Skill version 0.1.0. Surface-derived values → Probable (DL-9).
+Skill version 0.2.0. Surface-derived values → Probable (DL-9).
 
 Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.json>
            --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir <dir>
            [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 """
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 import argparse
 import json
