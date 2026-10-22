@@ -27,6 +27,9 @@ findings when carriers are present; MIDP-scheduled models missing → *Missing i
 EWK-002 FoS, EWK-003 frontage / 0.30 m and EWK-101 stay at **60 % (DD)**. An earthworks profile
 (cut / fill, slope bands, inventory) is always written as information (no rule).
 
+**QRWN CRS** — R-Lb2 lifted (owner, 22 Oct 2026 21:17 Asia/Riyadh): EWK-002 and EWK-102 results for
+QRWN are valid for the CRS to Parsons. Do not withhold them. NMAR and NRJS are not covered by this lift.
+
 Packages: Python 3.11+, `jsonschema`, `shapely`, `numpy` (already used by skills 9 / 10). No new
 dependencies. No IfcOpenShell in the build.
 
