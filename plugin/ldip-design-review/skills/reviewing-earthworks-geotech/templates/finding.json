@@ -7,7 +7,7 @@
  "sub_id": "<sub-id>",
  "agent": "RDE",
  "agent_versions": {
-  "reviewing-earthworks-geotech": "0.1.0"
+  "reviewing-earthworks-geotech": "0.1.1"
  },
  "title": "<rule_id> <rule title>: <parameter>",
  "statement": "<n> occurrence(s). Observed — <subject>: <value>. Required (<rule_id> <parameter>): <op> <value>. Requirement (<rule_id>): <rule statement>",

@@ -88,8 +88,9 @@ not LandXML is recorded as `skipped`. LandXML ingestion files are not read by an
 agent preloads skill 10 or 13: skill 10 is used standalone, its agent waits for Stage 6): list the count of extracted LandXML files in the
 chat summary only.
 
-**Step 1b — `intake-package`.** Not built yet (skills 6 and 7). Do not invoke it. Record in the chat
-summary: "intake-package not run — skills not built (Stage 3)".
+**Step 1b — `intake-package`.** Not built yet (skills 6 and 7 as a preloaded agent). Do not invoke it.
+Record in the chat summary: "intake-package not run — skills not built (Stage 3)". When skill 6
+has been run standalone for this submittal, keep its `files.json` / `package.json` path for step 3a.
 
 **Step 2 — `gis-cadastral`.** Runs if `--schedule` and `--schedule-no` were given, or if step 1a
 extracted at least one DWG; otherwise skip it and say so. The drawing list is every `output` of a
@@ -104,6 +105,16 @@ schedule document number: <schedule-no>
 drawings (ingestion files):
 - 0.ai_context/<SITE>/<sub-id>/b<nn>/<file>.dwg.json
 ```
+
+**Step 3a — RDE earthworks (skill 13 `reviewing-earthworks-geotech`, when grading / IFC / LandXML
+carriers are in the package).** No new agent definition (SPC-0005 unchanged): the Orchestrator or
+the RDE agent runs the skill 13 scripts from `SKILL.md`. **Pass the run's skill 6 inventory** to
+`build_surfaces.py --inventory`:
+- review run after INT: `findings/<run>/evidence/intake/files.json` (or
+  `0.ai_context/<SITE>/<sub-id>/package.json` from `build_register.py`);
+- standalone skill 6 output: the `files.json` / `package.json` path the owner gave.
+Without `--inventory`, DWG/NWC/DWFx/PDF format checks stay `not_run` (R1). Do not invent an
+inventory path. Record the inventory path used (or that it was omitted) in the chat summary.
 
 **Step 7 — `verifier`.** Runs when at least one candidate file exists in `findings/<run>/candidates/`.
 Prompt:

@@ -21,7 +21,7 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 570 = prior 567 + S29 S1/S2/S3 MIDP matching tests. Bump when tests change.
-          python tools/check_suite.py --expect 570 --tests tests
+          # 573 = prior 570 + N2/N3 inventory MI searched + skill6 inventory shapes. Bump when tests change.
+          python tools/check_suite.py --expect 573 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
