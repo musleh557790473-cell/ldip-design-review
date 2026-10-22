@@ -26,8 +26,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from ewk_common import (EXIT_INPUT, EXIT_OK, EwkError, INVENTORY_ONLY_FORMATS,  # noqa: E402
                         adapt_midp_rows, atomic_write_json, emit, formats_present_for,
-                        iter_faces, load_package_inventory, load_params, load_tin, main_guard,
-                        midp_model_match, norm_format, point_map, read_json, sha256_file)
+                        inventory_number_match, iter_faces, load_package_inventory,
+                        load_params, load_tin, main_guard, midp_model_match, norm_format,
+                        point_map, read_json, sha256_file)
 
 
 VALID_ROLES = ("existing", "design_grading", "road_top", "finished_grading")
@@ -119,12 +120,9 @@ def _surface_match(surfaces, entry):
 
 
 def _inventory_has_file(inv_files, entry):
-    num = entry.get("number") or entry.get("deliverable") or ""
-    from ewk_common import numbers_match
+    """S1: number match in package inventory → present (matched_by inventory)."""
     for f in inv_files or []:
-        if numbers_match(num, f.get("number") or "") or numbers_match(num, f.get("name") or ""):
-            return True
-        if numbers_match(num, Path(f.get("path") or "").stem):
+        if inventory_number_match(f, entry):
             return True
     return False
 
@@ -219,8 +217,12 @@ def main(argv=None):
         if a.midp:
             midp_entries, midp_schedules_30 = _load_midp_entries(a.midp, site=a.site)
             for entry in midp_entries:
+                # S1: (1) number in surfaces → (1b) number in inventory →
+                # (2) role only for -MOD- → (3) real title; never -DWG- → surface
                 surf, matched_by, note = _surface_match(inventory, entry)
                 has_file = _inventory_has_file(inv_files, entry) if inv_files is not None else False
+                if surf is None and has_file:
+                    matched_by, note = "inventory", None
                 formats_needed = entry.get("formats") or entry.get("exchange_formats") or []
                 role = entry.get("role")
                 is_surface_role = role in VALID_ROLES
@@ -244,7 +246,11 @@ def main(argv=None):
                     })
                     continue
 
-                have = formats_present_for(entry, inventory, inv_files)
+                # S2: after role match, formats via matched file's own number in inventory
+                have = formats_present_for(
+                    entry, inventory, inv_files,
+                    matched_surface=surf, matched_by=matched_by if surf else None,
+                )
                 if inv_files is None:
                     # R1: without inventory — format check not_run; never DWG/NWC/DWFx/PDF missing
                     surface_fmts = {norm_format(f) for f in formats_needed
@@ -280,7 +286,7 @@ def main(argv=None):
                             "role": role,
                             "formats_missing": missing,
                             "reason": "format missing",
-                            "matched_by": matched_by or ("inventory" if has_file else None),
+                            "matched_by": matched_by,
                             "note": note,
                         })
                 if matched_by:

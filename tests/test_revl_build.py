@@ -1228,3 +1228,127 @@ def test_r5_one_mi_candidate_per_site(tmp_path):
     assert mi[0]["reference"]["rule_id"] == "EWK-001"
     assert "90000-001" in mi[0]["statement"]
     assert "EWK-001" in mi[0]["reference"]["clause"]
+
+
+# --------------------------------------------------------------------------- S29 S1–S3
+def test_s1_drawing_inventory_match_not_role(tmp_path):
+    """S1: drawing in inventory → matched_by inventory; never role/surface; no number-differs note."""
+    # Surface with role existing (NGL) — must NOT absorb a contour drawing via role
+    ngl = write_tin(tmp_path, "ngl", (0, 0), (10, 10), z0=100)
+    tin = load(ngl)
+    tin["document_no"] = "LDIP-RCRC-SAP-01-AQ-ROD-MOD-90000-001"
+    tin["source_file"] = "LDIP-RCRC-SAP-01-AQ-ROD-MOD-90000-001.ifc"
+    tin["source_format"] = "ifc"
+    tin["product_name"] = "BUILDINGELEMENTPROXY(1)"
+    tin["surface"] = "BUILDINGELEMENTPROXY(1)"
+    write(ngl, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-01-AQ-ROD-DWG-10400-001",
+        "title": "Overall Existing Contour Plan",
+        "role": "existing",
+        "formats": ["DWG", "DWFx", "PDF"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    inv = write(tmp_path / "files.json", {"files": [
+        {"path": "drawings/LDIP-RCRC-SAP-01-AQ-ROD-DWG-10400-001-00.dwg",
+         "name": "LDIP-RCRC-SAP-01-AQ-ROD-DWG-10400-001-00.dwg",
+         "format": "DWG", "number": "LDIP-RCRC-SAP-01-AQ-ROD-DWG-10400-001-00"},
+    ]})
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"existing={ngl}",
+                  "--midp", midp, "--inventory", inv, "--site", "QRWN", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    matches = doc.get("midp_matches") or []
+    assert matches and matches[0]["matched_by"] == "inventory"
+    assert not matches[0].get("note")
+    assert not any(m.get("matched_by") == "role" for m in matches)
+    miss = [m for m in doc["midp_missing"] if "10400" in (m.get("deliverable") or "")]
+    assert miss
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "dwfx" in fm and "pdf" in fm
+    assert "dwg" not in fm
+    assert miss[0].get("matched_by") == "inventory"
+    assert not miss[0].get("note")
+
+
+def test_s2_role_match_formats_via_own_number(tmp_path):
+    """S2: after role match, formats from inventory under matched file's own (old) number."""
+    design = write_tin(tmp_path, "old2", (0, 0), (10, 10), z0=100)
+    tin = load(design)
+    tin["document_no"] = "NRJS-IRO-MOD-00-00003"
+    tin["source_file"] = "NRJS-IRO-MOD-00-00003.ifc"
+    tin["source_format"] = "ifc"
+    tin["product_name"] = "BUILDINGELEMENTPROXY(1)"
+    tin["surface"] = "BUILDINGELEMENTPROXY(1)"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-01-AN-ROD-MOD-90000-003",
+        "title": "Roads Surface Model", "role": "road_top",
+        "formats": ["IFC", "DWG", "NWC", "DWFx", "XML"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    inv = write(tmp_path / "files.json", {"files": [
+        {"path": "models/NRJS-IRO-MOD-00-00003.ifc", "name": "NRJS-IRO-MOD-00-00003.ifc",
+         "format": "IFC", "number": "NRJS-IRO-MOD-00-00003"},
+        {"path": "models/NRJS-IRO-MOD-00-00003.dwg", "name": "NRJS-IRO-MOD-00-00003.dwg",
+         "format": "DWG", "number": "NRJS-IRO-MOD-00-00003"},
+        {"path": "models/NRJS-IRO-MOD-00-00003.nwc", "name": "NRJS-IRO-MOD-00-00003.nwc",
+         "format": "NWC", "number": "NRJS-IRO-MOD-00-00003"},
+        {"path": "models/NRJS-IRO-MOD-00-00003.dwfx", "name": "NRJS-IRO-MOD-00-00003.dwfx",
+         "format": "DWFx", "number": "NRJS-IRO-MOD-00-00003"},
+    ]})
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"road_top={design}",
+                  "--midp", midp, "--inventory", inv, "--site", "NRJS", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert any(m.get("matched_by") == "role" for m in doc.get("midp_matches") or [])
+    fmt = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert len(fmt) == 1
+    fm = {f.lower() for f in fmt[0]["formats_missing"]}
+    assert fm == {"xml"}  # only XML missing — DWG/NWC/DWFx present under old number
+
+
+def test_s3_drawing_carriers_by_title_not_number_range(tmp_path):
+    """S3: grading/contour/cut-fill by title; Road Setting-Out Plan (NMAR 10300) not a carrier."""
+    skill6 = write(tmp_path / "midp_s3.json", {
+        "tool": {"name": "read_midp.py", "version": "0.x"},
+        "files": [{"name": "MIDP.xlsm"}],
+        "rows": [
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10300-001",
+             "title": "Road Setting-Out Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10400-001",
+             "title": "Overall Existing Contour Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10500-001",
+             "title": "Mass Grading Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10600-001",
+             "title": "Overall Cut/Fill Stake-Out Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-01-AQ-ROD-DWG-10300-001",
+             "title": "Overall Existing Contour Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+        ],
+    })
+    out = tmp_path / "ewk.json"
+    rc, msg = run("adapt_midp.py", "--midp", skill6, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    models = load(out)["models"]
+    nums = [m["number"] for m in models]
+    assert not any("10300" in n and "DN" in n for n in nums)  # setting-out not carrier
+    assert any("10400" in n for n in nums)
+    assert any("10500" in n for n in nums)
+    assert any("10600" in n for n in nums)
+    aq = tmp_path / "aq.json"
+    rc, msg = run("adapt_midp.py", "--midp", skill6, "--site", "QRWN", "--out", aq)
+    assert rc == 0, msg
+    # QRWN 10300 = contour plan → is a carrier (by title)
+    assert any("AQ-ROD-DWG-10300" in m["number"] for m in load(aq)["models"])

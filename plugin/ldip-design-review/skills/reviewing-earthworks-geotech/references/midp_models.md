@@ -46,10 +46,11 @@ python "<SK>/build_surfaces.py" --surface design_grading="<tin.json>" \
 
 **Site filter (R2):** `AQ` → QRWN, `AN` → NRJS, `DN` → NMAR (section code in the number).
 
-**Carrier filter (R3 / R7):** number patterns `ROD-MOD-90000`, `IRO-MOD`,
-`ROD-DWG-10300`…`10600`; title phrases including whole-word `NGL` / `EGL`,
-Existing Contour Plan, Cut/Fill Stake-Out Plan, Roads Solids Model →
-`design_grading`, Site Grading, Road Surface. **"Single-Line Diagram" is not a carrier.**
+**Carrier filter (R3 / R7 / S3):** model number patterns `ROD-MOD-90000`, `IRO-MOD`;
+drawing carriers by **title** only (Mass / Road / Site Grading Plan, Existing Contour
+Plan, Cut/Fill Stake-Out Plan) — **not** by sheet range `10300`–`10600` (NMAR `10300` =
+Road Setting-Out Plan is not a DL-13 carrier). Whole-word `NGL` / `EGL`; Roads Solids
+Model → `design_grading`. **"Single-Line Diagram" is not a carrier.**
 
 ## Package inventory (`--inventory`) — R1
 
@@ -67,11 +68,16 @@ Accepted shapes:
 
 Never raise DWG / NWC / DWFx / PDF missing without an inventory.
 
-## Matching order
+## Matching order (S1)
 
-1. Document number / source file (revision stripped) — `matched_by: document_no/source_file`
-2. Caller **role** when numbers differ (old-scheme NRJS) — `matched_by: role` + note
+1. Document number (revision stripped) in surfaces **and** in `--inventory` —
+   `matched_by: document_no/source_file` or `inventory`
+2. Role fallback **only for model rows** (`-MOD-`) with no number match (old-scheme) —
+   `matched_by: role` + note that the number differs
 3. Real title (not IFC proxy names) — `matched_by: title`
+
+**Never** match a drawing row (`-DWG-`) to a surface. After a role match, format
+presence is judged against the matched file's **own** number in the inventory (S2).
 
 ## DL-15 finding
 

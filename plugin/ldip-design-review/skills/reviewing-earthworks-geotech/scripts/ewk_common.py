@@ -40,17 +40,18 @@ SITE_SECTION_CODES = {
 # Formats that cannot be judged from surface side files alone (need --inventory) — R1
 INVENTORY_ONLY_FORMATS = frozenset({"dwg", "nwc", "dwfx", "pdf", "nwd", "dwf"})
 
-# R3: number patterns (not bare substring "ngl")
+# R3 / S3: model number patterns only — drawing carriers are title-based (not 10300–10600)
 EWK_NUMBER_RE = re.compile(
-    r"(?i)(ROD-MOD-90000|IRO-MOD|ROD-DWG-10[3-6]00)"
+    r"(?i)(ROD-MOD-90000|IRO-MOD)"
 )
-# R3 / R7: whole-word / phrase title patterns (negative: "Single-Line Diagram")
+# R3 / R7 / S3: whole-word / phrase title patterns (negative: "Single-Line Diagram",
+# "Road Setting-Out Plan" — not a DL-13 carrier; section numbers differ per site)
 EWK_TITLE_RE = re.compile(
     r"(?i)(\bNGL\b|\bEGL\b|existing\s+contour|contour\s+plan|"
     r"cut\s*/\s*fill|cut\s*&\s*fill|cut\s+and\s+fill|stake-?out|"
     r"roads?\s+solids?|site\s+grading|mass\s+grading|rough\s+grading|"
     r"roads?\s+surface|road\s+surface|design\s+grading|"
-    r"grading\s+plan|grading\s+contour)"
+    r"(?:mass|road|site)\s+grading\s+plan|grading\s+plan|grading\s+contour)"
 )
 PROXY_TITLE_RE = re.compile(r"(?i)buildingelementproxy|ifc-\d+|proxy\(\d+\)")
 
@@ -272,11 +273,41 @@ def looks_like_ewk_carrier(number, title):
     return False
 
 
-def midp_model_match(model, midp_entry):
-    """Match surface/inventory item to MIDP entry.
+def is_midp_model_row(midp_entry):
+    """True when the MIDP row is a model deliverable (`-MOD-`), not a drawing."""
+    num = (midp_entry.get("number") or midp_entry.get("deliverable") or "").upper()
+    return "-MOD-" in num
+
+
+def is_midp_drawing_row(midp_entry):
+    """True when the MIDP row is a drawing deliverable (`-DWG-`)."""
+    num = (midp_entry.get("number") or midp_entry.get("deliverable") or "").upper()
+    return "-DWG-" in num
+
+
+def inventory_number_match(inv_item, midp_entry):
+    """True when an inventory file number/name matches the MIDP deliverable number."""
+    num = midp_entry.get("number") or midp_entry.get("deliverable") or ""
+    if not num:
+        return False
+    for cand in (inv_item.get("number"), inv_item.get("name"),
+                 Path(inv_item.get("path") or "").stem,
+                 Path(inv_item.get("name") or "").stem):
+        if cand and numbers_match(num, cand):
+            return True
+    return False
+
+
+def midp_model_match(model, midp_entry, *, allow_role_title=None):
+    """Match a surface (or inventory-like) item to a MIDP entry.
 
     Returns (matched: bool, matched_by: str|None, note: str|None).
-    Order: document number / source file (R1) → role (R4 old-scheme) → real title.
+
+    S1 order for every MIDP row:
+      1. document number / source file (revision stripped)
+      2. role fallback **only for model rows** (`-MOD-`) with no number match (R4)
+      3. real title (never IFC proxy names)
+    Drawing rows (`-DWG-`) never match a surface via role or title.
     """
     num = midp_entry.get("number") or midp_entry.get("deliverable") or ""
     title = midp_entry.get("title") or ""
@@ -292,15 +323,26 @@ def midp_model_match(model, midp_entry):
         if num and cand and numbers_match(num, cand):
             return True, "document_no/source_file", None
 
-    # R4: old-scheme — match by caller role when numbers differ
+    # S1: never role/title-match a drawing row to a surface
+    drawing = is_midp_drawing_row(midp_entry)
+    model_row = is_midp_model_row(midp_entry)
+    if allow_role_title is False or drawing:
+        return False, None, None
+    if allow_role_title is None and not model_row and not drawing:
+        # Compact JSON without -MOD-/-DWG-: keep role/title for backwards compat
+        pass
+    elif not model_row:
+        return False, None, None
+
+    # R4 / S1: old-scheme — role fallback only for model rows when numbers differ
     if role and m_role and role == m_role and role in (
             "existing", "design_grading", "road_top", "finished_grading"):
         note = None
-        if num and m_doc and not numbers_match(num, m_doc):
+        if num and (m_doc or m_num or m_src) and not numbers_match(num, m_doc or m_num or m_src):
             note = f"number differs from MIDP ({num} vs {m_doc or m_num or m_src})"
         return True, "role", note
 
-    # Real title only (not BUILDINGELEMENTPROXY) — R4
+    # Real title only (not BUILDINGELEMENTPROXY) — R4 / S1
     if title and is_real_title(m_title):
         tl, mt = title.lower(), m_title.lower()
         if tl in mt or mt in tl or any(w in mt for w in tl.split() if len(w) > 3):
@@ -416,11 +458,27 @@ def load_package_inventory(inv_path):
     return files
 
 
-def formats_present_for(entry, surfaces, inv_files):
-    """Union of formats from matched surfaces and inventory files (R1)."""
+def formats_present_for(entry, surfaces, inv_files, *, matched_surface=None, matched_by=None):
+    """Union of formats from matched surfaces and inventory files (R1 / S2).
+
+    After a role match, also look up inventory with the matched file's **own**
+    document number (old scheme, e.g. NRJS-IRO-MOD-00-00001).
+    """
     have = set()
     num = entry.get("number") or entry.get("deliverable") or ""
-    role = entry.get("role")
+    lookup_nums = []
+    if num:
+        lookup_nums.append(num)
+    # S2: role-matched surface → judge formats under the file's own number
+    if matched_by == "role" and matched_surface:
+        own = matched_surface.get("document_no") or matched_surface.get("number") or ""
+        if not own:
+            src = matched_surface.get("source_file") or ""
+            own = Path(src).stem if src else ""
+        elif "." in Path(str(own)).name:
+            own = Path(str(own)).stem
+        if own:
+            lookup_nums.append(own)
     for s in surfaces or []:
         ok, _by, _note = midp_model_match({
             "document_no": s.get("document_no"), "source_file": s.get("source_file"),
@@ -431,10 +489,15 @@ def formats_present_for(entry, surfaces, inv_files):
         if ok:
             have.add(norm_format(s.get("source_format")))
     for f in inv_files or []:
-        if numbers_match(num, f.get("number") or f.get("name") or ""):
-            have.add(norm_format(f.get("format")))
-        elif role and numbers_match(num, Path(f.get("path") or "").stem):
-            have.add(norm_format(f.get("format")))
+        f_num = f.get("number") or f.get("name") or ""
+        f_stem = Path(f.get("path") or "").stem
+        for look in lookup_nums:
+            if numbers_match(look, f_num) or numbers_match(look, f_stem):
+                have.add(norm_format(f.get("format")))
+                break
+        else:
+            if inventory_number_match(f, entry):
+                have.add(norm_format(f.get("format")))
     return {h for h in have if h}
 
 
