@@ -30,11 +30,38 @@ PD_ACTIVE = {
     ("EWK-102", "required_element"),
 }
 
+# R2: section codes in the deliverable number (field 5 of SRC-02 / MIDP layout)
+SITE_SECTION_CODES = {
+    "QRWN": ("AQ", "QRWN", "QN"),
+    "NRJS": ("AN", "NRJS"),
+    "NMAR": ("DN", "NMAR"),
+}
+
+# Formats that cannot be judged from surface side files alone (need --inventory) — R1
+INVENTORY_ONLY_FORMATS = frozenset({"dwg", "nwc", "dwfx", "pdf", "nwd", "dwf"})
+
+# R3: number patterns (not bare substring "ngl")
+EWK_NUMBER_RE = re.compile(
+    r"(?i)(ROD-MOD-90000|IRO-MOD|ROD-DWG-10[3-6]00)"
+)
+# R3 / R7: whole-word / phrase title patterns (negative: "Single-Line Diagram")
+EWK_TITLE_RE = re.compile(
+    r"(?i)(\bNGL\b|\bEGL\b|existing\s+contour|contour\s+plan|"
+    r"cut\s*/\s*fill|cut\s*&\s*fill|cut\s+and\s+fill|stake-?out|"
+    r"roads?\s+solids?|site\s+grading|mass\s+grading|rough\s+grading|"
+    r"roads?\s+surface|road\s+surface|design\s+grading|"
+    r"grading\s+plan|grading\s+contour)"
+)
+PROXY_TITLE_RE = re.compile(r"(?i)buildingelementproxy|ifc-\d+|proxy\(\d+\)")
+
 ROLE_TITLE_HINTS = (
-    (("ngl", "existing", "survey", "egl", "topo"), "existing"),
-    (("grading", "mass grading", "rough grading", "formation"), "design_grading"),
+    (("existing contour", "contour plan", "existing ground"), "existing"),
+    (("roads solids", "solids model", "site grading", "mass grading",
+      "rough grading", "formation"), "design_grading"),
     (("road surface", "roads surface", "corridor", "tos", "road top"), "road_top"),
     (("finished grading", "finished levels"), "finished_grading"),
+    (("cut/fill", "cut & fill", "cut and fill", "stake-out", "stake out",
+      "grading plan", "grading contour"), "drawing"),
 )
 
 
@@ -177,39 +204,108 @@ def load_params(site=None):
 
 
 def propose_role_from_title(title):
+    """Map MIDP title → surface role (R7: Roads Solids → design_grading; contour → existing)."""
     t = (title or "").lower()
+    # Whole-word NGL / EGL → existing (R3: not substring of Single-Line)
+    if re.search(r"(?i)\bNGL\b|\bEGL\b", title or ""):
+        return "existing"
     for keys, role in ROLE_TITLE_HINTS:
         if any(k in t for k in keys):
             return role
     return None
 
 
-def midp_model_match(model, midp_entry):
-    """DL-15 / ADDENDUM / D2: match by document number / source file first, then title+role."""
-    num = (midp_entry.get("number") or midp_entry.get("deliverable") or "").lower()
-    title = (midp_entry.get("title") or "").lower()
-    role = midp_entry.get("role")
-    m_doc = (model.get("document_no") or "").lower()
-    m_src = (model.get("source_file") or "").lower()
-    m_num = (model.get("number") or model.get("name") or "").lower()
-    m_title = (model.get("title") or model.get("name") or "").lower()
-    m_role = model.get("role")
-    m_internal = (model.get("internal_name") or "").lower()
-    # D2: source file / document number first
-    if num:
-        if num in m_doc or m_doc and m_doc in num:
-            return True
-        if num in m_src or (m_src and num.replace("-", "") in m_src.replace("-", "")):
-            return True
-        if num in m_num or num in m_internal or (m_num and m_num in num):
-            return True
-    if role and m_role and role == m_role:
-        if title and (title in m_title or m_title in title or any(
-                w in m_title for w in title.split() if len(w) > 3)):
-            return True
-    if title and m_title and (title in m_title or m_title in title):
+def is_real_title(title):
+    """True when title is usable for MIDP fallback (not an IFC proxy name) — R4."""
+    t = (title or "").strip()
+    if len(t) < 4:
+        return False
+    return PROXY_TITLE_RE.search(t) is None
+
+
+def number_key(num):
+    """Normalise a deliverable number; strip trailing `-00` / `-0A` revision (R1)."""
+    n = (num or "").strip().upper().replace("_", "-")
+    if not n:
+        return ""
+    parts = n.split("-")
+    # Strip short revision tokens only (2 chars: 00, 0A, AA) — keep 3-digit sheet (001)
+    while len(parts) >= 2 and re.fullmatch(r"[0-9]{2}|0[A-Z]|[A-Z]{2}", parts[-1]):
+        parts.pop()
+    return "-".join(parts)
+
+
+def numbers_match(a, b):
+    """True when two document numbers refer to the same deliverable (R1 strip rev)."""
+    ka, kb = number_key(a), number_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    if ka in kb or kb in ka:
+        return True
+    # dash-insensitive containment of the shorter key
+    sa, sb = ka.replace("-", ""), kb.replace("-", "")
+    return sa in sb or sb in sa
+
+
+def row_matches_site(number, site):
+    """R2: keep MIDP rows whose section code matches the site (AQ=QRWN, AN=NRJS, DN=NMAR)."""
+    if not site:
+        return True
+    codes = SITE_SECTION_CODES.get(str(site).upper())
+    if not codes:
+        return True
+    num = (number or "").upper()
+    parts = num.split("-")
+    if len(parts) > 4 and parts[4] in codes:
+        return True
+    return any(re.search(rf"(?:^|-){re.escape(c)}(?:-|$)", num) for c in codes)
+
+
+def looks_like_ewk_carrier(number, title):
+    """R3: whole-word / number patterns only (not 'ngl' inside Single-Line)."""
+    if EWK_NUMBER_RE.search(number or ""):
+        return True
+    if EWK_TITLE_RE.search(title or ""):
         return True
     return False
+
+
+def midp_model_match(model, midp_entry):
+    """Match surface/inventory item to MIDP entry.
+
+    Returns (matched: bool, matched_by: str|None, note: str|None).
+    Order: document number / source file (R1) → role (R4 old-scheme) → real title.
+    """
+    num = midp_entry.get("number") or midp_entry.get("deliverable") or ""
+    title = midp_entry.get("title") or ""
+    role = midp_entry.get("role")
+    m_doc = model.get("document_no") or ""
+    m_src = model.get("source_file") or model.get("path") or model.get("name") or ""
+    m_num = model.get("number") or ""
+    m_title = model.get("title") or model.get("name") or ""
+    m_role = model.get("role")
+    m_internal = model.get("internal_name") or ""
+
+    for cand in (m_doc, m_src, m_num, m_internal, Path(str(m_src)).stem if m_src else ""):
+        if num and cand and numbers_match(num, cand):
+            return True, "document_no/source_file", None
+
+    # R4: old-scheme — match by caller role when numbers differ
+    if role and m_role and role == m_role and role in (
+            "existing", "design_grading", "road_top", "finished_grading"):
+        note = None
+        if num and m_doc and not numbers_match(num, m_doc):
+            note = f"number differs from MIDP ({num} vs {m_doc or m_num or m_src})"
+        return True, "role", note
+
+    # Real title only (not BUILDINGELEMENTPROXY) — R4
+    if title and is_real_title(m_title):
+        tl, mt = title.lower(), m_title.lower()
+        if tl in mt or mt in tl or any(w in mt for w in tl.split() if len(w) > 3):
+            return True, "title", None
+    return False, None, None
 
 
 def norm_format(fmt):
@@ -230,12 +326,10 @@ def norm_format(fmt):
     return f
 
 
-def adapt_midp_rows(midp_doc, *, stage_hint="30"):
-    """D5: adapt skill 6 `read_midp.py` output → earthworks MIDP model entries.
+def adapt_midp_rows(midp_doc, *, stage_hint="30", site=None):
+    """D5 / R2 / R3 / R7: skill 6 `read_midp.py` → earthworks MIDP entries.
 
-    Keeps rows whose exchanges mention the stage hint (default 30 % / Concept) and
-    whose number/title look like NGL / grading / road-surface models, or any row
-    at that stage with ROD-MOD-90000 / IRO-MOD.
+    Filters by stage, site section code (AQ/AN/DN), and whole-word / number patterns.
     """
     rows = midp_doc.get("rows") if isinstance(midp_doc, dict) else midp_doc
     if not isinstance(rows, list):
@@ -254,12 +348,9 @@ def adapt_midp_rows(midp_doc, *, stage_hint="30"):
             continue
         num = r.get("number") or r.get("deliverable") or ""
         title = r.get("title") or ""
-        blob = f"{num} {title}".lower()
-        looks_ewk = any(k in blob for k in (
-            "rod-mod-90000", "iro-mod", "grading", "ngl", "egl", "road surface",
-            "roads surface", "mass grading", "site grading",
-        ))
-        if not looks_ewk and not r.get("role"):
+        if not row_matches_site(num, site):
+            continue
+        if not looks_like_ewk_carrier(num, title) and not r.get("role"):
             continue
         role = r.get("role") or propose_role_from_title(title)
         out.append({
@@ -271,6 +362,80 @@ def adapt_midp_rows(midp_doc, *, stage_hint="30"):
             "milestone": r.get("milestone") if r.get("milestone") is not None else 30,
         })
     return out
+
+
+def load_package_inventory(inv_path):
+    """R1: load skill 6 inventory / sheet register / plain file list.
+
+    Returns list of {path, name, format, number}.
+    """
+    if not inv_path:
+        return None
+    doc = read_json(inv_path)
+    files = []
+
+    def add(path, fmt=None, number=None, name=None):
+        p = str(path or "")
+        nm = name or Path(p).name
+        f = norm_format(fmt or Path(nm).suffix.lstrip("."))
+        num = number
+        if not num:
+            stem = Path(nm).stem
+            # document number at start of stem
+            m = re.match(r"([A-Za-z0-9]+(?:-[A-Za-z0-9]+){5,})", stem)
+            num = m.group(1) if m else stem
+        files.append({"path": p, "name": nm, "format": f, "number": num})
+
+    if isinstance(doc, list):
+        for item in doc:
+            if isinstance(item, str):
+                add(item)
+            elif isinstance(item, dict):
+                add(item.get("path") or item.get("name") or item.get("file"),
+                    item.get("format") or item.get("ext"),
+                    item.get("number") or (item.get("number_inherited") or {}).get("number"),
+                    item.get("name"))
+        return files
+    if not isinstance(doc, dict):
+        return files
+    if doc.get("sheet_register"):
+        for reg in doc["sheet_register"]:
+            base = reg.get("base") or (reg.get("numbers") or [None])[0]
+            for f in reg.get("files") or []:
+                add(f.get("path") or f.get("name"), f.get("format") or f.get("type"),
+                    f.get("number") or base, f.get("name"))
+            # carriers.file_name
+            for f in (reg.get("carriers") or {}).get("file_name") or []:
+                add(f.get("path") or f.get("number"), None, f.get("number") or base)
+        return files
+    if doc.get("files"):
+        for f in doc["files"]:
+            inherited = (f.get("number_inherited") or {}).get("number")
+            add(f.get("path") or f.get("name"), f.get("format") or f.get("ext"),
+                f.get("number") or inherited, f.get("name"))
+    return files
+
+
+def formats_present_for(entry, surfaces, inv_files):
+    """Union of formats from matched surfaces and inventory files (R1)."""
+    have = set()
+    num = entry.get("number") or entry.get("deliverable") or ""
+    role = entry.get("role")
+    for s in surfaces or []:
+        ok, _by, _note = midp_model_match({
+            "document_no": s.get("document_no"), "source_file": s.get("source_file"),
+            "number": s.get("document_no"), "title": s.get("title"),
+            "role": s.get("role"), "internal_name": s.get("internal_name"),
+            "path": s.get("path"),
+        }, entry)
+        if ok:
+            have.add(norm_format(s.get("source_format")))
+    for f in inv_files or []:
+        if numbers_match(num, f.get("number") or f.get("name") or ""):
+            have.add(norm_format(f.get("format")))
+        elif role and numbers_match(num, Path(f.get("path") or "").stem):
+            have.add(norm_format(f.get("format")))
+    return {h for h in have if h}
 
 
 # --- TIN geometry (copied from skill 10 tin_surface.py; skills stay independent) ---

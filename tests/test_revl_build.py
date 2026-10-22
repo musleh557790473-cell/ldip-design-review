@@ -900,15 +900,27 @@ def test_d2_document_no_midp_match(tmp_path):
 
 
 def test_d5_adapt_midp_from_skill6(tmp_path):
-    """D5: adapt_midp.py / build_surfaces accept skill 6 read_midp rows."""
+    """D5 / R2 / R3 / R7: adapt_midp filters site, drops SLD, keeps contour / solids."""
     skill6 = write(tmp_path / "midp_s6.json", {
         "tool": {"name": "read_midp.py", "version": "0.x"},
         "files": [{"name": "MIDP.xlsm"}],
         "rows": [
-            {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001", "title": "NGL",
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001", "title": "Roads NGL Model",
              "formats": ["IFC", "XML"],
              "exchanges": [{"index": 1, "stage": "30% Concept Design", "owner": "Parsons"}]},
-            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-00003-001", "title": "Hierarchy Plan",
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10400-001", "title": "Overall Existing Contour Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-03-DN-ROD-DWG-10600-001", "title": "Overall Cut/Fill Stake-Out Plan",
+             "formats": ["DWG", "PDF"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-01-AQ-ROD-MOD-90000-002", "title": "Roads Solids Model",
+             "formats": ["IFC", "DWG"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-01-AN-ROD-MOD-90000-001", "title": "Roads NGL Model",
+             "formats": ["IFC"],
+             "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
+            {"number": "LDIP-RCRC-SAP-03-DN-ELE-DWG-60000-001", "title": "MV Single-Line Diagram",
              "formats": ["DWG"],
              "exchanges": [{"index": 1, "stage": "30% Concept Design"}]},
             {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002", "title": "Site Grading",
@@ -917,12 +929,27 @@ def test_d5_adapt_midp_from_skill6(tmp_path):
         ],
     })
     out = tmp_path / "ewk_midp.json"
-    rc, msg = run("adapt_midp.py", "--midp", skill6, "--out", out)
+    rc, msg = run("adapt_midp.py", "--midp", skill6, "--site", "NMAR", "--out", out)
     assert rc == 0, msg
     models = load(out)["models"]
-    assert any("90000-001" in m["number"] for m in models)
-    assert not any("00003-001" in m["number"] for m in models)  # drawing, not ewk model
-    assert not any(m["number"].endswith("90000-002") for m in models)  # 60 % only
+    nums = [m["number"] for m in models]
+    assert any("DN-ROD-MOD-90000-001" in n for n in nums)
+    assert any("10400" in n for n in nums)  # R7 contour
+    assert any("10600" in n for n in nums)  # R7 cut/fill
+    assert not any("AQ-ROD" in n for n in nums)  # R2: QRWN filtered out
+    assert not any("AN-ROD" in n for n in nums)  # R2: NRJS filtered out
+    assert not any("60000" in n for n in nums)  # R3: SLD negative
+    assert not any(n.endswith("90000-002") and "DN" in n for n in nums)  # 60 % only
+    # R7 roles
+    by_num = {m["number"]: m for m in models}
+    contour = next(m for m in models if "10400" in m["number"])
+    assert contour["role"] == "existing"
+    solids_out = tmp_path / "aq.json"
+    rc, msg = run("adapt_midp.py", "--midp", skill6, "--site", "QRWN", "--out", solids_out)
+    assert rc == 0, msg
+    solids = next(m for m in load(solids_out)["models"] if "90000-002" in m["number"])
+    assert solids["role"] == "design_grading"
+    assert solids["title"] == "Roads Solids Model"
 
 
 def test_d7_midp_not_scheduled_no_pd_findings(tmp_path):
@@ -1055,3 +1082,149 @@ def test_d10_plot_layer_fnmatch_and_dedupe(tmp_path):
     # At least: no crash; if traps listed, plot handle is A or A2 not TB
     for t in dr.get("traps") or []:
         assert t.get("plot") in (None, "A", "A2")
+
+
+# --------------------------------------------------------------------------- S29 R1–R5 / R7
+def test_r1_inventory_formats_and_no_inventory_not_run(tmp_path):
+    """R1: with inventory judge DWG/NWC/DWFx; without → not_run; never false DWG missing."""
+    ifc = tmp_path / "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00.ifc"
+    write_ifc_solid_and_layer(ifc, include_layer=True)
+    rc, msg = run("read_ifc_surface.py", "--ifc", ifc, "--out-dir", tmp_path / "o", "--prefix", "r1")
+    assert rc == 0, msg
+    tin = msg["surfaces"][0]["path"]
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001",
+        "title": "Roads NGL Model", "role": "existing",
+        "formats": ["IFC", "DWG", "NWC", "DWFx", "XML"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    # Without inventory: IFC present (matched by number strip -00); DWG/NWC/DWFx → not_run
+    out1 = tmp_path / "s1.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"existing={tin}",
+                  "--midp", midp, "--site", "NMAR", "--out", out1)
+    assert rc == 0, msg
+    d1 = load(out1)
+    assert not any(m["reason"] == "model not received" for m in d1["midp_missing"])
+    assert d1["midp_not_run"]
+    assert all(f.upper() in ("DWG", "NWC", "DWFX") or f.lower() in ("dwg", "nwc", "dwfx")
+               for nr in d1["midp_not_run"] for f in nr.get("formats_unchecked") or [])
+    # XML still judged from surfaces
+    assert any(m["reason"] == "format missing" and any(x.lower() == "xml" for x in m["formats_missing"])
+               for m in d1["midp_missing"])
+    assert not any(
+        m["reason"] == "format missing" and any(norm in {x.lower() for x in m["formats_missing"]}
+                                                for norm in ("dwg", "nwc", "dwfx"))
+        for m in d1["midp_missing"]
+    )
+
+    inv = write(tmp_path / "files.json", {"files": [
+        {"path": "models/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00.ifc", "name": ifc.name,
+         "format": "IFC", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+        {"path": "models/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00.dwg", "name": "x.dwg",
+         "format": "DWG", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+    ]})
+    out2 = tmp_path / "s2.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"existing={tin}",
+                  "--midp", midp, "--inventory", inv, "--site", "NMAR", "--out", out2)
+    assert rc == 0, msg
+    d2 = load(out2)
+    miss = d2["midp_missing"]
+    assert miss and miss[0]["reason"] == "format missing"
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "nwc" in fm and "dwfx" in fm and "xml" in fm
+    assert "dwg" not in fm and "ifc" not in fm
+
+
+def test_r3_single_line_diagram_not_carrier(tmp_path):
+    """R3 negative: 'Single-Line Diagram' must not become an earthworks carrier."""
+    skill6 = write(tmp_path / "sld.json", {
+        "tool": {"name": "read_midp.py", "version": "0.x"},
+        "files": [],
+        "rows": [{
+            "number": "LDIP-RCRC-SAP-03-DN-ELE-DWG-60000-001",
+            "title": "LV Single-Line Diagram",
+            "formats": ["DWG"],
+            "exchanges": [{"stage": "30% Concept Design"}],
+        }],
+    })
+    rc, msg = run("adapt_midp.py", "--midp", skill6, "--site", "NMAR", "--out", tmp_path / "a.json")
+    assert rc == 0, msg
+    assert load(tmp_path / "a.json")["models"] == []
+
+
+def test_r4_old_scheme_match_by_role(tmp_path):
+    """R4: NRJS IRO-MOD old numbers match MIDP AN-ROD-MOD by role; note number differs."""
+    design = write_tin(tmp_path, "old", (0, 0), (10, 10), z0=100)
+    tin = load(design)
+    tin["document_no"] = "NRJS-IRO-MOD-00-00002"
+    tin["source_file"] = "NRJS-IRO-MOD-00-00002.ifc"
+    tin["source_format"] = "ifc"
+    tin["product_name"] = "BUILDINGELEMENTPROXY(1)"
+    tin["surface"] = "BUILDINGELEMENTPROXY(1)"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-01-AN-ROD-MOD-90000-002",
+        "title": "Site Grading Model", "role": "design_grading",
+        "formats": ["IFC", "XML"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--site", "NRJS", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert not any(m["reason"] == "model not received" for m in doc["midp_missing"])
+    assert any(m.get("matched_by") == "role" for m in doc.get("midp_matches") or [])
+    fmt = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert fmt and any(f.lower() == "xml" for f in fmt[0]["formats_missing"])
+    assert fmt[0].get("note") and "differs" in fmt[0]["note"]
+
+
+def test_r5_one_mi_candidate_per_site(tmp_path):
+    """R5/R6: one MI finding listing all missing; rule_id EWK-001; clause names 001/002/003."""
+    rules = rules_ewk(tmp_path)
+    design = write_tin(tmp_path, "r5", (0, 0), (10, 10), z0=100)
+    midp = write(tmp_path / "midp.json", {"models": [
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001", "title": "NGL",
+         "role": "existing", "formats": ["IFC"], "stage": "30% Concept Design", "milestone": 30},
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002", "title": "Grading",
+         "role": "design_grading", "formats": ["IFC", "XML"],
+         "stage": "30% Concept Design", "milestone": 30},
+    ]})
+    # Only design surface — existing missing; XML missing on design
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"
+    tin["source_format"] = "ifc"
+    write(design, tin)
+    surf = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--site", "NMAR", "--out", surf)
+    assert rc == 0, msg
+    assert len(load(surf)["midp_missing"]) >= 2
+
+    slopes = write(tmp_path / "sl.json", {
+        "tool": {"script": "check_slopes.py", "version": "0"},
+        "ewk002_groups": [], "walls": [], "checks": [], "passed": [], "not_run": [],
+    })
+    rc, msg = run("check_presence.py", "--slopes", slopes, "--rules", rules,
+                  "--stage", "30% Concept Design", "--surfaces", surf,
+                  "--out", tmp_path / "pr.json", "--required-out", tmp_path / "req.json")
+    assert rc == 0, msg
+    items = load(tmp_path / "req.json")["items"]
+    assert len(items) == 1
+    assert items[0]["key"] == "midp:earthworks"
+    assert items[0]["rules"] == ["EWK-001"]
+    assert "EWK-002" in items[0]["clause"] and "EWK-003" in items[0]["clause"]
+
+    rc, msg = run("build_candidates.py",
+                  "--results", tmp_path / "pr.json", tmp_path / "req.json",
+                  "--rules", rules, "--run", "NMAR-test-20261022T0900", "--site", "NMAR",
+                  "--sub", "test", "--evidence-dir", tmp_path / "ev",
+                  "--out", tmp_path / "cand.json")
+    assert rc == 0, msg
+    mi = [f for f in load(tmp_path / "cand.json") if f["issue_type"] == "missing_information"
+          and "MIDP earthworks" in f["title"]]
+    assert len(mi) == 1
+    assert mi[0]["reference"]["rule_id"] == "EWK-001"
+    assert "90000-001" in mi[0]["statement"]
+    assert "EWK-001" in mi[0]["reference"]["clause"]

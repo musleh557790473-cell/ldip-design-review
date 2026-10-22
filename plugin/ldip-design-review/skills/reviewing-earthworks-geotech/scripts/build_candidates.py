@@ -8,7 +8,7 @@ Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.js
            --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir <dir>
            [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import argparse
 import json
@@ -146,20 +146,38 @@ class Builder:
         return f
 
     def missing(self, item):
-        rid = item["rules"][0]
+        # R6: one rule_id (EWK-001); clause lists EWK-001/002/003 required inputs
+        rid = (item.get("rules") or ["EWK-001"])[0]
         rule = self.rules.get(rid)
         if rule is None:
             return None
         status = lower("Missing information", rule.get("cap") or "Confirmed")
         searched = ", ".join(item.get("searched") or []) or "(no file given)"
-        statement = (f"{item['item']} is required from {item.get('required_from_phase')} "
-                     f"(submission phase {item.get('submission_phase')}) in one of: "
-                     f"{', '.join(item.get('carriers') or [])}; none of them holds it. "
-                     f"Searched: {searched}. Rules that need it: {', '.join(item['rules'])}.")
-        # D2: prefer deliverable / document number on MIDP MI locations
+        rules_needed = item.get("rules_needed") or item.get("rules") or [rid]
+        # R5: one finding listing every missing deliverable + formats
+        lines = item.get("missing_lines") or []
+        if not lines and item.get("missing"):
+            for miss in item["missing"]:
+                lines.append(
+                    f"{miss.get('deliverable') or ''} ({miss.get('title') or ''}): "
+                    f"{miss.get('reason')} — formats "
+                    f"{', '.join(miss.get('formats_missing') or []) or '—'}"
+                )
+        if lines:
+            listing = "; ".join(lines)
+            statement = (
+                f"{item['item']} — missing at {item.get('submission_phase')} "
+                f"(required from {item.get('required_from_phase')}): {listing}. "
+                f"Searched: {searched}. Required inputs for {', '.join(rules_needed)}."
+            )
+        else:
+            statement = (f"{item['item']} is required from {item.get('required_from_phase')} "
+                         f"(submission phase {item.get('submission_phase')}) in one of: "
+                         f"{', '.join(item.get('carriers') or [])}; none of them holds it. "
+                         f"Searched: {searched}. Rules that need it: {', '.join(rules_needed)}.")
         doc = item.get("document_no") or "PACKAGE"
-        loc = {"document_no": doc, "package_level": True} if doc == "PACKAGE" \
-            else {"document_no": doc, "package_level": True}
+        loc = {"document_no": doc, "package_level": True}
+        extract = ("; ".join(lines) if lines else f"searched: {searched}")[:900]
         f = {
             "schema_version": "1.0", "finding_id": f"{self.a.run}/RDE-{self.n:03d}", "stage": "candidate",
             "run_id": self.a.run, "site": self.a.site, "sub_id": self.a.sub, "agent": "RDE",
@@ -169,13 +187,15 @@ class Builder:
             "location": loc,
             "severity": rule["severity_default"], "confidence": "High",
             "evidence": [{"evidence_id": "E01", "tier": "deterministic", "source_type": "script_output",
-                          "extract": f"searched: {searched}"[:900], "measured_value": 0,
-                          "unit": "carriers holding the item",
+                          "extract": extract, "measured_value": len(item.get("missing") or lines or []),
+                          "unit": "missing deliverables",
                           "script": {"name": "reviewing-earthworks-geotech/scripts/check_presence.py",
                                      "version": item.get("_version", "?"), "exit_code": 0}}],
             "reference": {"rule_id": rid, "parameter": None, "rulebook_version": self.rbv,
                           "source_doc": f"{item.get('source_id') or 'SRC-14'} (MIDP / ER)",
-                          "clause": item.get("clause") or "SPC-0006 Rev L Amendment L-a DL-15"},
+                          "clause": item.get("clause") or (
+                              "SPC-0006 Rev L Amendment L-a DL-15; required inputs for "
+                              "EWK-001 / EWK-002 / EWK-003")},
             "proposed_status": status, "owner": {"role": rule["owner_role"], "name": None},
             "created_at": self.now,
         }

@@ -12,7 +12,7 @@ Usage:
       --stage "<stage>" [--file carrier=path ...] [--site SITE]
       --out <presence.json> [--required-out <required_inputs.json>]
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import argparse
 import math
@@ -193,23 +193,40 @@ def main(argv=None):
                 passed.append({"rule_id": "EWK-102", "parameter": "required_element",
                                "result": "pass", "observed": "retaining found or no steep groups"})
 
-        # DL-15 MIDP missing models → required_inputs (D7: only when scheduled at 30 %)
+        # DL-15 / R5: ONE MI item per site listing all missing deliverables+formats
+        # R6: clause cites EWK-001/002/003 required inputs; rule_id = EWK-001
         required_items = []
         if a.surfaces and midp_30 is not False:
-            for miss in surf_doc.get("midp_missing") or []:
+            misses = list(surf_doc.get("midp_missing") or [])
+            if misses:
+                lines = []
+                all_fmts = []
+                for miss in misses:
+                    d = miss.get("deliverable") or ""
+                    t = miss.get("title") or ""
+                    fm = miss.get("formats_missing") or []
+                    all_fmts.extend(fm)
+                    reason = miss.get("reason") or "missing"
+                    note = miss.get("note") or ""
+                    lines.append(f"{d} ({t}): {reason} — formats {', '.join(fm) or '—'}"
+                                 + (f"; {note}" if note else ""))
                 required_items.append({
-                    "key": f"midp:{miss.get('deliverable') or miss.get('title')}",
-                    "item": f"MIDP model {miss.get('deliverable') or ''} {miss.get('title') or ''}".strip(),
-                    "carriers": miss.get("formats_missing") or ["IFC"],
+                    "key": "midp:earthworks",
+                    "item": "MIDP earthworks carriers at 30 %",
+                    "missing": misses,
+                    "missing_lines": lines,
+                    "carriers": sorted({str(f) for f in all_fmts}),
                     "required_from_phase": "PD",
                     "submission_phase": phase_of_stage or "PD",
                     "result": "fail",
-                    "rules": ["EWK-001", "EWK-002", "EWK-003"],
+                    "rules": ["EWK-001"],
+                    "rules_needed": ["EWK-001", "EWK-002", "EWK-003"],
                     "searched": searched_all,
                     "source_id": "SRC-14",
-                    "clause": "MIDP Data Exchange 04 / DL-15",
-                    "reason": miss.get("reason"),
-                    "document_no": miss.get("deliverable"),
+                    "clause": ("SPC-0006 Rev L Amendment L-a DL-15; required inputs for "
+                               "EWK-001 / EWK-002 / EWK-003"),
+                    "reason": "midp_missing",
+                    "document_no": "PACKAGE",
                 })
 
         out = {

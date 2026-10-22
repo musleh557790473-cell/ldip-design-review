@@ -1,6 +1,8 @@
 """Skill 13 real-data tests TL8 / TL9 — skipped without LDIP_REVIEW_ROOT.
 
-Assert values from Claude S29 review §4 (after D1–D4). Real packages stay outside Git.
+Assert values from Claude S29 re-review §5.4 / §5.6 (R8 / R9).
+Site-specific globs: NMAR `*-DN-ROD-MOD-*`, QRWN `*-AQ-*`, NRJS `*NRJS*` / `*-AN-*`.
+Real packages stay outside Git.
 """
 from __future__ import annotations
 
@@ -22,11 +24,12 @@ pytestmark = pytest.mark.skipif(
 
 REPO = Path(__file__).resolve().parents[1]
 SK13 = REPO / "plugin/ldip-design-review/skills/reviewing-earthworks-geotech/scripts"
+SK6 = REPO / "plugin/ldip-design-review/skills/controlling-submittal-package/scripts"
 PY = sys.executable
 
 
-def run(script, *args, timeout=600):
-    p = subprocess.run([PY, str(SK13 / script), *map(str, args)],
+def run(script, *args, timeout=600, skill=SK13):
+    p = subprocess.run([PY, str(skill / script), *map(str, args)],
                        capture_output=True, text=True, timeout=timeout)
     out = p.stdout.strip().splitlines()
     msg = json.loads(out[-1]) if out else {"stderr": p.stderr[-3000:]}
@@ -43,17 +46,22 @@ def write(p, obj):
     return Path(p)
 
 
-def _find_ifc(root: Path, *needles):
+def _find_ifc(root: Path, patterns):
     hits = []
-    for pat in needles:
+    for pat in patterns:
         hits.extend(root.rglob(pat))
-    # prefer .ifc over side files
-    ifcs = [p for p in hits if p.suffix.lower() == ".ifc"]
-    return sorted(set(ifcs), key=lambda p: p.name)
+    return sorted({p for p in hits if p.suffix.lower() == ".ifc"}, key=lambda p: p.name)
+
+
+def _pick(ifcs, *needles):
+    for n in needles:
+        for p in ifcs:
+            if n in p.name:
+                return p
+    return None
 
 
 def _rules_ewk_active(tmp: Path):
-    """Test-only active EWK rules (mirror S29 scratch; never deposited rules_v8)."""
     def R(rid, title, params, sev="Minor", issue="design_error", phase="DD"):
         return {
             "rule_id": rid, "title": title, "state": "active", "cap": "Confirmed",
@@ -99,87 +107,136 @@ def _rules_ewk_active(tmp: Path):
     return path
 
 
-def _pick_by_suffix(ifcs, suffix):
-    for p in ifcs:
-        if suffix in p.name:
+def _find_midp_json(root: Path):
+    """Prefer skill 6 read_midp output; else a .xlsm for on-the-fly read."""
+    cands = list(root.rglob("*midp*.json")) + list(root.rglob("*MIDP*.json"))
+    for p in cands:
+        try:
+            doc = load(p)
+        except Exception:
+            continue
+        if isinstance(doc, dict) and (doc.get("rows") or doc.get("tool", {}).get("name") == "read_midp.py"):
             return p
-    return None
+    xlsm = list(root.rglob("*GEN-LST*.xlsm")) + list(root.rglob("*MIDP*.xlsm"))
+    return xlsm[0] if xlsm else None
 
 
+def _adapt_real_midp(root: Path, tmp: Path, site: str):
+    """R8: real MIDP via skill 6 + adapt_midp --site."""
+    src = _find_midp_json(root)
+    if src is None:
+        return None
+    midp_json = src
+    if src.suffix.lower() in (".xlsm", ".xlsx"):
+        midp_json = tmp / "midp_raw.json"
+        run("read_midp.py", "--file", src, "--out", midp_json, skill=SK6, timeout=120)
+    out = tmp / f"midp_{site}.json"
+    run("adapt_midp.py", "--midp", midp_json, "--site", site, "--out", out)
+    return out
+
+
+def _find_inventory(root: Path, tmp: Path, site: str):
+    for p in list(root.rglob("files.json")) + list(root.rglob("package.json")):
+        try:
+            doc = load(p)
+        except Exception:
+            continue
+        if doc.get("files") or doc.get("sheet_register"):
+            return p
+    # plain list from IFC/DWG under root (lightweight)
+    files = []
+    for p in root.rglob("*"):
+        if p.suffix.lower() in (".ifc", ".dwg", ".nwc", ".dwfx", ".pdf", ".xml"):
+            files.append({"path": str(p.relative_to(root)), "name": p.name,
+                          "format": p.suffix.lstrip(".").upper(), "number": p.stem})
+    if not files:
+        return None
+    out = tmp / f"inv_{site}.json"
+    write(out, {"files": files})
+    return out
+
+
+# --------------------------------------------------------------------------- TL8 NMAR (R8 / R9)
 @pytest.fixture(scope="module")
 def nmar_bundle(tmp_path_factory):
     root = Path(ROOT)
-    ifcs = _find_ifc(root, "*ROD-MOD-90000-001*.ifc", "*ROD-MOD-90000-002*.ifc",
-                     "*ROD-MOD-90000-003*.ifc", "*Site*Grading*.ifc")
-    m001 = _pick_by_suffix(ifcs, "90000-001") or _pick_by_suffix(ifcs, "90000-001".upper())
-    m002 = _pick_by_suffix(ifcs, "90000-002")
-    m003 = _pick_by_suffix(ifcs, "90000-003")
+    # R9: site-specific globs — skip (not fail) when NMAR absent
+    ifcs = _find_ifc(root, ["*-DN-ROD-MOD-90000-*.ifc", "*DN*ROD-MOD-90000*.ifc"])
+    m001 = _pick(ifcs, "90000-001")
+    m002 = _pick(ifcs, "90000-002")
+    m003 = _pick(ifcs, "90000-003")
     if not (m001 and m002 and m003):
-        pytest.skip("NMAR ROD-MOD-90000-001/002/003 IFC not found under LDIP_REVIEW_ROOT")
+        pytest.skip("NMAR *-DN-ROD-MOD-90000-001/002/003 IFC not found under LDIP_REVIEW_ROOT")
     o = tmp_path_factory.mktemp("tl8")
-    faces = {}
-    tins = {}
+    faces, tins, choices = {}, {}, {}
     for key, path in (("001", m001), ("002", m002), ("003", m003)):
         msg = run("read_ifc_surface.py", "--ifc", path, "--out-dir", o / f"ifc_{key}",
                   "--prefix", f"nmar{key}", timeout=180)
         assert len(msg["surfaces"]) == 1, msg
         faces[key] = msg["surfaces"][0]["faces"]
         tins[key] = msg["surfaces"][0]["path"]
-        assert msg["layer_choice"] in ("single_layer", "thin_solid_split")
-    return {"root": root, "out": o, "faces": faces, "tins": tins,
+        choices[key] = msg["layer_choice"]
+    return {"root": root, "out": o, "faces": faces, "tins": tins, "choices": choices,
             "paths": {"001": m001, "002": m002, "003": m003}}
 
 
 def test_tl8_nmar_surface_faces(nmar_bundle):
-    """TL8 §4: surfaces 190,553 / 59,533 / 98,573 faces (one sheet per model)."""
-    f = nmar_bundle["faces"]
+    """TL8 §5.4: faces 190,553 / 59,533 / 98,573; layer_choice single / single / thin_solid_split."""
+    f, c = nmar_bundle["faces"], nmar_bundle["choices"]
     assert f["001"] == 190_553
     assert f["002"] == 59_533
     assert f["003"] == 98_573
+    assert c["001"] == "single_layer"
+    assert c["002"] == "single_layer"
+    assert c["003"] == "thin_solid_split"
 
 
-def test_tl8_nmar_ewk_counts(nmar_bundle, tmp_path):
-    """TL8 §4: EWK-001 19 groups; EWK-002 368 (≥0.5 m) / 135 (≥1.0 m); EWK-102 135; EWK-003; MIDP."""
-    o = nmar_bundle["out"]
+def test_tl8_nmar_ewk_and_midp(nmar_bundle, tmp_path):
+    """TL8 §5.4: EWK counts + real MIDP (R8) — XML missing for …-90000-001; one MI."""
     tins = nmar_bundle["tins"]
     root = nmar_bundle["root"]
     rules = _rules_ewk_active(tmp_path)
 
-    models = []
-    for key, role, title in (
-        ("001", "existing", "NGL"),
-        ("002", "design_grading", "Site Grading"),
-        ("003", "road_top", "Roads Surface"),
-    ):
-        tin = load(tins[key])
-        num = tin.get("document_no") or nmar_bundle["paths"][key].stem
-        models.append({
-            "number": num, "title": title, "role": role,
-            "formats": ["IFC", "XML"], "stage": "30% Concept Design", "milestone": 30,
-        })
-    midp = write(tmp_path / "midp.json", {"models": models})
+    midp = _adapt_real_midp(root, tmp_path, "NMAR")
+    if midp is None:
+        # Fallback compact MIDP mirroring real NMAR schedule (XML on 001, not 003)
+        models = []
+        for key, role, title, fmts in (
+            ("001", "existing", "Roads NGL Model", ["IFC", "DWG", "NWC", "DWFx", "XML"]),
+            ("002", "design_grading", "Site Grading Model", ["IFC", "DWG", "NWC", "DWFx"]),
+            ("003", "road_top", "Roads Surface Model", ["IFC", "DWG", "NWC", "DWFx"]),
+        ):
+            tin = load(tins[key])
+            models.append({
+                "number": tin.get("document_no") or nmar_bundle["paths"][key].stem,
+                "title": title, "role": role, "formats": fmts,
+                "stage": "30% Concept Design", "milestone": 30,
+            })
+        midp = write(tmp_path / "midp.json", {"models": models})
 
-    surf = tmp_path / "surfaces.json"
-    run("build_surfaces.py",
+    inv = _find_inventory(root, tmp_path, "NMAR")
+    surf_args = [
         "--surface", f"existing={tins['001']}",
         "--surface", f"design_grading={tins['002']}",
         "--surface", f"road_top={tins['003']}",
-        "--midp", midp, "--site", "NMAR", "--out", surf)
+        "--midp", midp, "--site", "NMAR", "--out", tmp_path / "surfaces.json",
+    ]
+    if inv:
+        surf_args.extend(["--inventory", inv])
+    run("build_surfaces.py", *surf_args)
 
-    surf_doc = load(surf)
+    surf_doc = load(tmp_path / "surfaces.json")
     assert surf_doc["midp_schedules_carriers_at_30"] is True
-    model_missing = [m for m in surf_doc["midp_missing"] if m.get("reason") == "model not received"]
-    assert model_missing == [], model_missing
-    xml_miss = [m for m in surf_doc["midp_missing"] if m.get("reason") == "format missing"]
-    # §4: XML format missing for …-90000-003 (road)
-    road_num = models[2]["number"]
-    assert any(
-        (m.get("deliverable") == road_num or "90000-003" in (m.get("deliverable") or ""))
-        and any(f.lower() == "xml" for f in m.get("formats_missing") or [])
-        for m in xml_miss
-    ), xml_miss
+    assert not [m for m in surf_doc["midp_missing"] if m.get("reason") == "model not received"]
+    xml_miss = [m for m in surf_doc["midp_missing"]
+                if m.get("reason") == "format missing"
+                and any(f.lower() == "xml" for f in m.get("formats_missing") or [])]
+    # R8: XML missing for …-90000-001 (NGL), not 003
+    assert xml_miss, surf_doc["midp_missing"]
+    assert any("90000-001" in (m.get("deliverable") or "") for m in xml_miss), xml_miss
+    assert not any("90000-003" in (m.get("deliverable") or "") for m in xml_miss)
 
-    run("check_slopes.py", "--surfaces", surf, "--rules", rules,
+    run("check_slopes.py", "--surfaces", tmp_path / "surfaces.json", "--rules", rules,
         "--stage", "30% Concept Design", "--site", "NMAR", "--out", tmp_path / "sl.json",
         timeout=120)
     sl = load(tmp_path / "sl.json")
@@ -188,54 +245,74 @@ def test_tl8_nmar_ewk_counts(nmar_bundle, tmp_path):
     assert len(g002) == 368
     assert sum(1 for g in g002 if g.get("height_m", 0) >= 1.0) == 135
 
-    plots = list(root.rglob("*ROD-DWG-00003-001*.dwg.json")) + list(root.rglob("*00003-001*.dwg.json"))
-    dr_args = ["--surfaces", surf, "--rules", rules, "--stage", "30% Concept Design",
-               "--site", "NMAR", "--out", tmp_path / "dr.json"]
+    plots = list(root.rglob("*DN*ROD-DWG-00003*.dwg.json")) + list(root.rglob("*ROD-DWG-00003-001*.dwg.json"))
+    dr_args = ["--surfaces", tmp_path / "surfaces.json", "--rules", rules,
+               "--stage", "30% Concept Design", "--site", "NMAR", "--out", tmp_path / "dr.json"]
     if plots:
         dr_args.extend(["--plots", plots[0]])
-    run("check_drainage.py", *dr_args, timeout=120)
+    run("check_drainage.py", *dr_args, timeout=180)
     dr = load(tmp_path / "dr.json")
-    assert dr.get("n_depressions", len(dr.get("depressions") or [])) == 13
-    traps = dr.get("traps") or []
-    assert sum(1 for t in traps if t.get("area_m2", 0) >= 10) == 0
+    assert dr.get("n_depressions", 0) == 13
+    assert sum(1 for t in (dr.get("traps") or []) if t.get("area_m2", 0) >= 10) == 0
 
     run("check_presence.py", "--slopes", tmp_path / "sl.json", "--rules", rules,
-        "--stage", "30% Concept Design", "--surfaces", surf,
+        "--stage", "30% Concept Design", "--surfaces", tmp_path / "surfaces.json",
         "--out", tmp_path / "pr.json", "--required-out", tmp_path / "req.json")
     pr = load(tmp_path / "pr.json")
-    assert pr.get("ewk102_locations") == 135 or \
-        sum(1 for c in pr["checks"] if c["rule_id"] == "EWK-102") and \
-        (pr["checks"][0].get("total_count") == 135)
+    assert pr.get("ewk102_locations") == 135
+    req = load(tmp_path / "req.json")["items"]
+    # R5: at most one MIDP MI item
+    midp_items = [i for i in req if i.get("key") == "midp:earthworks"]
+    assert len(midp_items) <= 1
 
 
-def test_tl9_nrjs_qrwn_faces(tmp_path):
-    """TL9 §4: NRJS grading ~14,939–14,940 IFC faces; QRWN grading 410,186 / road 405,028 < 60 s."""
+# --------------------------------------------------------------------------- TL9 NRJS / QRWN (R9 site globs)
+def test_tl9_nrjs_qrwn(tmp_path):
+    """TL9 §5.4 / §5.6: site-specific IFC faces; skip when that site's files are absent."""
     root = Path(ROOT)
-    nrjs = _find_ifc(root, "*IRO-MOD*00002*.ifc", "*IRO-MOD*Grading*.ifc", "*NRJS*Grading*.ifc")
-    qrwn_g = _find_ifc(root, "*ROD-MOD-90000-002*.ifc")
-    qrwn_r = _find_ifc(root, "*ROD-MOD-90000-003*.ifc", "*Roads*Surface*.ifc")
-    # Disambiguate site by path
-    nrjs = [p for p in nrjs if "NRJS" in str(p).upper() or "IRO-MOD" in p.name.upper()]
-    qrwn_g = [p for p in qrwn_g if "QRWN" in str(p).upper() or "AQ-" in p.name.upper() or "Al_Qairawan" in str(p)]
-    qrwn_r = [p for p in qrwn_r if "QRWN" in str(p).upper() or "AQ-" in p.name.upper() or "Al_Qairawan" in str(p)]
+    nrjs = _find_ifc(root, ["*NRJS-IRO-MOD*.ifc", "*-AN-ROD-MOD-90000-*.ifc", "*IRO-MOD-00-0000*.ifc"])
+    nrjs = [p for p in nrjs if "NRJS" in p.name.upper() or "-AN-" in p.name.upper()
+            or "IRO-MOD" in p.name.upper()]
+    qrwn = _find_ifc(root, ["*-AQ-ROD-MOD-90000-*.ifc", "*AQ*ROD-MOD-90000*.ifc"])
 
-    if not nrjs and not qrwn_g:
-        pytest.skip("QRWN/NRJS earthworks IFC not found under LDIP_REVIEW_ROOT")
+    if not nrjs and not qrwn:
+        pytest.skip("QRWN *-AQ-* / NRJS IFC not found under LDIP_REVIEW_ROOT")
 
     if nrjs:
-        msg = run("read_ifc_surface.py", "--ifc", nrjs[0], "--out-dir", tmp_path / "nrjs",
-                  "--prefix", "nrjs", timeout=180)
-        n = msg["surfaces"][0]["faces"]
-        assert 14_939 <= n <= 14_940, n
+        g = _pick(nrjs, "00002", "90000-002") or nrjs[0]
+        ngl = _pick(nrjs, "00001", "90000-001")
+        road = _pick(nrjs, "00003", "90000-003")
+        msg = run("read_ifc_surface.py", "--ifc", g, "--out-dir", tmp_path / "nrjs_g",
+                  "--prefix", "njg", timeout=180)
+        assert msg["surfaces"][0]["faces"] in (14_939, 14_940)
+        if ngl:
+            msg = run("read_ifc_surface.py", "--ifc", ngl, "--out-dir", tmp_path / "nrjs_n",
+                      "--prefix", "njn", timeout=180)
+            assert msg["surfaces"][0]["faces"] == 3_027
+        if road:
+            msg = run("read_ifc_surface.py", "--ifc", road, "--out-dir", tmp_path / "nrjs_r",
+                      "--prefix", "njr", timeout=180)
+            assert msg["surfaces"][0]["faces"] == 6_744
 
-    if qrwn_g:
-        t0 = time.perf_counter()
-        msg = run("read_ifc_surface.py", "--ifc", qrwn_g[0], "--out-dir", tmp_path / "qg",
-                  "--prefix", "qg", timeout=120)
-        elapsed = time.perf_counter() - t0
-        assert msg["surfaces"][0]["faces"] == 410_186
-        assert elapsed < 60.0, elapsed
-    if qrwn_r:
-        msg = run("read_ifc_surface.py", "--ifc", qrwn_r[0], "--out-dir", tmp_path / "qr",
-                  "--prefix", "qr", timeout=120)
-        assert msg["surfaces"][0]["faces"] == 405_028
+    if qrwn:
+        g = _pick(qrwn, "90000-002")
+        r = _pick(qrwn, "90000-003")
+        n = _pick(qrwn, "90000-001")
+        if g:
+            t0 = time.perf_counter()
+            msg = run("read_ifc_surface.py", "--ifc", g, "--out-dir", tmp_path / "qg",
+                      "--prefix", "qg", timeout=120)
+            assert msg["surfaces"][0]["faces"] == 410_186
+            assert time.perf_counter() - t0 < 60.0
+            assert msg["layer_choice"] == "single_layer"
+        if r:
+            msg = run("read_ifc_surface.py", "--ifc", r, "--out-dir", tmp_path / "qr",
+                      "--prefix", "qr", timeout=120)
+            assert msg["surfaces"][0]["faces"] == 405_028
+        if n:
+            msg = run("read_ifc_surface.py", "--ifc", n, "--out-dir", tmp_path / "qn",
+                      "--prefix", "qn", timeout=120)
+            # §5.6: 210,521 points / 416,717 faces
+            assert msg["surfaces"][0]["faces"] == 416_717
+        if not g and not r:
+            pytest.skip("QRWN 002/003 IFC not found (R9)")

@@ -5,18 +5,18 @@ Roles are given by the caller (--surface role=path), MIDP-title default, or site
 surface_roles. Never guessed from geometry. Duplicate roles without a choice → not_run.
 MIXED_LEVELS when a check would composite formation + finished levels.
 
-MIDP (D2/D3/D5/D7): `--midp` accepts the compact earthworks JSON (see
-`references/midp_models.md`) or skill 6 `read_midp.py` output (auto-adapted).
-Match uses source file / document number first. Every scheduled format not
-received → *Missing information* (no require_xml flag).
+MIDP (R1–R7): `--midp` accepts compact earthworks JSON or skill 6 `read_midp.py` output.
+Optional `--inventory` (skill 6 files.json / package.json / plain list) judges DWG/NWC/DWFx/PDF.
+Without inventory: format check is `not_run`; "model not received" only when no surface
+(and no inventory file). Site filter AQ/AN/DN via `--site`.
 
 Usage:
   python build_surfaces.py --surface design_grading=<tin.json> [--surface existing=<tin.json>]
-      [--surface road_top=<tin.json>] [--midp <midp.json>] [--site SITE]
-      [--params <earthworks_params.json>] --out <surfaces.json>
+      [--surface road_top=<tin.json>] [--midp <midp.json>] [--inventory <files.json>]
+      [--site SITE] [--params <earthworks_params.json>] --out <surfaces.json>
 Exit: 0 · 2 input.
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import argparse
 import sys
@@ -24,9 +24,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from ewk_common import (EXIT_INPUT, EXIT_OK, EwkError, adapt_midp_rows, atomic_write_json,  # noqa: E402
-                        emit, iter_faces, load_params, load_tin, main_guard, midp_model_match,
-                        norm_format, point_map, read_json, sha256_file)
+from ewk_common import (EXIT_INPUT, EXIT_OK, EwkError, INVENTORY_ONLY_FORMATS,  # noqa: E402
+                        adapt_midp_rows, atomic_write_json, emit, formats_present_for,
+                        iter_faces, load_package_inventory, load_params, load_tin, main_guard,
+                        midp_model_match, norm_format, point_map, read_json, sha256_file)
 
 
 VALID_ROLES = ("existing", "design_grading", "road_top", "finished_grading")
@@ -75,33 +76,57 @@ def paved_footprint_from_road_top(road_tin_path, cell_m=1.0):
             "n_cells": len(grid), "source": "road_top"}
 
 
-def _load_midp_entries(midp_path):
+def _load_midp_entries(midp_path, site=None):
     """Return (entries_at_relevant_stages, schedules_30: bool|None)."""
     midp = read_json(midp_path)
-    # Skill 6 full output has tool.name read_midp.py and rows[]
     if isinstance(midp, dict) and (midp.get("tool", {}).get("name") == "read_midp.py" or (
             "rows" in midp and "files" in midp)):
-        entries = adapt_midp_rows(midp, stage_hint="30")
-        # Also keep DD-only rows out; adapt already filters to 30
-        schedules_30 = bool(entries)
-        return entries, schedules_30
+        entries = adapt_midp_rows(midp, stage_hint="30", site=site)
+        return entries, bool(entries)
     if isinstance(midp, list):
         entries = midp
     else:
         entries = midp.get("models") or midp.get("deliverables") or midp.get("rows") or []
         if midp.get("rows") and not midp.get("models"):
-            entries = adapt_midp_rows(midp, stage_hint="30")
+            entries = adapt_midp_rows(midp, stage_hint="30", site=site)
             return entries, bool(entries)
     at_30 = []
     for entry in entries:
         ms = entry.get("milestone")
         stage = entry.get("stage")
+        num = entry.get("number") or entry.get("deliverable") or ""
+        from ewk_common import row_matches_site
+        if site and not row_matches_site(num, site):
+            continue
         if ms in (30, "30") or stage in ("30%", "30% Concept Design", "PD", 30):
             at_30.append(entry)
         elif ms is None and stage is None:
-            # Compact list without stage → treat as scheduled for the run (caller responsibility)
             at_30.append(entry)
     return at_30, bool(at_30) if entries else False
+
+
+def _surface_match(surfaces, entry):
+    for s in surfaces:
+        ok, by, note = midp_model_match({
+            "document_no": s.get("document_no"), "source_file": s.get("source_file"),
+            "number": s.get("document_no"), "title": s.get("title"),
+            "role": s.get("role"), "internal_name": s.get("internal_name"),
+            "path": s.get("path"),
+        }, entry)
+        if ok:
+            return s, by, note
+    return None, None, None
+
+
+def _inventory_has_file(inv_files, entry):
+    num = entry.get("number") or entry.get("deliverable") or ""
+    from ewk_common import numbers_match
+    for f in inv_files or []:
+        if numbers_match(num, f.get("number") or "") or numbers_match(num, f.get("name") or ""):
+            return True
+        if numbers_match(num, Path(f.get("path") or "").stem):
+            return True
+    return False
 
 
 def main(argv=None):
@@ -113,7 +138,9 @@ def main(argv=None):
     ap.add_argument("--civil3d-dwg", action="append", default=[],
                     help="role=path — records not_run (Civil 3D DWG not readable)")
     ap.add_argument("--midp", default=None,
-                    help="earthworks MIDP JSON or skill 6 read_midp.py output (D5)")
+                    help="earthworks MIDP JSON or skill 6 read_midp.py output")
+    ap.add_argument("--inventory", default=None,
+                    help="skill 6 inventory / package.json / plain file list (R1)")
     ap.add_argument("--site", default=None)
     ap.add_argument("--params", default=None)
     ap.add_argument("--out", required=True)
@@ -183,47 +210,85 @@ def main(argv=None):
         elif params.get("network_footprint"):
             paved = {"source": "network", "path": params["network_footprint"]}
 
+        inv_files = load_package_inventory(a.inventory) if a.inventory else None
         midp_missing = []
+        midp_not_run = []
         midp_schedules_30 = None
         midp_entries = []
+        midp_matches = []
         if a.midp:
-            midp_entries, midp_schedules_30 = _load_midp_entries(a.midp)
-            models_present = []
-            for s in inventory:
-                models_present.append({
-                    "number": s.get("document_no") or s.get("title"),
-                    "document_no": s.get("document_no"),
-                    "source_file": s.get("source_file"),
-                    "name": s.get("title"),
-                    "title": s.get("title"),
-                    "role": s["role"],
-                    "internal_name": s.get("internal_name"),
-                    "formats": [s.get("source_format")],
-                })
-            # Aggregate formats per matched deliverable number
+            midp_entries, midp_schedules_30 = _load_midp_entries(a.midp, site=a.site)
             for entry in midp_entries:
-                matched = next((m for m in models_present if midp_model_match(m, entry)), None)
+                surf, matched_by, note = _surface_match(inventory, entry)
+                has_file = _inventory_has_file(inv_files, entry) if inv_files is not None else False
                 formats_needed = entry.get("formats") or entry.get("exchange_formats") or []
-                if matched is None:
+                role = entry.get("role")
+                is_surface_role = role in VALID_ROLES
+
+                if surf is None and not has_file:
+                    # R1: model not received only when no surface and no inventory file
+                    # Without inventory: raise for surface-role carriers; drawing → not_run
+                    if inv_files is None and not is_surface_role:
+                        midp_not_run.append({
+                            "deliverable": entry.get("number") or entry.get("deliverable"),
+                            "title": entry.get("title"),
+                            "reason": "format/file check needs --inventory (drawing carrier)",
+                        })
+                        continue
                     midp_missing.append({
                         "deliverable": entry.get("number") or entry.get("deliverable"),
                         "title": entry.get("title"),
-                        "role": entry.get("role"),
-                        "formats_missing": formats_needed or ["IFC"],
+                        "role": role,
+                        "formats_missing": formats_needed or (["IFC"] if is_surface_role else ["DWG"]),
                         "reason": "model not received",
                     })
                     continue
-                have = {norm_format(f) for f in (matched.get("formats") or [])}
-                # D3: every scheduled format not received → MI (no require_xml flag)
-                missing = [f for f in formats_needed if norm_format(f) not in have]
-                if missing:
-                    midp_missing.append({
+
+                have = formats_present_for(entry, inventory, inv_files)
+                if inv_files is None:
+                    # R1: without inventory — format check not_run; never DWG/NWC/DWFx/PDF missing
+                    surface_fmts = {norm_format(f) for f in formats_needed
+                                    if norm_format(f) not in INVENTORY_ONLY_FORMATS}
+                    missing_surface = [f for f in formats_needed
+                                       if norm_format(f) in surface_fmts
+                                       and norm_format(f) not in have]
+                    inv_only = [f for f in formats_needed
+                                if norm_format(f) in INVENTORY_ONLY_FORMATS]
+                    if inv_only:
+                        midp_not_run.append({
+                            "deliverable": entry.get("number") or entry.get("deliverable"),
+                            "title": entry.get("title"),
+                            "formats_unchecked": inv_only,
+                            "reason": "format check needs --inventory",
+                        })
+                    if missing_surface:
+                        midp_missing.append({
+                            "deliverable": entry.get("number") or entry.get("deliverable"),
+                            "title": entry.get("title"),
+                            "role": role,
+                            "formats_missing": missing_surface,
+                            "reason": "format missing",
+                            "matched_by": matched_by or "document_no/source_file",
+                            "note": note,
+                        })
+                else:
+                    missing = [f for f in formats_needed if norm_format(f) not in have]
+                    if missing:
+                        midp_missing.append({
+                            "deliverable": entry.get("number") or entry.get("deliverable"),
+                            "title": entry.get("title"),
+                            "role": role,
+                            "formats_missing": missing,
+                            "reason": "format missing",
+                            "matched_by": matched_by or ("inventory" if has_file else None),
+                            "note": note,
+                        })
+                if matched_by:
+                    midp_matches.append({
                         "deliverable": entry.get("number") or entry.get("deliverable"),
-                        "title": entry.get("title"),
-                        "role": entry.get("role"),
-                        "formats_missing": missing,
-                        "reason": "format missing",
-                        "matched_by": "document_no/source_file",
+                        "matched_by": matched_by,
+                        "note": note,
+                        "surface": (surf or {}).get("path"),
                     })
 
         out = {
@@ -234,13 +299,17 @@ def main(argv=None):
             "paved_footprint": paved,
             "mixed_levels_forbidden": mixed_levels_forbidden,
             "midp_missing": midp_missing,
+            "midp_not_run": midp_not_run,
+            "midp_matches": midp_matches,
             "midp_schedules_carriers_at_30": midp_schedules_30,
             "midp_entries_at_30": len(midp_entries),
+            "inventory_used": bool(inv_files is not None),
+            "inventory_files": len(inv_files or []),
             "roles_present": sorted(by_role.keys()),
         }
         atomic_write_json(a.out, out)
         emit({"status": "ok", "out": a.out, "surfaces": len(inventory), "not_run": len(not_run),
-              "midp_missing": len(midp_missing),
+              "midp_missing": len(midp_missing), "midp_not_run": len(midp_not_run),
               "midp_schedules_carriers_at_30": midp_schedules_30,
               "roles": sorted(by_role.keys())})
         return EXIT_OK
