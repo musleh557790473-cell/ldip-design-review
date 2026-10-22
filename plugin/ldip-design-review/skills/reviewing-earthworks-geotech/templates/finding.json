@@ -1,0 +1,56 @@
+{
+ "schema_version": "1.0",
+ "finding_id": "<SITE>-<sub>-<yyyymmddThhmm>/RDE-001",
+ "stage": "candidate",
+ "run_id": "<run-id>",
+ "site": "<QRWN|NMAR|NRJS>",
+ "sub_id": "<sub-id>",
+ "agent": "RDE",
+ "agent_versions": {
+  "reviewing-earthworks-geotech": "0.1.0"
+ },
+ "title": "<rule_id> <rule title>: <parameter>",
+ "statement": "<n> occurrence(s). Observed — <subject>: <value>. Required (<rule_id> <parameter>): <op> <value>. Requirement (<rule_id>): <rule statement>",
+ "issue_type": "design_error",
+ "location": {
+  "document_no": "PACKAGE",
+  "xy": {
+   "crs": "EPSG:32638",
+   "e": 0,
+   "n": 0
+  }
+ },
+ "severity": "Minor",
+ "confidence": "High",
+ "evidence": [
+  {
+   "evidence_id": "E01",
+   "tier": "deterministic",
+   "source_type": "script_output",
+   "extract": "<surface sha256 / face group>",
+   "measured_value": 0,
+   "unit": "%",
+   "script": {
+    "name": "reviewing-earthworks-geotech/scripts/check_slopes.py",
+    "version": "0.1.0",
+    "exit_code": 0
+   }
+  }
+ ],
+ "reference": {
+  "rule_id": "EWK-001",
+  "parameter": "g_min",
+  "rulebook_version": "<v>",
+  "source_doc": "LDIP Rulebook <v> (AICC-BIM-SPC-0004); SRC-07",
+  "clause": "EWK-001: §7.4.1 p.27",
+  "required_value": 1.0,
+  "tolerance": 0.05,
+  "unit": "%"
+ },
+ "proposed_status": "Probable",
+ "owner": {
+  "role": "DMR",
+  "name": null
+ },
+ "created_at": "<ISO 8601 +03:00>"
+}

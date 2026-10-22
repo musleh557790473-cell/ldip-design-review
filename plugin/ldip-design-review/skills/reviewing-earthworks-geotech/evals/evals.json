@@ -1,0 +1,22 @@
+{
+  "skill": "reviewing-earthworks-geotech",
+  "version": "0.1.0",
+  "spec": "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a + ADDENDUM",
+  "cases": [
+    {"id": "TL1", "name": "IFC reader synthetic", "data": "synthetic"},
+    {"id": "TL2", "name": "EWK-001 unpaved gradient", "data": "synthetic"},
+    {"id": "TL3", "name": "EWK-002 slopes", "data": "synthetic"},
+    {"id": "TL4", "name": "FoS text", "data": "synthetic"},
+    {"id": "TL5", "name": "EWK-003 trapping / MIXED_LEVELS", "data": "synthetic"},
+    {"id": "TL6", "name": "EWK-101 / 102 presence", "data": "synthetic"},
+    {"id": "TL7", "name": "Stage PD/DD candidates", "data": "synthetic"},
+    {"id": "TL8", "name": "Real NMAR 30 % profile", "data": "real", "env": "LDIP_REVIEW_ROOT"},
+    {"id": "TL9", "name": "Real QRWN / NRJS", "data": "real", "env": "LDIP_REVIEW_ROOT"},
+    {"id": "TL10", "name": "Determinism", "data": "synthetic"},
+    {"id": "ADD-1", "name": "Reversed winding single layer", "data": "synthetic"},
+    {"id": "ADD-2", "name": "IfcMappedItem path", "data": "synthetic"},
+    {"id": "ADD-3", "name": "Streaming memory-bound", "data": "synthetic"},
+    {"id": "ADD-4", "name": "MIDP title mismatch", "data": "synthetic"}
+  ],
+  "note": "Real site packages stay outside Git. Synthetic fixtures only in tests."
+}

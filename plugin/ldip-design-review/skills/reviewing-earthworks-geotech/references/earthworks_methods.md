@@ -1,0 +1,35 @@
+# Earthworks methods (skill 13) — SPC-0006 Rev L §4.14 + Amendment L-a
+
+Loaded only when a step needs them. Rule values come from skill 8 (`get_rules.py --agent RDE`). Detection thresholds are in `earthworks_params.json` (not rule values).
+
+## Readers
+
+- **LandXML** — skill 3 side files (`*.surface-N.json`), any provenance.
+- **IFC** — `read_ifc_surface.py`: line-by-line STEP stream (ADDENDUM); `IfcMappedItem` path; single-layer preference; `|n_z| > 0` for non-vertical; up/down only to split a thin solid; rotated placement → `IFC_ROTATED_PLACEMENT`.
+- **Civil 3D DWG surfaces** — not read → `not_run` + route (Parsons LandXML/IFC or owner `aicc_export`).
+
+## Roles (DL-3)
+
+Caller assigns `existing` / `design_grading` / `road_top` / `finished_grading`. MIDP-title default allowed; site `surface_roles` overrides. Never from geometry. No mixed-level composites (`MIXED_LEVELS`).
+
+## Stage (DL-4 amended by L-a DL-14)
+
+| At 30 % (PD) | At 60 % (DD) |
+|---|---|
+| EWK-001, EWK-002 slopes, EWK-003 trapping, EWK-102 → findings | All checks |
+| EWK-002 FoS, EWK-003 frontage / 0.30 m, EWK-101 → not at 30 % | FoS, frontage, 0.30 m, EWK-101 |
+| MIDP-scheduled models missing → *Missing information* (DL-15) | same |
+| Profile always (information) | Profile + candidates |
+
+EWK-102 at 30 %: height ≥ **1.0 m** (DL-18). Other thresholds as DL-5…DL-8.
+
+## Status (DL-9)
+
+Surface-derived and PDF FoS → *Probable*; absences → *Missing information*; 0.30 m → Observation.
+
+## Limits
+
+- No earthworks-balance rule (R-L4); volumes are information only.
+- "3H:1V preferred" is mentioned in finding text only (no parameter).
+- Rules stay inactive in rules_v7 after this build (DL-10); L-a DL-17 schedules rules_v8 after real 30 % tests — not in this PR.
+- LibreDWG stays test-only (L-1).
