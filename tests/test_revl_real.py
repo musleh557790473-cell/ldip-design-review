@@ -1,6 +1,8 @@
-"""Skill 13 real-data tests TL8 / TL9 — skipped without LDIP_REVIEW_ROOT.
+"""Skill 13 real-data tests TL8 / TL9 / TL11 — skipped without LDIP_REVIEW_ROOT.
 
-Assert values from Claude S29 re-review §5.4 / §5.6 (R8 / R9).
+TL8/TL9 EWK counts: Amendment L-b §8 (DL-21/DL-22 revised), tolerance ±5 %.
+TL11: EWK-001 within 5 %; EWK-002 counts within 6 %; largest ten heights within 1 m.
+Face counts still from S29 §5.4 / §5.6.
 Site-specific globs: NMAR `*-DN-ROD-MOD-*`, QRWN `*-AQ-*`, NRJS `*NRJS*` / `*-AN-*`.
 Real packages stay outside Git.
 """
@@ -44,6 +46,24 @@ def load(p):
 def write(p, obj):
     Path(p).write_text(json.dumps(obj, indent=1), encoding="utf-8")
     return Path(p)
+
+
+def within_pct(got, exp, pct=5.0):
+    """Amendment L-b §8 (DL-21/DL-22 revised): |got − exp| / exp ≤ pct/100.
+
+    If counts differ beyond the limit, STOP (do not retune). Default limit is 5 %.
+    """
+    if exp == 0:
+        return got == 0
+    return abs(got - exp) / abs(exp) * 100.0 <= pct
+
+
+def assert_within_pct(got, exp, label, pct=5.0):
+    ok = within_pct(got, exp, pct=pct)
+    assert ok, (
+        f"L-b DL-22 STOP: {label} got {got}, expected {exp} (±{pct}%). "
+        f"Do not change the grouping method to fit — report and halt."
+    )
 
 
 def _find_ifc(root: Path, patterns):
@@ -240,10 +260,13 @@ def test_tl8_nmar_ewk_and_midp(nmar_bundle, tmp_path):
         "--stage", "30% Concept Design", "--site", "NMAR", "--out", tmp_path / "sl.json",
         timeout=120)
     sl = load(tmp_path / "sl.json")
-    assert len(sl.get("ewk001_groups") or []) == 19
+    # Amendment L-b §8 (DL-21/DL-22 revised): NMAR 18 · 313 / 131 · EWK-102 130 (±5 %)
+    g001 = sl.get("ewk001_groups") or []
     g002 = sl.get("ewk002_groups") or []
-    assert len(g002) == 368
-    assert sum(1 for g in g002 if g.get("height_m", 0) >= 1.0) == 135
+    n_ge1 = sum(1 for g in g002 if g.get("height_m", 0) >= 1.0)
+    assert_within_pct(len(g001), 18, "NMAR EWK-001")
+    assert_within_pct(len(g002), 313, "NMAR EWK-002 ≥0.5 m")
+    assert_within_pct(n_ge1, 131, "NMAR EWK-002 ≥1.0 m")
 
     plots = list(root.rglob("*DN*ROD-DWG-00003*.dwg.json")) + list(root.rglob("*ROD-DWG-00003-001*.dwg.json"))
     dr_args = ["--surfaces", tmp_path / "surfaces.json", "--rules", rules,
@@ -259,16 +282,16 @@ def test_tl8_nmar_ewk_and_midp(nmar_bundle, tmp_path):
         "--stage", "30% Concept Design", "--surfaces", tmp_path / "surfaces.json",
         "--out", tmp_path / "pr.json", "--required-out", tmp_path / "req.json")
     pr = load(tmp_path / "pr.json")
-    assert pr.get("ewk102_locations") == 135
+    assert_within_pct(pr.get("ewk102_locations") or 0, 130, "NMAR EWK-102 locations")
     req = load(tmp_path / "req.json")["items"]
     # R5: at most one MIDP MI item
     midp_items = [i for i in req if i.get("key") == "midp:earthworks"]
     assert len(midp_items) <= 1
 
 
-# --------------------------------------------------------------------------- TL9 NRJS / QRWN (R9 site globs)
+# --------------------------------------------------------------------------- TL9 NRJS / QRWN (R9 site globs + Amendment L-b §8)
 def test_tl9_nrjs_qrwn(tmp_path):
-    """TL9 §5.4 / §5.6: site-specific IFC faces; skip when that site's files are absent."""
+    """TL9: site-specific IFC faces + Amendment L-b §8 EWK counts (DL-22 revised, ±5 %)."""
     root = Path(ROOT)
     nrjs = _find_ifc(root, ["*NRJS-IRO-MOD*.ifc", "*-AN-ROD-MOD-90000-*.ifc", "*IRO-MOD-00-0000*.ifc"])
     nrjs = [p for p in nrjs if "NRJS" in p.name.upper() or "-AN-" in p.name.upper()
@@ -278,6 +301,8 @@ def test_tl9_nrjs_qrwn(tmp_path):
     if not nrjs and not qrwn:
         pytest.skip("QRWN *-AQ-* / NRJS IFC not found under LDIP_REVIEW_ROOT")
 
+    rules = _rules_ewk_active(tmp_path)
+
     if nrjs:
         g = _pick(nrjs, "00002", "90000-002") or nrjs[0]
         ngl = _pick(nrjs, "00001", "90000-001")
@@ -285,6 +310,8 @@ def test_tl9_nrjs_qrwn(tmp_path):
         msg = run("read_ifc_surface.py", "--ifc", g, "--out-dir", tmp_path / "nrjs_g",
                   "--prefix", "njg", timeout=180)
         assert msg["surfaces"][0]["faces"] in (14_939, 14_940)
+        design_tin = msg["surfaces"][0]["path"]
+        road_tin = None
         if ngl:
             msg = run("read_ifc_surface.py", "--ifc", ngl, "--out-dir", tmp_path / "nrjs_n",
                       "--prefix", "njn", timeout=180)
@@ -293,11 +320,32 @@ def test_tl9_nrjs_qrwn(tmp_path):
             msg = run("read_ifc_surface.py", "--ifc", road, "--out-dir", tmp_path / "nrjs_r",
                       "--prefix", "njr", timeout=180)
             assert msg["surfaces"][0]["faces"] == 6_744
+            road_tin = msg["surfaces"][0]["path"]
+        # Amendment L-b §8 (DL-22 revised): NRJS 9 · 43 / 20 (EWK-102 20) (±5 %)
+        # — needs paved footprint from road_top
+        if road_tin:
+            surf_args = [
+                "--surface", f"design_grading={design_tin}",
+                "--surface", f"road_top={road_tin}",
+                "--site", "NRJS", "--out", tmp_path / "nrjs_surfaces.json",
+            ]
+            run("build_surfaces.py", *surf_args)
+            run("check_slopes.py", "--surfaces", tmp_path / "nrjs_surfaces.json", "--rules", rules,
+                "--stage", "30% Concept Design", "--site", "NRJS",
+                "--out", tmp_path / "nrjs_sl.json", timeout=180)
+            sl = load(tmp_path / "nrjs_sl.json")
+            g001 = sl.get("ewk001_groups") or []
+            g002 = sl.get("ewk002_groups") or []
+            n_ge1 = sum(1 for x in g002 if x.get("height_m", 0) >= 1.0)
+            assert_within_pct(len(g001), 9, "NRJS EWK-001")
+            assert_within_pct(len(g002), 43, "NRJS EWK-002 ≥0.5 m")
+            assert_within_pct(n_ge1, 20, "NRJS EWK-002 ≥1.0 m")
 
     if qrwn:
         g = _pick(qrwn, "90000-002")
         r = _pick(qrwn, "90000-003")
         n = _pick(qrwn, "90000-001")
+        design_tin = road_tin = None
         if g:
             t0 = time.perf_counter()
             msg = run("read_ifc_surface.py", "--ifc", g, "--out-dir", tmp_path / "qg",
@@ -305,10 +353,12 @@ def test_tl9_nrjs_qrwn(tmp_path):
             assert msg["surfaces"][0]["faces"] == 410_186
             assert time.perf_counter() - t0 < 60.0
             assert msg["layer_choice"] == "single_layer"
+            design_tin = msg["surfaces"][0]["path"]
         if r:
             msg = run("read_ifc_surface.py", "--ifc", r, "--out-dir", tmp_path / "qr",
                       "--prefix", "qr", timeout=120)
             assert msg["surfaces"][0]["faces"] == 405_028
+            road_tin = msg["surfaces"][0]["path"]
         if n:
             msg = run("read_ifc_surface.py", "--ifc", n, "--out-dir", tmp_path / "qn",
                       "--prefix", "qn", timeout=120)
@@ -316,3 +366,102 @@ def test_tl9_nrjs_qrwn(tmp_path):
             assert msg["surfaces"][0]["faces"] == 416_717
         if not g and not r:
             pytest.skip("QRWN 002/003 IFC not found (R9)")
+        # Amendment L-b §8 (DL-22 revised): QRWN 227 · 151 / 118 (±5 %)
+        if design_tin and road_tin:
+            run("build_surfaces.py",
+                "--surface", f"design_grading={design_tin}",
+                "--surface", f"road_top={road_tin}",
+                "--site", "QRWN", "--out", tmp_path / "qrwn_surfaces.json")
+            run("check_slopes.py", "--surfaces", tmp_path / "qrwn_surfaces.json", "--rules", rules,
+                "--stage", "30% Concept Design", "--site", "QRWN",
+                "--out", tmp_path / "qrwn_sl.json", timeout=300)
+            sl = load(tmp_path / "qrwn_sl.json")
+            g001 = sl.get("ewk001_groups") or []
+            g002 = sl.get("ewk002_groups") or []
+            n_ge1 = sum(1 for x in g002 if x.get("height_m", 0) >= 1.0)
+            assert_within_pct(len(g001), 227, "QRWN EWK-001")
+            assert_within_pct(len(g002), 151, "QRWN EWK-002 ≥0.5 m")
+            assert_within_pct(n_ge1, 118, "QRWN EWK-002 ≥1.0 m")
+
+
+# --------------------------------------------------------------------------- TL11 format invariance (Amendment L-b §8; DL-21 revised)
+def test_tl11_qrwn_ifc_vs_landxml(tmp_path):
+    """TL11: QRWN IFC 002 vs LandXML — EWK-001 within 5 %; EWK-002 counts within 6 %.
+
+    Amendment L-b §8 (DL-21 revised). Largest ten heights stay within 1 m.
+    """
+    root = Path(ROOT)
+    qrwn = _find_ifc(root, ["*-AQ-ROD-MOD-90000-*.ifc", "*AQ*ROD-MOD-90000*.ifc"])
+    g_ifc = _pick(qrwn, "90000-002")
+    r_ifc = _pick(qrwn, "90000-003")
+    xml_hits = sorted(root.rglob("LDIP-RCRC-LAI-LDIP-01-CIV-DWG-00002-01.xml"))
+    if not xml_hits:
+        xml_hits = sorted(p for p in root.rglob("*.xml")
+                          if "00002" in p.name and ("CIV-DWG" in p.name or "LAI" in p.name))
+    if not (g_ifc and r_ifc and xml_hits):
+        pytest.skip("QRWN IFC 002/003 or LandXML 00002-01 not found under LDIP_REVIEW_ROOT")
+
+    rules = _rules_ewk_active(tmp_path)
+    msg_g = run("read_ifc_surface.py", "--ifc", g_ifc, "--out-dir", tmp_path / "tl11_g",
+                "--prefix", "qg", timeout=120)
+    msg_r = run("read_ifc_surface.py", "--ifc", r_ifc, "--out-dir", tmp_path / "tl11_r",
+                "--prefix", "qr", timeout=120)
+    ifc_design = msg_g["surfaces"][0]["path"]
+    ifc_road = msg_r["surfaces"][0]["path"]
+
+    # skill 3 LandXML → surface-N.json
+    sk3 = REPO / "plugin/ldip-design-review/skills/parsing-landxml/scripts"
+    xml_path = xml_hits[0]
+    xml_batch = tmp_path / "tl11_xml"
+    xml_batch.mkdir()
+    xml_json = xml_batch / f"{xml_path.name}.json"
+    parse = sk3 / "parse_landxml.py"
+    if not parse.is_file():
+        pytest.skip("skill 3 parse_landxml.py not available")
+    run("parse_landxml.py", "--in", xml_path, "--out", xml_json,
+        "--provenance", "aicc_export", skill=sk3, timeout=600)
+    xml_tins = sorted(xml_batch.glob("*.surface-*.json"))
+    if not xml_tins:
+        pytest.skip("LandXML produced no surface-N.json for TL11")
+    xml_design = xml_tins[0]
+
+    def _counts(design, road, tag):
+        surf = tmp_path / f"tl11_{tag}_surfaces.json"
+        run("build_surfaces.py",
+            "--surface", f"design_grading={design}",
+            "--surface", f"road_top={road}",
+            "--site", "QRWN", "--out", surf)
+        out = tmp_path / f"tl11_{tag}_sl.json"
+        run("check_slopes.py", "--surfaces", surf, "--rules", rules,
+            "--stage", "30% Concept Design", "--site", "QRWN", "--out", out, timeout=300)
+        sl = load(out)
+        g002 = sl.get("ewk002_groups") or []
+        return {
+            "ewk001": len(sl.get("ewk001_groups") or []),
+            "ewk002": len(g002),
+            "ewk002_1m": sum(1 for x in g002 if x.get("height_m", 0) >= 1.0),
+            "top10": [(round(x.get("height_m", 0), 3),
+                       round(x.get("area_m2", 0), 1),
+                       tuple(x.get("centroid_en") or [])) for x in g002[:10]],
+        }
+
+    ifc_c = _counts(ifc_design, ifc_road, "ifc")
+    xml_c = _counts(xml_design, ifc_road, "xml")  # same paved footprint from IFC road
+
+    # Amendment L-b §8 (DL-21 revised): 5 % on EWK-001; 6 % on EWK-002 counts
+    limits = {"ewk001": 5.0, "ewk002": 6.0, "ewk002_1m": 6.0}
+    for key in ("ewk001", "ewk002", "ewk002_1m"):
+        a, b = ifc_c[key], xml_c[key]
+        base = max(a, b)
+        if base == 0:
+            assert a == b == 0
+            continue
+        pct = abs(a - b) / base * 100.0
+        limit = limits[key]
+        assert pct <= limit, (
+            f"TL11 DL-21 STOP: {key} IFC={a} LandXML={b} differ by {pct:.1f}% (>{limit:g}%). "
+            f"Do not change the method to fit."
+        )
+    # largest-ten items within 1 m height (Amendment L-b §8; DL-21 revised)
+    for i, ((h1, _a1, _c1), (h2, _a2, _c2)) in enumerate(zip(ifc_c["top10"], xml_c["top10"])):
+        assert abs(h1 - h2) <= 1.0, f"TL11 top10[{i}] height IFC={h1} LandXML={h2}"

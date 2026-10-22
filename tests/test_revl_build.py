@@ -1,4 +1,4 @@
-"""Skill 13 synthetic tests — SPC-0006 Rev L §4.14.14 TL1–TL7, TL10 + L-a ADDENDUM.
+"""Skill 13 synthetic tests — SPC-0006 Rev L §4.14.14 TL1–TL7, TL10, TL12–TL14 + L-a + L-b.
 
 No real site data. No deposited rulebook values. Synthetic EWK limits only.
 """
@@ -1352,3 +1352,273 @@ def test_s3_drawing_carriers_by_title_not_number_range(tmp_path):
     assert rc == 0, msg
     # QRWN 10300 = contour plan → is a carrier (by title)
     assert any("AQ-ROD-DWG-10300" in m["number"] for m in load(aq)["models"])
+
+
+# --------------------------------------------------------------------------- N2 / N3 (post-merge follow-up)
+def test_n2_mi_searched_names_inventory(tmp_path):
+    """N2: MI with --inventory → statement names inventory file; never '(no file given)'."""
+    rules = rules_ewk(tmp_path)
+    design = write_tin(tmp_path, "n2", (0, 0), (10, 10), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"
+    tin["source_format"] = "ifc"
+    tin["source_file"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001", "title": "NGL",
+         "role": "existing", "formats": ["IFC", "NWC"],
+         "stage": "30% Concept Design", "milestone": 30},
+        {"number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002", "title": "Grading",
+         "role": "design_grading", "formats": ["IFC", "NWC", "DWFx"],
+         "stage": "30% Concept Design", "milestone": 30},
+    ]})
+    inv_name = "files_n2.json"
+    inv = write(tmp_path / inv_name, {
+        "tool": {"name": "inventory.py", "version": "0.3.0"},
+        "files": [
+            {"path": "models/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002.ifc",
+             "format": "IFC", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"},
+        ],
+    })
+    surf = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--inventory", inv, "--site", "NMAR", "--out", surf)
+    assert rc == 0, msg
+    doc = load(surf)
+    assert doc.get("inventory", {}).get("file_name") == inv_name
+    assert doc["inventory"]["n_files"] >= 1
+    assert doc["midp_missing"]
+
+    slopes = write(tmp_path / "sl.json", {
+        "tool": {"script": "check_slopes.py", "version": "0"},
+        "ewk002_groups": [], "walls": [], "checks": [], "passed": [], "not_run": [],
+    })
+    rc, msg = run("check_presence.py", "--slopes", slopes, "--rules", rules,
+                  "--stage", "30% Concept Design", "--surfaces", surf,
+                  "--out", tmp_path / "pr.json", "--required-out", tmp_path / "req.json")
+    assert rc == 0, msg
+    items = load(tmp_path / "req.json")["items"]
+    assert len(items) == 1
+    searched = " ".join(items[0]["searched"])
+    assert inv_name in searched
+    assert "(no file given)" not in searched
+    assert "files)" in searched or "file" in searched.lower()
+
+    rc, msg = run("build_candidates.py",
+                  "--results", tmp_path / "pr.json", tmp_path / "req.json",
+                  "--rules", rules, "--run", "NMAR-test-20261022T1012", "--site", "NMAR",
+                  "--sub", "test", "--evidence-dir", tmp_path / "ev",
+                  "--out", tmp_path / "cand.json")
+    assert rc == 0, msg
+    mi = [f for f in load(tmp_path / "cand.json")
+          if f["issue_type"] == "missing_information" and "MIDP earthworks" in f["title"]]
+    assert len(mi) == 1
+    assert inv_name in mi[0]["statement"]
+    assert "(no file given)" not in mi[0]["statement"]
+    assert "Searched:" in mi[0]["statement"]
+
+
+def test_n3_inventory_skill6_files_json_shape(tmp_path):
+    """N3: --inventory accepts skill 6 inventory.py output (files[])."""
+    design = write_tin(tmp_path, "n3a", (0, 0), (5, 5), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002"
+    tin["source_format"] = "ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002",
+        "title": "Site Grading", "role": "design_grading",
+        "formats": ["IFC", "DWG", "NWC"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    inv = write(tmp_path / "files.json", {
+        "tool": {"name": "inventory.py", "version": "0.3.0"},
+        "mode": "standalone", "site": "NMAR",
+        "files": [
+            {"path": "Vol04/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.ifc",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.ifc",
+             "ext": ".ifc", "format": "IFC", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00",
+             "kind": "file"},
+            {"path": "Vol04/LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.dwg",
+             "name": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00.dwg",
+             "ext": ".dwg", "format": "DWG", "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-002-00",
+             "kind": "file"},
+        ],
+    })
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"design_grading={design}",
+                  "--midp", midp, "--inventory", inv, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert doc["inventory_used"] is True
+    assert doc["inventory"]["file_name"] == "files.json"
+    assert doc["inventory"]["n_files"] == 2
+    miss = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert miss
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "nwc" in fm and "dwg" not in fm and "ifc" not in fm
+
+
+def test_n3_inventory_package_sheet_register_shape(tmp_path):
+    """N3: --inventory accepts skill 6 package.json sheet_register."""
+    design = write_tin(tmp_path, "n3b", (0, 0), (5, 5), z0=100)
+    tin = load(design)
+    tin["document_no"] = "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001"
+    tin["source_format"] = "ifc"
+    write(design, tin)
+    midp = write(tmp_path / "midp.json", {"models": [{
+        "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001",
+        "title": "Roads NGL Model", "role": "existing",
+        "formats": ["IFC", "DWG", "DWFx"],
+        "stage": "30% Concept Design", "milestone": 30,
+    }]})
+    pkg = write(tmp_path / "package.json", {
+        "tool": {"name": "build_register.py", "version": "0.x"},
+        "site": "NMAR",
+        "sheet_register": [{
+            "base": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001",
+            "numbers": ["LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"],
+            "files": [
+                {"path": "models/x.ifc", "name": "x.ifc", "format": "IFC",
+                 "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+                {"path": "models/x.dwg", "name": "x.dwg", "format": "DWG",
+                 "number": "LDIP-RCRC-SAP-03-DN-ROD-MOD-90000-001-00"},
+            ],
+        }],
+    })
+    out = tmp_path / "surfaces.json"
+    rc, msg = run("build_surfaces.py", "--surface", f"existing={design}",
+                  "--midp", midp, "--inventory", pkg, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    assert doc["inventory"]["file_name"] == "package.json"
+    assert doc["inventory"]["n_files"] >= 2
+    miss = [m for m in doc["midp_missing"] if m["reason"] == "format missing"]
+    assert miss
+    fm = {f.lower() for f in miss[0]["formats_missing"]}
+    assert "dwfx" in fm and "dwg" not in fm
+
+
+# --------------------------------------------------------------------------- L-b TL12–TL14 (synthetic)
+def _batter_tin(h_per_v, *, height=3.0, width=10.0, n_along=10, n_run=6, round_z=True,
+                surface="batter"):
+    """Irregular triangulation of a planar batter; optional 1 mm level rounding (L-b TL12)."""
+    run = height * h_per_v
+    points, id_grid, pid = [], [], 1
+    for j in range(n_along + 1):
+        row = []
+        y = width * j / n_along
+        for i in range(n_run + 1):
+            x = run * i / n_run
+            z = 100.0 + (height / run) * x
+            if round_z:
+                z = round(z, 3)
+            points.append([str(pid), float(x), float(y), float(z)])
+            row.append(str(pid))
+            pid += 1
+        id_grid.append(row)
+    faces = []
+    for j in range(n_along):
+        for i in range(n_run):
+            a, b = id_grid[j][i], id_grid[j][i + 1]
+            c, d = id_grid[j + 1][i], id_grid[j + 1][i + 1]
+            if (i + j) % 2 == 0:
+                faces.extend([[a, b, d], [a, d, c]])
+            else:
+                faces.extend([[a, b, c], [b, d, c]])
+    return {"template": "landxml-surface-1.0", "surface": surface, "index": 1,
+            "points": points, "faces": faces, "breaklines": []}
+
+
+def test_tl12_batter_2h1v_zero_and_1p8_one_group(tmp_path):
+    """TL12: 2H:1V mm-rounded batter → 0 EWK-002; 1.8H:1V → 1 group height 3 m."""
+    rules = rules_ewk(tmp_path)
+    road = write_tin(tmp_path, "rd12", (500, 500), (5, 5), z0=100)
+
+    path_ok = write(tmp_path / "b2.surface-1.json", _batter_tin(2.0, surface="b2"))
+    surf = surfaces_doc(tmp_path, design=path_ok, road=road)
+    rc, msg = run("check_slopes.py", "--surfaces", surf, "--rules", rules,
+                  "--stage", "30% Concept Design", "--out", tmp_path / "sl_ok.json")
+    assert rc == 0, msg
+    assert load(tmp_path / "sl_ok.json")["ewk002_groups"] == []
+
+    path_st = write(tmp_path / "b18.surface-1.json", _batter_tin(1.8, surface="b18"))
+    # rebuild surfaces for steep batter (fresh out path)
+    out2 = tmp_path / "surfaces_b18.json"
+    rc, msg = run("build_surfaces.py",
+                  "--surface", f"design_grading={path_st}",
+                  "--surface", f"road_top={road}",
+                  "--out", out2)
+    assert rc == 0, msg
+    rc, msg = run("check_slopes.py", "--surfaces", out2, "--rules", rules,
+                  "--stage", "30% Concept Design", "--out", tmp_path / "sl_st.json")
+    assert rc == 0, msg
+    g = load(tmp_path / "sl_st.json")["ewk002_groups"]
+    assert len(g) == 1, g
+    assert abs(g[0]["height_m"] - 3.0) < 0.05
+    note = [c.get("note") or "" for c in load(tmp_path / "sl_st.json")["checks"]
+            if c["rule_id"] == "EWK-002" and c["parameter"] == "slope_min_h_per_v"]
+    assert note and "mean=" in note[0] and "max=" in note[0] and "H:V" in note[0]
+
+
+def test_tl13_no_fragmentation_under_threshold_faces(tmp_path):
+    """TL13: 1H:1V slope with ~2 % faces just under 50 % → still 1 EWK-002 group."""
+    rules = rules_ewk(tmp_path)
+    # Dense 1H:1V batter (height 3 m, run 3 m, width 20 m)
+    tin = _batter_tin(1.0, height=3.0, width=20.0, n_along=20, n_run=10, round_z=False,
+                      surface="frag")
+    # Flatten ~2 % of faces to ~49.9 % by dropping one vertex (creates near-threshold faces
+    # that would split groups under a hard 50.05 % cut).
+    pts = {str(r[0]): r for r in tin["points"]}
+    n_faces = len(tin["faces"])
+    n_flat = max(1, int(round(0.02 * n_faces)))
+    for fi in range(0, n_flat * 2, 2):  # every other early face
+        if fi >= n_faces:
+            break
+        f = tin["faces"][fi]
+        # lower the uphill vertex slightly so slope ≈ 49.9 %
+        # face spans roughly Δx along run; set z of highest point down
+        zs = [(pts[str(vid)][3], str(vid)) for vid in f]
+        zs.sort()
+        top_id = zs[-1][1]
+        # target slope ~49.9 %: for run≈0.3 m between grid, reduce rise
+        pts[top_id][3] = round(pts[top_id][3] - 0.15, 3)
+    tin["points"] = list(pts.values())
+    design = write(tmp_path / "frag.surface-1.json", tin)
+    road = write_tin(tmp_path, "rd13", (500, 500), (5, 5), z0=100)
+    surf = surfaces_doc(tmp_path, design=design, road=road)
+    rc, msg = run("check_slopes.py", "--surfaces", surf, "--rules", rules,
+                  "--stage", "30% Concept Design", "--out", tmp_path / "sl.json")
+    assert rc == 0, msg
+    g = load(tmp_path / "sl.json")["ewk002_groups"]
+    assert len(g) == 1, (len(g), g[:3] if g else None)
+
+
+def test_tl14_near_threshold_flat_pad(tmp_path):
+    """TL14: 30×30 at 0.99 % → 0 EWK-001; at 0.5 % → 1 group."""
+    rules = rules_ewk(tmp_path)
+    road = write_tin(tmp_path, "rd14", (1000, 1000), (5, 5), z0=100)
+
+    # 0.99 % over 30 m → rise 0.297 m, mm-rounded
+    rise_hi = round(0.0099 * 30.0, 3)
+    d_hi = write_tin(tmp_path, "pad99", (0, 0), (30, 30), rise_e=rise_hi, z0=100)
+    surf = surfaces_doc(tmp_path, design=d_hi, road=road)
+    rc, msg = run("check_slopes.py", "--surfaces", surf, "--rules", rules,
+                  "--stage", "30% Concept Design", "--out", tmp_path / "sl_hi.json")
+    assert rc == 0, msg
+    assert load(tmp_path / "sl_hi.json")["ewk001_groups"] == []
+
+    rise_lo = round(0.005 * 30.0, 3)
+    d_lo = write_tin(tmp_path, "pad05", (0, 0), (30, 30), rise_e=rise_lo, z0=100)
+    out2 = tmp_path / "surfaces_lo.json"
+    rc, msg = run("build_surfaces.py",
+                  "--surface", f"design_grading={d_lo}",
+                  "--surface", f"road_top={road}", "--out", out2)
+    assert rc == 0, msg
+    rc, msg = run("check_slopes.py", "--surfaces", out2, "--rules", rules,
+                  "--stage", "30% Concept Design", "--out", tmp_path / "sl_lo.json")
+    assert rc == 0, msg
+    g = load(tmp_path / "sl_lo.json")["ewk001_groups"]
+    assert len(g) == 1, g
+    assert g[0]["area_m2"] >= 25.0

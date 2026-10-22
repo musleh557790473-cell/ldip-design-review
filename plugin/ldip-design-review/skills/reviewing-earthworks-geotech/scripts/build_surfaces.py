@@ -16,7 +16,7 @@ Usage:
       [--site SITE] [--params <earthworks_params.json>] --out <surfaces.json>
 Exit: 0 · 2 input.
 """
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import argparse
 import sys
@@ -209,6 +209,14 @@ def main(argv=None):
             paved = {"source": "network", "path": params["network_footprint"]}
 
         inv_files = load_package_inventory(a.inventory) if a.inventory else None
+        # N2: carry inventory path/count into surfaces.json for MI "Searched:" text
+        inventory_meta = None
+        if a.inventory:
+            inventory_meta = {
+                "path": str(a.inventory),
+                "file_name": Path(a.inventory).name,
+                "n_files": len(inv_files or []),
+            }
         midp_missing = []
         midp_not_run = []
         midp_schedules_30 = None
@@ -309,6 +317,7 @@ def main(argv=None):
             "midp_matches": midp_matches,
             "midp_schedules_carriers_at_30": midp_schedules_30,
             "midp_entries_at_30": len(midp_entries),
+            "inventory": inventory_meta,
             "inventory_used": bool(inv_files is not None),
             "inventory_files": len(inv_files or []),
             "roles_present": sorted(by_role.keys()),

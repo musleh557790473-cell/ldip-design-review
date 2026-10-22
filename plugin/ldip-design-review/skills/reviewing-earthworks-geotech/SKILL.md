@@ -9,8 +9,8 @@ description: >-
   cut / fill areas and volumes as information. Use for any LDIP grading,
   earthworks, slope or plot-drainage check.
 metadata:
-  version: "0.1.0"
-  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rules_v7 (EWK inactive until rules_v8 after real 30 % tests — DL-17); no rules_v8 in this build"
+  version: "0.2.0"
+  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + Amendment L-b (format-independent slope grouping DL-19…DL-23) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rules_v7 (EWK inactive until rules_v8 after real 30 % tests — DL-17); no rules_v8 in this build"
 ---
 
 # Reviewing earthworks and geotech (skill 13)
@@ -26,6 +26,9 @@ result file.
 findings when carriers are present; MIDP-scheduled models missing → *Missing information* (DL-15).
 EWK-002 FoS, EWK-003 frontage / 0.30 m and EWK-101 stay at **60 % (DD)**. An earthworks profile
 (cut / fill, slope bands, inventory) is always written as information (no rule).
+
+**QRWN CRS** — R-Lb2 lifted (owner, 22 Oct 2026 21:17 Asia/Riyadh): EWK-002 and EWK-102 results for
+QRWN are valid for the CRS to Parsons. Do not withhold them. NMAR and NRJS are not covered by this lift.
 
 Packages: Python 3.11+, `jsonschema`, `shapely`, `numpy` (already used by skills 9 / 10). No new
 dependencies. No IfcOpenShell in the build.
@@ -53,25 +56,31 @@ Run from the LDIP_Review folder. `<SK>` =
 
 1. **Rules** —
    `python "<SK8>/get_rules.py" --rulebook rulebook/rules_v<N>.json --agent RDE --out "<EV>/rules_RDE.json"`
-2. **IFC surfaces** (when IFC is given) —
+2. **Package inventory (skill 6 first — N3)** —
+   Run skill 6 `inventory.py` / `merge_batches.py` (or use the run's INT output) and pass that
+   file as `--inventory` in step 4. Typical review-run path:
+   `findings/<run>/evidence/intake/files.json` (or `0.ai_context/<SITE>/<sub>/package.json`).
+   Without `--inventory`, DWG/NWC/DWFx/PDF format checks stay `not_run` (R1 unchanged); IFC/XML
+   from surfaces are still judged.
+3. **IFC surfaces** (when IFC is given) —
    `python "<SK>/read_ifc_surface.py" --ifc "<model>.ifc" --out-dir "<EV>/ifc" --prefix <stem>`
-3. **Inventory / roles** —
-   `python "<SK>/build_surfaces.py" --surface design_grading="<tin.json>" [--surface existing="<tin.json>"] [--surface road_top="<tin.json>"] [--landxml design_grading="<X>.xml.json"] [--civil3d-dwg design_grading="<G>.dwg"] [--midp "<midp.json>"] [--inventory "<EV>/files.json"] --site <SITE> --out "<EV>/surfaces.json"`
+4. **Surfaces / roles** —
+   `python "<SK>/build_surfaces.py" --surface design_grading="<tin.json>" [--surface existing="<tin.json>"] [--surface road_top="<tin.json>"] [--landxml design_grading="<X>.xml.json"] [--civil3d-dwg design_grading="<G>.dwg"] [--midp "<midp.json>"] --inventory "<EV>/files.json" --site <SITE> --out "<EV>/surfaces.json"`
    `--midp` accepts the compact earthworks list (`references/midp_models.md`) or skill 6
-   `read_midp.py` output. `--inventory` is skill 6 `files.json` / `package.json` / a plain file
-   list (needed to judge DWG/NWC/DWFx/PDF). Optional:
+   `read_midp.py` output. `--inventory` accepts skill 6 `files.json` **or** `package.json`
+   sheet_register (see `references/midp_models.md`). Optional:
    `python "<SK>/adapt_midp.py" --midp "<EV>/midp.json" --site <SITE> --out "<EV>/midp_earthworks.json"`.
-4. **Slopes (EWK-001 / 002)** —
+5. **Slopes (EWK-001 / 002)** —
    `python "<SK>/check_slopes.py" --surfaces "<EV>/surfaces.json" --rules "<EV>/rules_RDE.json" --stage "<stage>" --site <SITE> [--report "<R>.pdf.json"] --out "<EV>/slopes.json"`
-5. **Drainage (EWK-003)** —
+6. **Drainage (EWK-003)** —
    `python "<SK>/check_drainage.py" --surfaces "<EV>/surfaces.json" --rules "<EV>/rules_RDE.json" --stage "<stage>" --site <SITE> [--plots "<CAD>.dwg.json"] [--finished-levels] [--plot-levels "<levels.json>"] --out "<EV>/drainage.json"`
-6. **Presence (EWK-101 / 102) + MIDP required** —
+7. **Presence (EWK-101 / 102) + MIDP required** —
    `python "<SK>/check_presence.py" --slopes "<EV>/slopes.json" --rules "<EV>/rules_RDE.json" --stage "<stage>" --site <SITE> --surfaces "<EV>/surfaces.json" --file grading_plan="<P>.dwg.json" --file details="<D>.dwg.json" --out "<EV>/presence.json" --required-out "<EV>/required_inputs.json"`
-7. **Profile (information)** —
+8. **Profile (information)** —
    `python "<SK>/earthworks_profile.py" --surfaces "<EV>/surfaces.json" --slopes "<EV>/slopes.json" --drainage "<EV>/drainage.json" --presence "<EV>/presence.json" [--balance-quote "…"] --out "<EV>/earthworks_profile.json"`
-8. **Findings** —
+9. **Findings** —
    `python "<SK>/build_candidates.py" --results "<EV>/slopes.json" "<EV>/drainage.json" "<EV>/presence.json" "<EV>/required_inputs.json" --rules "<EV>/rules_RDE.json" --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir "<EV>/evidence" --out "<EV>/candidates.json"`
-9. **Validate** —
+10. **Validate** —
    `python "<SK>/validate_findings.py" --findings "<EV>/candidates.json" --rules "<EV>/rules_RDE.json"`
 
 ## Outputs and exit codes

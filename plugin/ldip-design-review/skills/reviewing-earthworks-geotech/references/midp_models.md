@@ -83,3 +83,7 @@ presence is judged against the matched file's **own** number in the inventory (S
 
 One *Missing information* candidate **per site** listing every missing deliverable and
 format. `rule_id` = `EWK-001`; clause cites required inputs for EWK-001 / 002 / 003.
+
+**N2 — Searched text:** when `--inventory` was passed, the MI statement uses
+`Searched: <inventory file name> (<n> files) + surfaces <list>` (from `surfaces.json`
+`inventory.path` / `inventory.n_files`), never `(no file given)`.
