@@ -31,7 +31,7 @@ EWK-102 at 30 %: height ≥ **1.0 m** (DL-18). Other thresholds as DL-5…DL-8.
   groups = possibly-steep faces connected by vertex **coordinates** (1 mm), not point IDs;
   report only groups with ≥1 clearly steep face. Finding text states mean/max slope and H:V.
 - **EWK-001:** clearly / possibly flat about `g_min`; report if clearly-flat area ≥ 25 m².
-- Format invariance: same surface as IFC vs LandXML → counts within 5 % (TL11).
+- Format invariance (Amendment L-b §8; DL-21 revised): same surface as IFC vs LandXML → EWK-001 counts within 5 %; EWK-002 counts (all and ≥ 1.0 m) within 6 %; largest ten heights within 1 m (TL11).
 
 ## Status (DL-9)
 
