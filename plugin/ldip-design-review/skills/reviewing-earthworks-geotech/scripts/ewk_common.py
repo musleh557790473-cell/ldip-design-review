@@ -131,11 +131,15 @@ def phase_of(stage_map, stage):
     return None, None
 
 
-def ewk_gate(rules, skipped, rid, pname, stage_map, stage):
+def ewk_gate(rules, skipped, rid, pname, stage_map, stage, *, midp_schedules_30=None):
     """Return (rule, phase, milestone) or (None, reason, None).
 
     Inactive rules never run. Amendment L-a DL-14 widens PD for selected
     (rule, parameter) pairs; other EWK parameters stay DD-only.
+
+    D7: when MIDP is supplied and does **not** schedule earthworks carriers at 30 %,
+    PD findings are not raised (`midp_schedules_30 is False`).
+    `None` = MIDP not consulted (L-a PD_ACTIVE applies).
     """
     if rid in {s.get("rule_id") for s in skipped}:
         return None, f"{rid} inactive / skipped", None
@@ -149,6 +153,8 @@ def ewk_gate(rules, skipped, rid, pname, stage_map, stage):
         return None, f"stage '{stage}' not mapped", None
     req = rule.get("required_from_phase") or "DD"
     if phase == "PD" and req == "DD":
+        if midp_schedules_30 is False:
+            return None, "not scheduled at stage by MIDP", None
         if (rid, pname) in PD_ACTIVE:
             return rule, phase, milestone
         return None, "not required at stage", None
@@ -179,25 +185,92 @@ def propose_role_from_title(title):
 
 
 def midp_model_match(model, midp_entry):
-    """DL-15 / ADDENDUM: match MIDP deliverable by number OR (title + role)."""
+    """DL-15 / ADDENDUM / D2: match by document number / source file first, then title+role."""
     num = (midp_entry.get("number") or midp_entry.get("deliverable") or "").lower()
     title = (midp_entry.get("title") or "").lower()
     role = midp_entry.get("role")
+    m_doc = (model.get("document_no") or "").lower()
+    m_src = (model.get("source_file") or "").lower()
     m_num = (model.get("number") or model.get("name") or "").lower()
     m_title = (model.get("title") or model.get("name") or "").lower()
     m_role = model.get("role")
     m_internal = (model.get("internal_name") or "").lower()
-    if num and (num in m_num or num in m_internal or m_num in num):
-        return True
+    # D2: source file / document number first
+    if num:
+        if num in m_doc or m_doc and m_doc in num:
+            return True
+        if num in m_src or (m_src and num.replace("-", "") in m_src.replace("-", "")):
+            return True
+        if num in m_num or num in m_internal or (m_num and m_num in num):
+            return True
     if role and m_role and role == m_role:
         if title and (title in m_title or m_title in title or any(
                 w in m_title for w in title.split() if len(w) > 3)):
             return True
-        if role == m_role and (not title or not m_title):
-            return True
     if title and m_title and (title in m_title or m_title in title):
         return True
     return False
+
+
+def norm_format(fmt):
+    """Normalise exchange format labels for DL-15 comparison."""
+    f = (fmt or "").strip().lower()
+    if f in ("xml", "landxml"):
+        return "xml"
+    if f in ("ifc",):
+        return "ifc"
+    if f in ("dwg",):
+        return "dwg"
+    if f in ("nwc", "nwd"):
+        return "nwc"
+    if f in ("dwfx", "dwf"):
+        return "dwfx"
+    if f in ("pdf",):
+        return "pdf"
+    return f
+
+
+def adapt_midp_rows(midp_doc, *, stage_hint="30"):
+    """D5: adapt skill 6 `read_midp.py` output → earthworks MIDP model entries.
+
+    Keeps rows whose exchanges mention the stage hint (default 30 % / Concept) and
+    whose number/title look like NGL / grading / road-surface models, or any row
+    at that stage with ROD-MOD-90000 / IRO-MOD.
+    """
+    rows = midp_doc.get("rows") if isinstance(midp_doc, dict) else midp_doc
+    if not isinstance(rows, list):
+        rows = (midp_doc or {}).get("models") or (midp_doc or {}).get("deliverables") or []
+    out = []
+    hint = (stage_hint or "30").lower()
+    for r in rows:
+        exs = r.get("exchanges") or []
+        stages = " ".join((e.get("stage") or "") for e in exs).lower()
+        stage_field = (r.get("stage") or "").lower()
+        at_stage = (hint in stages or hint in stage_field
+                    or "concept" in stages or r.get("milestone") in (30, "30"))
+        if r.get("stage") in ("30%", "30% Concept Design", "PD"):
+            at_stage = True
+        if not at_stage and r.get("milestone") not in (30, "30"):
+            continue
+        num = r.get("number") or r.get("deliverable") or ""
+        title = r.get("title") or ""
+        blob = f"{num} {title}".lower()
+        looks_ewk = any(k in blob for k in (
+            "rod-mod-90000", "iro-mod", "grading", "ngl", "egl", "road surface",
+            "roads surface", "mass grading", "site grading",
+        ))
+        if not looks_ewk and not r.get("role"):
+            continue
+        role = r.get("role") or propose_role_from_title(title)
+        out.append({
+            "number": num,
+            "title": title,
+            "role": role,
+            "formats": list(r.get("formats") or r.get("exchange_formats") or []),
+            "stage": r.get("stage") or "30% Concept Design",
+            "milestone": r.get("milestone") if r.get("milestone") is not None else 30,
+        })
+    return out
 
 
 # --- TIN geometry (copied from skill 10 tin_surface.py; skills stay independent) ---
@@ -425,14 +498,18 @@ def priority_flood(grid, trap_depth_m=0.05):
 
 def fail_rec(rid, pname, subject, observed, required, op, unit, src, *, result="fail",
              link_cap=None, status_override=None, issue_type=None, mode_tag=None,
-             note=None, xy_pt=None, severity_override=None):
+             note=None, xy_pt=None, severity_override=None, tolerance=None, total_count=None,
+             document_no=None):
     ev = {**(src or {}), "source_type": (src or {}).get("source_type") or "script_output",
           "extract": (src or {}).get("extract") or f"{subject}: {observed}"}
     if xy_pt is not None:
         ev["xy"] = list(xy_pt) if not isinstance(xy_pt, list) else xy_pt
+    if document_no:
+        ev["document_no"] = document_no
     r = {"rule_id": rid, "parameter": pname, "subject": subject, "observed": observed,
-         "required": required, "comparison": op, "tolerance": 0.0, "unit": unit, "result": result,
-         "evidence": ev}
+         "required": required, "comparison": op,
+         "tolerance": 0.0 if tolerance is None else float(tolerance),
+         "unit": unit, "result": result, "evidence": ev}
     if link_cap:
         r["link_cap"] = link_cap
     if status_override:
@@ -445,6 +522,8 @@ def fail_rec(rid, pname, subject, observed, required, op, unit, src, *, result="
         r["note"] = note
     if severity_override:
         r["severity_override"] = severity_override
+    if total_count is not None:
+        r["total_count"] = int(total_count)
     return r
 
 

@@ -56,7 +56,9 @@ Run from the LDIP_Review folder. `<SK>` =
 2. **IFC surfaces** (when IFC is given) —
    `python "<SK>/read_ifc_surface.py" --ifc "<model>.ifc" --out-dir "<EV>/ifc" --prefix <stem>`
 3. **Inventory / roles** —
-   `python "<SK>/build_surfaces.py" --surface design_grading="<tin.json>" [--surface existing="<tin.json>"] [--surface road_top="<tin.json>"] [--landxml design_grading="<X>.xml.json"] [--civil3d-dwg design_grading="<G>.dwg"] [--midp "<midp_models.json>"] --site <SITE> --out "<EV>/surfaces.json"`
+   `python "<SK>/build_surfaces.py" --surface design_grading="<tin.json>" [--surface existing="<tin.json>"] [--surface road_top="<tin.json>"] [--landxml design_grading="<X>.xml.json"] [--civil3d-dwg design_grading="<G>.dwg"] [--midp "<midp.json>"] --site <SITE> --out "<EV>/surfaces.json"`
+   `--midp` accepts the compact earthworks list (`references/midp_models.md`) or skill 6
+   `read_midp.py` output. Optional: `python "<SK>/adapt_midp.py" --midp "<EV>/midp.json" --out "<EV>/midp_earthworks.json"`.
 4. **Slopes (EWK-001 / 002)** —
    `python "<SK>/check_slopes.py" --surfaces "<EV>/surfaces.json" --rules "<EV>/rules_RDE.json" --stage "<stage>" --site <SITE> [--report "<R>.pdf.json"] --out "<EV>/slopes.json"`
 5. **Drainage (EWK-003)** —
@@ -77,4 +79,5 @@ Run from the LDIP_Review folder. `<SK>` =
 Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4 schema failure.
 
 Methods and limits: `references/earthworks_methods.md`. Detection thresholds and terms:
-`references/earthworks_params.json`. Finding skeleton: `templates/finding.json`.
+`references/earthworks_params.json`. MIDP JSON contract + skill 6 adapter:
+`references/midp_models.md`. Finding skeleton: `templates/finding.json`.

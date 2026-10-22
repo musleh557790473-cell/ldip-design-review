@@ -8,7 +8,7 @@ Usage: python build_candidates.py --results <a.json> [...] --rules <rules_RDE.js
            --run <run-id> --site <SITE> --sub <sub-id> --evidence-dir <dir>
            [--review-root <LDIP_Review>] [--start 1] --out <candidates.json>
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import json
@@ -112,7 +112,11 @@ class Builder:
             req += f" {s0['unit']}"
         src_clause = f"{p.get('source_id', '')} {p.get('clause', '')}".strip()
         note = samples[0].get("note") or ""
-        statement = (f"{len(samples)} occurrence(s). Observed — {obs}. Required ({rid} {pname}"
+        # D8: statement uses total_count (all items); evidence lists up to ten largest
+        total = s0.get("total_count")
+        if total is None:
+            total = max((s.get("total_count") or 0 for s in samples), default=0) or len(samples)
+        statement = (f"{total} occurrence(s). Observed — {obs}. Required ({rid} {pname}"
                      + (f", {src_clause}" if src_clause else "") + f"): {req}. "
                      f"Requirement ({rid}): {rule['statement']}")
         if note:
@@ -152,13 +156,17 @@ class Builder:
                      f"(submission phase {item.get('submission_phase')}) in one of: "
                      f"{', '.join(item.get('carriers') or [])}; none of them holds it. "
                      f"Searched: {searched}. Rules that need it: {', '.join(item['rules'])}.")
+        # D2: prefer deliverable / document number on MIDP MI locations
+        doc = item.get("document_no") or "PACKAGE"
+        loc = {"document_no": doc, "package_level": True} if doc == "PACKAGE" \
+            else {"document_no": doc, "package_level": True}
         f = {
             "schema_version": "1.0", "finding_id": f"{self.a.run}/RDE-{self.n:03d}", "stage": "candidate",
             "run_id": self.a.run, "site": self.a.site, "sub_id": self.a.sub, "agent": "RDE",
             "agent_versions": {"reviewing-earthworks-geotech": __version__},
             "title": f"Missing earthworks information: {item['item']}"[:120],
             "statement": statement[:1500], "issue_type": "missing_information",
-            "location": {"document_no": "PACKAGE", "package_level": True},
+            "location": loc,
             "severity": rule["severity_default"], "confidence": "High",
             "evidence": [{"evidence_id": "E01", "tier": "deterministic", "source_type": "script_output",
                           "extract": f"searched: {searched}"[:900], "measured_value": 0,

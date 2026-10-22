@@ -13,7 +13,7 @@ same extent, the single-layer is used. When only a solid exists, non-vertical fa
 Usage: python read_ifc_surface.py --ifc <file.ifc> --out-dir <dir> [--prefix <stem>]
 Exit: 0 written · 2 input error. No network, no new packages.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import hashlib
@@ -439,27 +439,60 @@ def _extent(tris):
     return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
 
 
-def _is_thin_solid(tris, tol=0.002):
-    """Thin closed solid: top/bottom ≈ 1 mm apart (NMAR probe)."""
-    ext = _extent(tris)
-    if not ext:
+def _tri_nz(tri):
+    (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = tri
+    ux, uy, uz = x2 - x1, y2 - y1, z2 - z1
+    vx, vy, vz = x3 - x1, y3 - y1, z3 - z1
+    return ux * vy - uy * vx
+
+
+def _xy_footprint_key(tri, nd=3):
+    """Sorted rounded XY corners — identical for a top/bottom twin of a thin solid."""
+    corners = [(round(p[0], nd), round(p[1], nd)) for p in tri]
+    return tuple(sorted(corners))
+
+
+def is_thin_solid_paired(tris, z_tol=0.002, pair_frac=0.35):
+    """D1: thin solid by paired faces (same XY footprint, ΔZ ≤ 2 mm, opposite normal).
+
+    Also true when up≈down counts and a meaningful pair fraction share XY.
+    Whole-product Z-span is NOT used (terrain solids span tens of metres).
+    """
+    metas = []
+    for tri in tris:
+        nz = _tri_nz(tri)
+        if abs(nz) <= 1e-9:
+            continue
+        cz = (tri[0][2] + tri[1][2] + tri[2][2]) / 3.0
+        metas.append((_xy_footprint_key(tri), cz, 1 if nz > 0 else -1))
+    n = len(metas)
+    if n < 2:
         return False
-    zspan = ext[5] - ext[4]
-    return zspan <= tol + 1e-9
+    by_xy = {}
+    for key, cz, sign in metas:
+        by_xy.setdefault(key, []).append((cz, sign))
+    paired = 0
+    for items in by_xy.values():
+        ups = [z for z, s in items if s > 0]
+        dns = [z for z, s in items if s < 0]
+        if ups and dns and any(abs(u - d) <= z_tol + 1e-9 for u in ups for d in dns):
+            paired += 1
+    n_up = sum(1 for _k, _z, s in metas if s > 0)
+    n_dn = sum(1 for _k, _z, s in metas if s < 0)
+    balanced = n_up > 0 and n_dn > 0 and abs(n_up - n_dn) / max(n_up, n_dn) <= 0.20
+    frac = paired / max(1, min(n_up, n_dn) if balanced else n)
+    if paired / n >= pair_frac:
+        return True
+    if balanced and frac >= 0.20:
+        return True
+    return False
 
 
 def _nonvertical_faces(tris, upward_only=False):
     """Keep faces with |n_z| > 1e-9; if upward_only, also n_z > 0 (thin-solid split only)."""
     out = []
     for tri in tris:
-        nz = _face_normal_z(tri)
-        # Use plane normal via 3D cross for vertical test
-        (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = tri
-        ux, uy, uz = x2 - x1, y2 - y1, z2 - z1
-        vx, vy, vz = x3 - x1, y3 - y1, z3 - z1
-        nx = uy * vz - uz * vy
-        ny = uz * vx - ux * vz
-        nz3 = ux * vy - uy * vx
+        nz3 = _tri_nz(tri)
         if abs(nz3) <= 1e-9:
             continue
         if upward_only and nz3 <= 0:
@@ -469,49 +502,50 @@ def _nonvertical_faces(tris, upward_only=False):
 
 
 def choose_products(product_geoms):
-    """Single-layer preference; else upward faces of a thin solid; else |n_z|>0 faces."""
+    """One sheet per model: prefer unpaired single-layer; else thin_solid_split (D1)."""
     if not product_geoms:
         return [], "no_products"
-    # Classify each product
     classified = []
     for g in product_geoms:
         tris = g["triangles"]
-        thin = _is_thin_solid(tris)
-        # layer-like: small z-span of face centroids relative to plan, or not a thin solid box
-        zs = [p[2] for t in tris for p in t]
-        zspan = max(zs) - min(zs) if zs else 0
-        # single-layer: not thin solid OR many coplanar faces with larger plan extent
-        is_layer = (not thin) or zspan > 0.05
-        # Better: thin solid has top+bottom; single layer has one sheet
-        # Heuristic from probe: thin solid zspan ≈ 0.001; single-layer has terrain z-range
-        is_single_layer = zspan > 0.05
-        classified.append({**g, "thin": thin and zspan <= 0.05, "single_layer": is_single_layer, "zspan": zspan})
+        thin = is_thin_solid_paired(tris)
+        classified.append({**g, "thin_solid": thin, "n_tris": len(tris)})
 
-    layers = [c for c in classified if c["single_layer"]]
-    solids = [c for c in classified if c["thin"]]
-    choice_note = ""
-    selected = []
+    layers = [c for c in classified if not c["thin_solid"]]
+    solids = [c for c in classified if c["thin_solid"]]
     if layers:
-        selected = layers
-        choice_note = "single_layer"
-        for s in selected:
-            s["triangles"] = _nonvertical_faces(s["triangles"], upward_only=False)
-    elif solids:
-        selected = solids
-        choice_note = "thin_solid_upward"
-        for s in selected:
-            s["triangles"] = _nonvertical_faces(s["triangles"], upward_only=True)
-    else:
-        selected = classified
-        choice_note = "nonvertical"
-        for s in selected:
-            s["triangles"] = _nonvertical_faces(s["triangles"], upward_only=False)
-    return selected, choice_note
+        # Prefer the largest single-layer product; one sheet per model
+        best = max(layers, key=lambda c: c["n_tris"])
+        best = dict(best)
+        best["triangles"] = _nonvertical_faces(best["triangles"], upward_only=False)
+        return [best], "single_layer"
+    if solids:
+        best = max(solids, key=lambda c: c["n_tris"])
+        best = dict(best)
+        best["triangles"] = _nonvertical_faces(best["triangles"], upward_only=True)
+        return [best], "thin_solid_split"
+    best = max(classified, key=lambda c: c["n_tris"])
+    best = dict(best)
+    best["triangles"] = _nonvertical_faces(best["triangles"], upward_only=False)
+    return [best], "nonvertical"
 
 
-def tris_to_sidefile(tris, *, surface_name, index, header, product, file_sha, choice):
+_DOCNO = re.compile(
+    r"([A-Za-z0-9]+(?:-[A-Za-z0-9]+){5,}(?:-\d{3})?)",
+    re.I,
+)
+
+
+def document_no_from_path(path):
+    """Deliverable number from IFC file name (D2), e.g. …-ROD-MOD-90000-002."""
+    stem = Path(path).stem
+    m = _DOCNO.search(stem)
+    return m.group(1).upper() if m else stem
+
+
+def tris_to_sidefile(tris, *, surface_name, index, header, product, file_sha, choice,
+                     source_file=None, document_no=None):
     """Build landxml_surface.schema.json-shaped side file + IFC provenance fields."""
-    # Deduplicate points
     key_to_id = {}
     points = []
     faces = []
@@ -525,7 +559,6 @@ def tris_to_sidefile(tris, *, surface_name, index, header, product, file_sha, ch
                 points.append([str(next_id), float(p[0]), float(p[1]), float(p[2])])
                 next_id += 1
             ids.append(key_to_id[key])
-        # drop zero-area
         (x1, y1, _), (x2, y2, _), (x3, y3, _) = tri
         area = abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) / 2.0
         if area < 1e-12:
@@ -539,6 +572,8 @@ def tris_to_sidefile(tris, *, surface_name, index, header, product, file_sha, ch
         "faces": faces,
         "breaklines": [],
         "source_format": "ifc",
+        "source_file": source_file,
+        "document_no": document_no,
         "product_id": product.get("product_id"),
         "product_name": product.get("name"),
         "product_type": product.get("type"),
@@ -559,17 +594,28 @@ def main(argv=None):
         path = Path(a.ifc)
         if not path.is_file():
             raise EwkError(EXIT_INPUT, f"file not found: {a.ifc}")
-        file_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Stream hash (do not require a second full read into memory for hashing alone —
+        # sha256_file-style chunked read).
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        file_sha = h.hexdigest()
         header, geoms = read_ifc(path)
         selected, choice = choose_products(geoms)
         out_dir = Path(a.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         prefix = a.prefix or path.stem
+        doc_no = document_no_from_path(path)
         written = []
-        for i, prod in enumerate(selected, 1):
+        # D1: one chosen sheet per model file
+        for i, prod in enumerate(selected[:1], 1):
             name = prod.get("name") or f"IFC-{prod['product_id']}"
-            side = tris_to_sidefile(prod["triangles"], surface_name=name, index=i,
-                                    header=header, product=prod, file_sha=file_sha, choice=choice)
+            side = tris_to_sidefile(
+                prod["triangles"], surface_name=name, index=i,
+                header=header, product=prod, file_sha=file_sha, choice=choice,
+                source_file=path.name, document_no=doc_no,
+            )
             out = out_dir / f"{prefix}.surface-{i}.json"
             tmp = out.with_name(out.name + ".tmp")
             tmp.write_text(__import__("json").dumps(side, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -582,8 +628,11 @@ def main(argv=None):
                 "product_id": prod["product_id"],
                 "name": name,
                 "layer_choice": choice,
+                "document_no": doc_no,
+                "source_file": path.name,
             })
         emit({"status": "ok", "ifc": str(path), "sha256": file_sha, "header": header,
+              "document_no": doc_no, "source_file": path.name,
               "products_read": len(geoms), "surfaces": written, "layer_choice": choice,
               "tool": {"script": "read_ifc_surface.py", "version": __version__}})
         return EXIT_OK

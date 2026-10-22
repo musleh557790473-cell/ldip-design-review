@@ -4,12 +4,15 @@
 Locations from EWK-002 groups in slopes.json. EWK-101 stays at 60 % (DD).
 EWK-102 runs at 30 % with step height ≥ 1.0 m (DL-18).
 
+D7: when surfaces.json has midp_schedules_carriers_at_30=False, PD findings/MI
+are not raised. D8: total_count + up to ten largest (by height).
+
 Usage:
   python check_presence.py --slopes <slopes.json> --rules <rules_RDE.json>
       --stage "<stage>" [--file carrier=path ...] [--site SITE]
       --out <presence.json> [--required-out <required_inputs.json>]
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import math
@@ -70,7 +73,7 @@ def main(argv=None):
     ap.add_argument("--stage", required=True)
     ap.add_argument("--site", default=None)
     ap.add_argument("--file", action="append", default=[], help="carrier=path")
-    ap.add_argument("--surfaces", default=None, help="for MIDP missing / walls from slopes")
+    ap.add_argument("--surfaces", default=None, help="for MIDP missing / D7 midp_schedules_30")
     ap.add_argument("--out", required=True)
     ap.add_argument("--required-out", default=None)
     a = ap.parse_args(argv)
@@ -81,12 +84,13 @@ def main(argv=None):
         rules, skipped, stage_map = rules_index(rb)
         params, site_p, doc = load_params(a.site)
         buffer_m = float(params.get("presence_buffer_m", 5.0))
-        # DL-18: EWK-102 at 30 % uses 1.0 m
-        phase_of_stage = None
         from ewk_common import phase_of
         phase_of_stage, milestone = phase_of(stage_map, a.stage)
         ewk102_min_h = float(params.get("ewk102_min_height_m_pd", 1.0)) if phase_of_stage == "PD" \
             else float(params.get("ewk002_min_height_m", 0.5))
+
+        surf_doc = read_json(a.surfaces) if a.surfaces else {}
+        midp_30 = surf_doc.get("midp_schedules_carriers_at_30")
 
         prot_terms = _terms(doc.get("terms") or params, "slope_protection") or [
             r"slope\s+protection", r"rip-?rap", r"gabion", r"stone\s+pitching",
@@ -105,13 +109,21 @@ def main(argv=None):
             carrier, path = item.split("=", 1)
             files.append((carrier.strip(), path.strip(), read_json(path.strip())))
 
-        groups = slopes.get("ewk002_groups") or []
+        groups = sorted(slopes.get("ewk002_groups") or [],
+                        key=lambda g: (-g.get("height_m", 0), -g.get("area_m2", 0)))
         walls_modelled = slopes.get("walls") or []
         checks, passed, not_run = [], [], []
         searched_all = [f"{c}:{p}" for c, p, _ in files] or ["(no file given)"]
+        doc_no = None
+        if a.surfaces:
+            for s in surf_doc.get("surfaces") or []:
+                if s.get("role") in ("design_grading", "finished_grading") and s.get("document_no"):
+                    doc_no = s["document_no"]
+                    break
 
         # EWK-101 — DD only
-        rule, phase, _ = ewk_gate(rules, skipped, "EWK-101", "required_element", stage_map, a.stage)
+        rule, phase, _ = ewk_gate(rules, skipped, "EWK-101", "required_element", stage_map, a.stage,
+                                  midp_schedules_30=midp_30)
         if rule is None:
             not_run.append({"rule_id": "EWK-101", "parameter": "required_element", "reason": phase})
         else:
@@ -120,8 +132,10 @@ def main(argv=None):
                 hit, _ = _search_hits(files, prot_terms, prot_layers, g["centroid_en"], buffer_m)
                 if not hit:
                     missing.append(g)
-            src = {"source_type": "script_output", "extract": f"searched: {', '.join(searched_all)}"}
+            src = {"source_type": "script_output", "extract": f"searched: {', '.join(searched_all)}",
+                   "document_no": doc_no}
             if missing:
+                total = len(missing)
                 for g in missing[:10]:
                     checks.append(fail_rec(
                         "EWK-101", "required_element",
@@ -131,21 +145,23 @@ def main(argv=None):
                         issue_type="missing_information",
                         mode_tag="presence",
                         xy_pt=g["centroid_en"],
-                        note=f"count={len(missing)}; searched: {', '.join(searched_all)}",
+                        total_count=total,
+                        document_no=doc_no,
+                        note=f"count={total}; searched: {', '.join(searched_all)}",
                     ))
             else:
                 passed.append({"rule_id": "EWK-101", "parameter": "required_element",
                                "result": "pass", "observed": "protection found or no groups"})
 
         # EWK-102 — PD with height ≥ 1.0 m (DL-18); DD with ewk002_min_height
-        rule, phase, _ = ewk_gate(rules, skipped, "EWK-102", "required_element", stage_map, a.stage)
+        rule, phase, _ = ewk_gate(rules, skipped, "EWK-102", "required_element", stage_map, a.stage,
+                                  midp_schedules_30=midp_30)
         if rule is None:
             not_run.append({"rule_id": "EWK-102", "parameter": "required_element", "reason": phase})
         else:
             locs = [g for g in groups if g.get("height_m", 0) >= ewk102_min_h]
             missing = []
             for g in locs:
-                # modelled wall nearby?
                 wall_hit = any(
                     math.hypot(w["centroid"][0] - g["centroid_en"][0],
                                w["centroid"][1] - g["centroid_en"][1]) <= buffer_m
@@ -154,8 +170,10 @@ def main(argv=None):
                 text_hit, _ = _search_hits(files, wall_terms, wall_layers, g["centroid_en"], buffer_m)
                 if not wall_hit and not text_hit:
                     missing.append(g)
-            src = {"source_type": "script_output", "extract": f"searched: {', '.join(searched_all)}"}
+            src = {"source_type": "script_output", "extract": f"searched: {', '.join(searched_all)}",
+                   "document_no": doc_no}
             if missing:
+                total = len(missing)
                 for g in missing[:10]:
                     checks.append(fail_rec(
                         "EWK-102", "required_element",
@@ -166,18 +184,19 @@ def main(argv=None):
                         issue_type="missing_information",
                         mode_tag="presence",
                         xy_pt=g["centroid_en"],
-                        note=f"count={len(missing)}; min_height={ewk102_min_h}; "
+                        total_count=total,
+                        document_no=doc_no,
+                        note=f"count={total}; min_height={ewk102_min_h}; "
                              f"searched: {', '.join(searched_all)}",
                     ))
             else:
                 passed.append({"rule_id": "EWK-102", "parameter": "required_element",
                                "result": "pass", "observed": "retaining found or no steep groups"})
 
-        # DL-15 MIDP missing models → required_inputs style items
+        # DL-15 MIDP missing models → required_inputs (D7: only when scheduled at 30 %)
         required_items = []
-        if a.surfaces:
-            surf = read_json(a.surfaces)
-            for miss in surf.get("midp_missing") or []:
+        if a.surfaces and midp_30 is not False:
+            for miss in surf_doc.get("midp_missing") or []:
                 required_items.append({
                     "key": f"midp:{miss.get('deliverable') or miss.get('title')}",
                     "item": f"MIDP model {miss.get('deliverable') or ''} {miss.get('title') or ''}".strip(),
@@ -190,6 +209,7 @@ def main(argv=None):
                     "source_id": "SRC-14",
                     "clause": "MIDP Data Exchange 04 / DL-15",
                     "reason": miss.get("reason"),
+                    "document_no": miss.get("deliverable"),
                 })
 
         out = {
@@ -200,6 +220,7 @@ def main(argv=None):
             "passed": passed,
             "not_run": not_run,
             "ewk102_min_height_m": ewk102_min_h,
+            "ewk102_locations": len([g for g in groups if g.get("height_m", 0) >= ewk102_min_h]),
         }
         atomic_write_json(a.out, out)
         if a.required_out:

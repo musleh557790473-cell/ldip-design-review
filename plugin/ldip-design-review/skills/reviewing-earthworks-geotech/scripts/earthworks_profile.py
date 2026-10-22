@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Earthworks profile — information only, no findings (SPC-0006 Rev L §4.14.12 + L-a DL-16).
 
+D4: cut/fill and road−grading use tin_raster_z (not O(faces²) nearest-face scans).
+
 Usage:
   python earthworks_profile.py --surfaces <surfaces.json>
       [--slopes <slopes.json>] [--drainage <drainage.json>] [--presence <presence.json>]
       [--balance-quote "<report quote>"] --out <earthworks_profile.json>
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import math
@@ -15,37 +17,21 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from ewk_common import (EXIT_OK, atomic_write_json, emit, iter_faces, load_tin, main_guard,  # noqa: E402
-                        point_map, read_json)
-from ewk_common import _bary_z  # noqa: E402
+from ewk_common import (EXIT_OK, atomic_write_json, emit, iter_faces, load_params, load_tin,  # noqa: E402
+                        main_guard, read_json, tin_raster_z)
 
 
-def _cut_fill(design_path, existing_path, near_zero=0.05):
+def _cut_fill_raster(design_path, existing_path, cell_m=1.0, near_zero=0.05):
+    """Area-weighted cut/fill via exact TIN rasters (D4)."""
     design, existing = load_tin(design_path), load_tin(existing_path)
-    epts = point_map(existing)
-    efaces = existing.get("faces") or []
-
-    def ez(e, n):
-        best, best_d = None, 1e18
-        for face in efaces:
-            try:
-                p1 = epts[str(face[0])]; p2 = epts[str(face[1])]; p3 = epts[str(face[2])]
-            except KeyError:
-                continue
-            cx = (p1[0] + p2[0] + p3[0]) / 3.0
-            cy = (p1[1] + p2[1] + p3[1]) / 3.0
-            d = (cx - e) ** 2 + (cy - n) ** 2
-            if d < best_d:
-                z = _bary_z(p1, p2, p3, e, n)
-                if z is not None:
-                    best, best_d = z, d
-        return best
-
+    egrid, e0, n0, _e1, _n1 = tin_raster_z(existing, cell_m=cell_m)
     cut_a = fill_a = zero_a = 0.0
     cut_v = fill_v = 0.0
     dzs = []
     for _ids, p1, p2, p3, _s, _nz, cent, area in iter_faces(design):
-        z_ex = ez(cent[0], cent[1])
+        ix = int(math.floor((cent[0] - e0) / cell_m))
+        iy = int(math.floor((cent[1] - n0) / cell_m))
+        z_ex = egrid.get((ix, iy))
         if z_ex is None:
             continue
         dz = cent[2] - z_ex
@@ -76,6 +62,8 @@ def _cut_fill(design_path, existing_path, near_zero=0.05):
         "dz_p99": pct(99),
         "dz_min": round(dzs[0], 3) if dzs else None,
         "dz_max": round(dzs[-1], 3) if dzs else None,
+        "method": "tin_raster_z",
+        "cell_m": cell_m,
     }
 
 
@@ -83,14 +71,16 @@ def _slope_bands(tin_path, paved=None):
     tin = load_tin(tin_path)
     bands = {"lt_1": 0.0, "1_5": 0.0, "5_33": 0.0, "33_50": 0.0, "gt_50": 0.0}
     paved_a = unpaved_a = 0.0
+    paved_set = None
+    if paved and paved.get("cells"):
+        paved_set = {tuple(c) for c in paved["cells"]}
+        e0, n0, cell = paved["e0"], paved["n0"], paved["cell_m"]
     for _ids, p1, p2, p3, slope, _nz, cent, area in iter_faces(tin):
         in_paved = False
-        if paved and paved.get("cells"):
-            e0, n0, cell = paved["e0"], paved["n0"], paved["cell_m"]
+        if paved_set is not None:
             ix = int(math.floor((cent[0] - e0) / cell))
             iy = int(math.floor((cent[1] - n0) / cell))
-            cells = {tuple(c) for c in paved["cells"]}
-            in_paved = (ix, iy) in cells
+            in_paved = (ix, iy) in paved_set
         if in_paved:
             paved_a += area
         else:
@@ -110,6 +100,26 @@ def _slope_bands(tin_path, paved=None):
             "unpaved_ha": round(unpaved_a / 10000.0, 4)}
 
 
+def _road_minus_grading(road_path, design_path, cell_m=1.0):
+    dgrid, e0, n0, _e1, _n1 = tin_raster_z(load_tin(design_path), cell_m=cell_m)
+    depths = []
+    for _ids, p1, p2, p3, _s, _nz, cent, _a in iter_faces(load_tin(road_path)):
+        ix = int(math.floor((cent[0] - e0) / cell_m))
+        iy = int(math.floor((cent[1] - n0) / cell_m))
+        zg = dgrid.get((ix, iy))
+        if zg is not None:
+            depths.append(cent[2] - zg)
+    depths.sort()
+    return {
+        "n": len(depths),
+        "min": round(depths[0], 3) if depths else None,
+        "max": round(depths[-1], 3) if depths else None,
+        "median": round(depths[len(depths) // 2], 3) if depths else None,
+        "method": "tin_raster_z",
+        "cell_m": cell_m,
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--surfaces", required=True)
@@ -117,11 +127,14 @@ def main(argv=None):
     ap.add_argument("--drainage", default=None)
     ap.add_argument("--presence", default=None)
     ap.add_argument("--balance-quote", default=None)
+    ap.add_argument("--site", default=None)
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
     def run():
         surf = read_json(a.surfaces)
+        params, _sp, _ = load_params(a.site)
+        cell_m = float(params.get("cell_m", 1.0))
         by_role = {s["role"]: s for s in surf.get("surfaces") or []}
         profile = {
             "tool": {"script": "earthworks_profile.py", "version": __version__},
@@ -139,43 +152,12 @@ def main(argv=None):
         existing = by_role.get("existing")
         road = by_role.get("road_top")
         if design and existing:
-            profile["cut_fill"] = _cut_fill(design["path"], existing["path"])
+            profile["cut_fill"] = _cut_fill_raster(design["path"], existing["path"], cell_m=cell_m)
         if design:
             profile["slope_bands"] = _slope_bands(design["path"], surf.get("paved_footprint"))
         if design and road:
-            # depth histogram road − grading at road centroids
-            depths = []
-            rt, dg = load_tin(road["path"]), load_tin(design["path"])
-            dpts = point_map(dg)
-            dfaces = dg.get("faces") or []
-
-            def dz_at(e, n):
-                best, best_d = None, 1e18
-                for face in dfaces:
-                    try:
-                        p1 = dpts[str(face[0])]; p2 = dpts[str(face[1])]; p3 = dpts[str(face[2])]
-                    except KeyError:
-                        continue
-                    cx = (p1[0] + p2[0] + p3[0]) / 3.0
-                    cy = (p1[1] + p2[1] + p3[1]) / 3.0
-                    d = (cx - e) ** 2 + (cy - n) ** 2
-                    if d < best_d:
-                        z = _bary_z(p1, p2, p3, e, n)
-                        if z is not None:
-                            best, best_d = z, d
-                return best
-
-            for _ids, p1, p2, p3, _s, _nz, cent, _a in iter_faces(rt):
-                zg = dz_at(cent[0], cent[1])
-                if zg is not None:
-                    depths.append(cent[2] - zg)
-            depths.sort()
-            profile["road_top_minus_grading"] = {
-                "n": len(depths),
-                "min": round(depths[0], 3) if depths else None,
-                "max": round(depths[-1], 3) if depths else None,
-                "median": round(depths[len(depths) // 2], 3) if depths else None,
-            }
+            profile["road_top_minus_grading"] = _road_minus_grading(
+                road["path"], design["path"], cell_m=cell_m)
         if a.slopes:
             s = read_json(a.slopes)
             profile["counts"]["ewk001_groups"] = len(s.get("ewk001_groups") or [])
@@ -184,6 +166,7 @@ def main(argv=None):
         if a.drainage:
             d = read_json(a.drainage)
             profile["counts"]["traps"] = len(d.get("traps") or [])
+            profile["counts"]["depressions"] = d.get("n_depressions")
         if a.presence:
             p = read_json(a.presence)
             profile["counts"]["presence_checks"] = len(p.get("checks") or [])

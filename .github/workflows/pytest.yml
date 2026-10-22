@@ -21,7 +21,7 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 556 = 534 baseline + skill 13 Rev L synthetic/real gates (TL1–TL10 + ADDENDUM). Bump when tests change.
-          python tools/check_suite.py --expect 556 --tests tests
+          # 563 = 534 baseline + skill 13 Rev L + S29 D1–D10 / TL8–TL9 asserts. Bump when tests change.
+          python tools/check_suite.py --expect 563 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
