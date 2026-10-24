@@ -9,8 +9,8 @@ description: >-
   cut / fill areas and volumes as information. Use for any LDIP grading,
   earthworks, slope or plot-drainage check.
 metadata:
-  version: "0.2.0"
-  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + Amendment L-b (format-independent slope grouping DL-19…DL-23) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rules_v7 (EWK inactive until rules_v8 after real 30 % tests — DL-17); no rules_v8 in this build"
+  version: "0.2.1"
+  spec: "AICC-BIM-SPC-0006 Rev L §4.14 + Amendment L-a (Earthworks at 30 %) + Amendment L-b (format-independent slope grouping DL-19…DL-23) + ADDENDUM (IFC probe); baseline plugin 0.10.0; rule values and state from the approved rulebook (rules_v8, SPC-0004 Rev K)."
 ---
 
 # Reviewing earthworks and geotech (skill 13)
@@ -26,9 +26,6 @@ result file.
 findings when carriers are present; MIDP-scheduled models missing → *Missing information* (DL-15).
 EWK-002 FoS, EWK-003 frontage / 0.30 m and EWK-101 stay at **60 % (DD)**. An earthworks profile
 (cut / fill, slope bands, inventory) is always written as information (no rule).
-
-**QRWN CRS** — R-Lb2 lifted (owner, 22 Oct 2026 21:17 Asia/Riyadh): EWK-002 and EWK-102 results for
-QRWN are valid for the CRS to Parsons. Do not withhold them. NMAR and NRJS are not covered by this lift.
 
 Packages: Python 3.11+, `jsonschema`, `shapely`, `numpy` (already used by skills 9 / 10). No new
 dependencies. No IfcOpenShell in the build.
