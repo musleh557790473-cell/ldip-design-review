@@ -467,6 +467,66 @@ def test_tj9_accessible_counts_and_determinism(tmp_path):
     assert json.dumps(a, sort_keys=True) == json.dumps(load(tmp_path / "b.json"), sort_keys=True)
 
 
+def test_g1_parking_layers_only_and_size_gate(tmp_path):
+    """G-1: parcel polygons on a non-parking layer are ignored; only stall-sized shapes on
+    parking_layers count. Oversized shapes on the parking layer fail the size gate.
+    Temporarily sets NRJS parking_layers (real site names are still [GAP])."""
+    params_path = SK10.parent / "references" / "road_class_params.json"
+    original = params_path.read_text(encoding="utf-8")
+    try:
+        # Surgical insert so we do not reformat the whole params file.
+        needle = '  "NRJS": {\n'
+        assert needle in original
+        idx = original.index(needle) + len(needle)
+        patched = original[:idx] + '   "parking_layers": [\n    "PARKING_STALL"\n   ],\n' + original[idx:]
+        json.loads(patched)  # validate before write
+        params_path.write_text(patched, encoding="utf-8")
+
+        # Parallel stall 2.5 × 6.0 m (15 m²) on PARKING_STALL.
+        # Parcel 5 × 5 m (25 m², stall-like area/dims) on plot layer — must be ignored.
+        # Oversized 2.5 × 8.0 m (20 m²) on PARKING_STALL — area ok, length fails size gate.
+        stall = box(660100, 2750000, 660106.0, 2750002.5)
+        parcel = box(660200, 2750000, 660205, 2750005)
+        oversized = box(660300, 2750000, 660308.0, 2750002.5)
+        plan = dwg(tmp_path, "PL_G1", texts=[],
+                   polys=[("PARKING_STALL", stall), ("MP-PLT-LIN", parcel), ("PARKING_STALL", oversized)])
+        write_net(tmp_path)
+        rc, out = run("check_parking.py", "--network", tmp_path / "network.json",
+                      "--class", tmp_path / "class.json", "--rules", rules_c3(tmp_path),
+                      "--stage", "60%", "--site", "NRJS",
+                      "--file", f"plan_geometry={plan}", "--out", tmp_path / "pk.json")
+        assert rc == 0, out
+        pk = load(tmp_path / "pk.json")
+        assert pk["bays"] == 1, f"expected only the stall, got {pk['bays']}: {pk}"
+        size_recs = [c for c in pk["checks"] + pk["passed"]
+                     if c.get("parameter") == "size" and isinstance(c.get("observed"), dict)]
+        assert size_recs, pk
+        assert all(abs(c["observed"]["width"] - 2.5) < 0.05 and abs(c["observed"]["length"] - 6.0) < 0.05
+                   for c in size_recs)
+    finally:
+        params_path.write_text(original, encoding="utf-8")
+
+
+def test_g1_no_parking_layers_not_run(tmp_path):
+    """G-1: site without parking_layers must not read plan polygons; ROD-059…062 not_run with GAP."""
+    # NRJS has no parking_layers in shipped params — stall-like polys on any layer must be ignored.
+    stall = box(660100, 2750000, 660106.0, 2750002.5)
+    parcel = box(660200, 2750000, 660205, 2750005)
+    plan = dwg(tmp_path, "PL_GAP", texts=[],
+               polys=[("PARKING_STALL", stall), ("MP-PLT-LIN", parcel)])
+    write_net(tmp_path)
+    rc, out = run("check_parking.py", "--network", tmp_path / "network.json",
+                  "--class", tmp_path / "class.json", "--rules", rules_c3(tmp_path),
+                  "--stage", "60%", "--site", "NRJS",
+                  "--file", f"plan_geometry={plan}", "--out", tmp_path / "pk.json")
+    assert rc == 0, out
+    pk = load(tmp_path / "pk.json")
+    assert pk["bays"] == 0
+    assert not [c for c in pk.get("checks", []) if c.get("result") == "fail"]
+    reasons = [n.get("reason", "") for n in pk.get("not_run", [])]
+    assert any("parking_layers" in r and "GAP" in r for r in reasons), reasons
+
+
 def test_build_candidates_reads_c3(tmp_path):
     """Skill version 0.10.0; C3 fail checks become findings."""
     write_net(tmp_path, {"c3_parking_areas": [
