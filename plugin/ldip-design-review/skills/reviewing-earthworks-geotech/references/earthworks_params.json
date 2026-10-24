@@ -1,5 +1,5 @@
 {
-  "note": "Detection thresholds and term lists for skill 13 (SPC-0006 Rev L DL-5…DL-8, L-a DL-18, L-b DL-19). NOT rule values — those come from skill 8 / rules_v7. Confirm thresholds on first 60 % package (R-L5).",
+  "note": "Detection thresholds and term lists for skill 13 (SPC-0006 Rev L DL-5…DL-8, L-a DL-18, L-b DL-19). NOT rule values — those come from skill 8 / the approved rulebook (rules_v8). Confirm thresholds on first 60 % package (R-L5).",
   "detection": {
     "ewk001_min_area_m2": 25.0,
     "ewk002_min_height_m": 0.5,
