@@ -39,8 +39,8 @@ Surface-derived and PDF FoS → *Probable*; absences → *Missing information*; 
 
 ## Limits
 
-- R-Lb2 lifted (owner, 22 Oct 2026 21:17 Asia/Riyadh): QRWN EWK-002 and EWK-102 results are valid for the CRS to Parsons. Do not withhold them. NMAR and NRJS are not covered by this lift. Grouping, thresholds and δz stay as Amendment L-b.
+- Grouping, thresholds and δz are as Amendment L-b.
 - No earthworks-balance rule (R-L4); volumes are information only.
 - "3H:1V preferred" is mentioned in finding text only (no parameter).
-- Rules stay inactive in rules_v7 after this build (DL-10); L-a DL-17 schedules rules_v8 after real 30 % tests — not in this PR.
+- Rule state comes from the approved rulebook via skill 8 (rules_v8: EWK-001 / 002 / 003 / 102 active, EWK-101 inactive — SPC-0004 Rev K). This skill does not hard-code rule state.
 - LibreDWG stays test-only (L-1).
