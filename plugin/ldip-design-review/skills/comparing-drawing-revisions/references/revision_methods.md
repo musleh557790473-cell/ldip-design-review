@@ -1,35 +1,28 @@
-# Revision comparison methods (skill 7)
+# Revision comparison methods (skill 7 — Rev B §4.4 + Rev M §4.15)
 
-## Pairing (M1)
+## Pairing (M1 / DM-2)
+
+Order **(a) → (b) → (c)**. No silent pairs.
 
 | Level | When | Status |
 |-------|------|--------|
-| `normalised` | Same key after stripping spaces, single-letter stray fields (e.g. `-G-`), and revision suffix | confirmed |
+| `normalised` | Same key after stripping spaces, single-letter stray fields (e.g. `-G-`), revision suffix | confirmed |
 | `number_map` | `--number-map` CSV `old,new` | confirmed, `renumbered` |
-| `title_sheet` | Unique match on title + sheet x of y | **proposed**, Probable |
+| `title_sheet` / `title_sheet_raster` / `raster_similarity` | Unique best score from title + sheet "x of y" + raster digest overlap | **proposed**, Probable |
 
-Unmatched previous / current rows are listed; nothing is paired silently.
+## PKG-010 (M2 / DM-3)
 
-## PKG-010 (M2)
+Load through skill 8. Method text orders codes within each series (`0A<0B`; `00<01`; `A0<A1`).
+Same-number pairs only for PKG-010. Renumbered + same revision + changed content → **Observation**.
 
-Load the rule through skill 8. The method text orders codes within each series
-(`0A<0B<…`; `00<01<…`; `A0<A1<…`). Same-number pairs produce a PKG-010 result
-(pass / fail / missing_information / incomparable / not_run).
+Revisions from file-name suffix and skill-2 title-block / revision-table text when supplied
+(`title_block_revision`).
 
-**DM-3:** a renumbered pair (map or proposed) that keeps the same revision while content changed
-is recorded as an **Observation**, not under PKG-010.
+## Change (M3 / DM-4)
 
-Revisions are read from the file-name suffix and from the skill-2 title-block `Revision:` field.
-(The full revision-history table is not yet read by skill 2.)
+Priority: **DWG entity hash → surface ΔZ / vertices → PDF raster** (fallback, Probable).
+Inventory: deliverables / formats added or removed. Raster params: `params.json` `[GAP — set from T7-R1]` (DM-9).
 
-## Entity / surface / raster / inventory (M3)
+## CRS closure (M4 / DM-5…DM-8)
 
-- DWG: SHA-256 of kind + layer_short + rounded vertices — **not** handle.
-- Surfaces: plan-position vertex match; ΔZ min / max / mean / rms.
-- PDF raster: sheet-coordinate regions; verification status **Probable** (DM-4); parameters in
-  `params.json` tagged `[GAP — set from T7-R1]` (DM-9).
-- Inventory: bases / formats added or removed between two `package.json` files.
-
-## CRS closure (M4)
-
-Report only (DM-7). See `row_types.md`.
+See `row_types.md`. Report only until rules_v9 PKG-014 (DM-7).

@@ -31,16 +31,20 @@ Packages: Python 3.11+, `openpyxl`, `jsonschema`.
 1. Get PKG-010 only through `applying-ldip-rulebook` (`get_rules.py --agent INT`). Do not hard-code
    revision order, rule values or rule state; the method text on the returned rule is the ordering
    contract.
-2. Pair by (a) normalised number, (b) `--number-map`, or (c) proposed title + sheet x of y. Never
-   invent a silent pair. Proposed pairs stay `status: proposed` at Probable.
-3. Diff DWG entities by **geometry hash**, never by AutoCAD handle (Rev B §4.4).
-4. PDF raster diffs are capped at **Probable** (DM-4). Raster parameters live in
-   `references/params.json` and stay tagged `[GAP — set from T7-R1]` until T7-R1 (DM-9).
+2. Pair in order (a) normalised number → (b) `--number-map` → (c) proposed from title + sheet
+   "x of y" + raster similarity (DM-2). Never invent a silent pair. Proposed pairs stay
+   `status: proposed` at Probable.
+3. Diff DWG entities by **geometry hash**, never by AutoCAD handle (Rev B §4.4). Change-source
+   priority: DWG → surface → PDF raster (DM-4).
+4. PDF raster diffs are capped at **Probable** (DM-4). Raster parameters (`dpi`, `threshold`,
+   `region_size`) live in `references/params.json` tagged `[GAP — set from T7-R1]` (DM-9).
 5. Renumbered pairs (map / proposed) that keep the same revision while content changed are an
    **Observation** (DM-3), not a PKG-010 hit.
-6. CRS closure: type rows L / D / G (`references/row_types.md`, DM-5); outcomes are only Addressed /
-   Not addressed / Cannot tell. **Never write Closed / Open** (DM-6). Flag `deferred_by_response`
-   (DM-8). G rows may list `supporting_refs`; that list never sets the outcome (DM-8).
+6. CRS closure (M4): type L / D / G (`references/row_types.md`, DM-5). L = changed/unchanged at the
+   location (`--rev-diff`); D = present/absent in N (`--package-n`); G = Cannot tell with optional
+   `supporting_refs` from skills 3 / 13 (DM-8). Outcomes only Addressed / Not addressed /
+   Cannot tell. **Never write Closed / Open** (DM-6). Flag `deferred_by_response`. Report only —
+   no findings until rules_v9 PKG-014 (DM-7).
 7. Write outputs only under the context / evidence folders. The submittal folders are read-only.
 
 ## Procedure (plan → validate → execute → verify)
@@ -57,8 +61,8 @@ Packages: Python 3.11+, `openpyxl`, `jsonschema`.
    `python "<SK>/diff_entities.py" --pairs "<EV>/pairs.json" --previous-package "<prev package>" --current-package "<CTX>/package.json" --out "<CTX>/rev_diff.json"`
    `python "<SK>/check_revision.py" --pairs "<EV>/pairs.json" --rules "<EV>/rules_INT_skill7.json" --entity-diff "<CTX>/rev_diff.json" --out "<CTX>/rev_diff.json"`
 4. **Execute — CRS closure (when a CRS workbook is in the prompt):**
-   `python "<SK>/check_closed_comments.py" --crs "<CRS.xlsx>" --out "<EV>/closure.json" --xlsx "<EV>/closure.xlsx"`
-   Reviewer type overrides: `--types <id,type.csv>`.
+   `python "<SK>/check_closed_comments.py" --crs "<CRS.xlsx>" --out "<EV>/closure.json" --xlsx "<EV>/closure.xlsx" --package-n "<CTX>/package.json" --rev-diff "<CTX>/rev_diff.json"`
+   Reviewer type overrides: `--types <id,type.csv>`. G supporting refs (skills 3 / 13): `--supporting-refs <id,ref.csv>`.
 5. **Verify** — confirm `rev_diff.json` / `closure.json` validate against
    `templates/rev_diff.schema.json` and `templates/closure.schema.json`. Report counts; do not turn
    closure rows into findings.

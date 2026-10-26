@@ -180,14 +180,14 @@ def crs_book(path, rows):
 
 # ------------------------------------------------------------------ T7-4
 def test_t7_4_crs_l_d_g_rows(tmp_path):
-    """T7-4: CRS with one L, one D and one G row; outcomes never Closed/Open."""
+    """T7-4: CRS with one L, one D and one G row; outcomes never Closed/Open (Rev M M4)."""
     crs = crs_book(tmp_path / "crs.xlsx", [
-        [1, "Sheet 01", "The drawing polyline on sheet 01 is wrong",
+        [1, "Sheet 01", "Polyline on sheet 01 at grid A1 is wrong",
          "Revised and corrected on the DWG", "A", "Closed"],
-        [2, "Spec §4.2", "Design criteria in the specification need update",
-         "Will not change the report", "B", "Open"],
-        [3, "General", "General note for information only",
-         "Noted", "C", "Open"],
+        [2, "Doc list", "Please provide the missing LandXML deliverable LDIP-RCRC-SAP-03-CC-CIV-MOD-00-90000",
+         "Will not change — no native file", "B", "Open"],
+        [3, "General", "For information: design intent is acceptable as guidance",
+         "Noted and accepted", "C", "Open"],
     ])
     out = tmp_path / "closure.json"
     xlsx = tmp_path / "closure.xlsx"
@@ -202,13 +202,13 @@ def test_t7_4_crs_l_d_g_rows(tmp_path):
     for r in doc["rows"]:
         assert r["outcome"] in ("Addressed", "Not addressed", "Cannot tell")
         assert r["outcome"] not in ("Closed", "Open")
-        assert "Closed" not in r["outcome"] and "Open" not in r["outcome"]
-    # G row may have supporting_refs; never drives outcome
+    # G → Cannot tell always (Rev M M4 / DM-8); supporting_refs never drive outcome
     g = next(r for r in doc["rows"] if r["row_type"] == "G")
     assert "supporting_refs" in g
-    assert g["outcome"] == "Cannot tell"  # "Noted" is not a clear address/reject
-    assert msg["Addressed"] == 1
-    # Schema
+    assert g["outcome"] == "Cannot tell"
+    # L/D without package/rev-diff: response fallback
+    assert next(r for r in doc["rows"] if r["no"] == "1")["outcome"] == "Addressed"
+    assert next(r for r in doc["rows"] if r["no"] == "2")["outcome"] == "Not addressed"
     schema = json.loads((TPL / "closure.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(doc)
     assert xlsx.is_file()
@@ -353,7 +353,7 @@ def test_rev_diff_schema_validates_pipeline(tmp_path):
 
 def test_types_override(tmp_path):
     crs = crs_book(tmp_path / "crs.xlsx", [
-        [1, "General", "General note", "Addressed in full", "A", "Closed"],
+        [1, "General", "For information only", "Addressed in full", "A", "Closed"],
     ])
     types = tmp_path / "types.csv"
     types.write_text("no,type\n1,L\n", encoding="utf-8")
@@ -362,6 +362,62 @@ def test_types_override(tmp_path):
     assert rc == 0, msg
     assert load(out)["rows"][0]["row_type"] == "L"
     assert load(out)["rows"][0]["outcome"] == "Addressed"
+
+
+def test_m1c_raster_similarity_proposed(tmp_path):
+    """Rev M M1(c): unique raster digest overlap can propose a Probable pair."""
+    prev = write(tmp_path / "prev.json", {"drawings": [
+        drawing("OLD-AA-BB-CC-DD-EE-DWG-00-10000-00", "00", "ALPHA", "01 OF 01",
+                pdf_raster={"digest": "same-sheet-digest"}),
+    ]})
+    curr = write(tmp_path / "curr.json", {"drawings": [
+        drawing("NEW-AA-BB-CC-DD-EE-DWG-00-20000-00", "00", "BETA", "02 OF 02",
+                pdf_raster={"digest": "same-sheet-digest"}),
+    ]})
+    pairs = tmp_path / "pairs.json"
+    rc, msg = run("match_revisions.py", "--previous", prev, "--current", curr, "--out", pairs)
+    assert rc == 0, msg
+    assert msg["proposed"] == 1
+    p = load(pairs)["pairs"][0]
+    assert p["status"] == "proposed"
+    assert p["match"] == "raster_similarity"
+    assert p["verification_status"] == "Probable"
+    assert "raster" in p["propose_parts"]
+
+
+def test_m4_d_present_absent_via_package(tmp_path):
+    """Rev M M4: D row present/absent against N package."""
+    pkg = write(tmp_path / "pkg.json", {
+        "sheet_register": [
+            {"base": "LDIP-RCRC-SAP-03-CC-CIV-MOD-00-90000", "formats_received": ["IFC"],
+             "numbers": {}, "revisions": {}, "carriers": {}, "files": {}},
+        ]
+    })
+    crs = crs_book(tmp_path / "crs.xlsx", [
+        [1, "Doc", "Please provide deliverable LDIP-RCRC-SAP-03-CC-CIV-MOD-00-90000",
+         "Submitted", "A", "Open"],
+        [2, "Doc", "Please provide missing LandXML LDIP-RCRC-SAP-03-CC-CIV-MOD-00-90099",
+         "Not yet", "B", "Open"],
+    ])
+    out = tmp_path / "closure.json"
+    rc, msg = run("check_closed_comments.py", "--crs", crs, "--out", out, "--package-n", pkg)
+    assert rc == 0, msg
+    rows = {r["no"]: r for r in load(out)["rows"]}
+    assert rows["1"]["row_type"] == "D" and rows["1"]["outcome"] == "Addressed"
+    assert rows["2"]["row_type"] == "D" and rows["2"]["outcome"] == "Not addressed"
+
+
+def test_m4_g_cannot_tell_even_if_response_claims_addressed(tmp_path):
+    """Rev M M4 / DM-8: G outcome is always Cannot tell."""
+    crs = crs_book(tmp_path / "crs.xlsx", [
+        [1, "G", "Design criteria adequacy — for information / guidance",
+         "Fully addressed and corrected", "A", "Closed"],
+    ])
+    out = tmp_path / "closure.json"
+    assert run("check_closed_comments.py", "--crs", crs, "--out", out)[0] == 0
+    row = load(out)["rows"][0]
+    assert row["row_type"] == "G"
+    assert row["outcome"] == "Cannot tell"
 
 
 def test_skill_layout_and_version():

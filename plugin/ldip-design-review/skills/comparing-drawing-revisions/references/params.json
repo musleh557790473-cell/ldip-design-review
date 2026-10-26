@@ -1,7 +1,10 @@
 {
   "raster": {
     "tag": "[GAP — set from T7-R1]",
-    "note": "DM-9: pixel tolerance, minimum region area and max region count are set from the first real raster pair (T7-R1). Until then raster diffs that have region digests still run, but parameters stay null.",
+    "note": "DM-9 / Rev M §4.15.5: dpi, threshold and region size are set from T7-R1 (P1 NMAR roads), then fixed. Until then raster diffs that already have region digests still run at Probable (DM-4).",
+    "dpi": null,
+    "threshold": null,
+    "region_size": null,
     "pixel_tolerance": null,
     "min_region_area_mm2": null,
     "max_regions": null,
@@ -10,5 +13,6 @@
   "geometry": {
     "coord_decimals": 3,
     "hash_uses_handle": false
-  }
+  },
+  "change_priority": ["dwg_entity_hash", "surface_delta_z", "pdf_raster"]
 }

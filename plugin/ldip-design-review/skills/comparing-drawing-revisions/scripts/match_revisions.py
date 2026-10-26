@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Pair drawings between a previous and a current submittal (skill 7 M1).
 
-Pairing levels (SPC-0006 Rev B §4.4; Rev M §4.15):
+Pairing levels (SPC-0006 Rev B §4.4; Rev M §4.15 DM-2 / M1):
   (a) normalised number — strip spaces, stray single-letter fields (e.g. -G-), revision suffix;
   (b) --number-map CSV (old,new) — renumbered pairs;
-  (c) proposed only — same title + sheet x of y → status proposed, verification Probable.
-Never silently invent a pair.
+  (c) proposed — title + sheet "x of y" + raster similarity, Probable; never silent.
 
 Usage:
   python match_revisions.py --previous <prev.json> --current <curr.json> --out <pairs.json>
@@ -145,35 +144,75 @@ def pair_drawings(previous, current, number_map=None):
             used_prev.add(p["id"])
             used_curr.add(c["id"])
 
-    # (c) proposed: title + sheet x of y (never silent)
-    by_ts_prev = {}
-    for p in previous:
-        if p["id"] in used_prev:
-            continue
-        if p["title_key"] and p["sheet_key"]:
-            by_ts_prev.setdefault((p["title_key"], p["sheet_key"]), []).append(p)
+    # (c) proposed: title + sheet "x of y" + raster similarity (DM-2 / M1). Never silent.
     for c in current:
         if c["id"] in used_curr:
             continue
-        if not (c["title_key"] and c["sheet_key"]):
+        scored = []
+        for p in previous:
+            if p["id"] in used_prev:
+                continue
+            score, parts = _propose_score(p, c)
+            if score > 0:
+                scored.append((score, parts, p))
+        if not scored:
             continue
-        cands = [p for p in by_ts_prev.get((c["title_key"], c["sheet_key"]), [])
-                 if p["id"] not in used_prev]
-        if len(cands) == 1:
-            p = cands[0]
-            pairs.append(_pair(p, c, "title_sheet", "proposed",
-                               renumbered=p["norm"] != c["norm"],
-                               verification_status="Probable"))
-            used_prev.add(p["id"])
-            used_curr.add(c["id"])
+        scored.sort(key=lambda x: -x[0])
+        best_score, best_parts, best_p = scored[0]
+        # Need at least one of title / sheet / raster; unique best score
+        if best_score < 1:
+            continue
+        if len(scored) > 1 and scored[1][0] == best_score:
+            continue  # ambiguous — leave unmatched for the reviewer
+        level = "title_sheet"
+        if "raster" in best_parts and not (("title" in best_parts) or ("sheet" in best_parts)):
+            level = "raster_similarity"
+        elif "raster" in best_parts:
+            level = "title_sheet_raster"
+        pairs.append(_pair(best_p, c, level, "proposed",
+                           renumbered=best_p["norm"] != c["norm"],
+                           verification_status="Probable",
+                           propose_parts=best_parts))
+        used_prev.add(best_p["id"])
+        used_curr.add(c["id"])
 
     unmatched_previous = [p for p in previous if p["id"] not in used_prev]
     unmatched_current = [c for c in current if c["id"] not in used_curr]
     return pairs, unmatched_previous, unmatched_current
 
 
-def _pair(prev, curr, level, status, renumbered=False, verification_status=None):
-    return {
+def _raster_digests(side):
+    rr = side.get("pdf_raster") or {}
+    digests = set()
+    if rr.get("digest"):
+        digests.add(str(rr["digest"]))
+    for r in rr.get("regions") or []:
+        if r.get("digest"):
+            digests.add(str(r["digest"]))
+    return digests
+
+
+def _propose_score(prev, curr):
+    """Score a proposed pair: title + sheet + raster overlap (Rev M M1(c))."""
+    parts = []
+    score = 0
+    if prev["title_key"] and curr["title_key"] and prev["title_key"] == curr["title_key"]:
+        score += 2
+        parts.append("title")
+    if prev["sheet_key"] and curr["sheet_key"] and prev["sheet_key"] == curr["sheet_key"]:
+        score += 2
+        parts.append("sheet")
+    pd, cd = _raster_digests(prev), _raster_digests(curr)
+    if pd and cd and (pd & cd):
+        score += 1
+        parts.append("raster")
+    # Title+sheet alone is enough (score 4); raster alone (score 1) is enough for a unique match.
+    # Require at least one signal.
+    return score, parts
+
+
+def _pair(prev, curr, level, status, renumbered=False, verification_status=None, propose_parts=None):
+    rec = {
         "previous": _pub(prev),
         "current": _pub(curr),
         "match": level,
@@ -182,6 +221,9 @@ def _pair(prev, curr, level, status, renumbered=False, verification_status=None)
                            or (prev["norm"] and curr["norm"] and prev["norm"] != curr["norm"])),
         "verification_status": verification_status if status == "proposed" else None,
     }
+    if propose_parts:
+        rec["propose_parts"] = list(propose_parts)
+    return rec
 
 
 def _pub(r):

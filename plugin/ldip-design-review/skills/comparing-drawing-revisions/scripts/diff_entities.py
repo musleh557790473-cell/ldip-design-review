@@ -312,6 +312,8 @@ def main(argv=None):
             "meta": {
                 **(existing.get("meta") or {}),
                 "raster_params_tag": (params.get("raster") or {}).get("tag"),
+                "change_priority": (params.get("change_priority")
+                                    or ["dwg_entity_hash", "surface_delta_z", "pdf_raster"]),
                 "skill": "comparing-drawing-revisions",
                 "skill_version": __version__,
             },
