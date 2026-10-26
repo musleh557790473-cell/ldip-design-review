@@ -31,20 +31,21 @@ Packages: Python 3.11+, `openpyxl`, `jsonschema`.
 1. Get PKG-010 only through `applying-ldip-rulebook` (`get_rules.py --agent INT`). Do not hard-code
    revision order, rule values or rule state; the method text on the returned rule is the ordering
    contract.
-2. Pair in order (a) normalised number → (b) `--number-map` → (c) proposed from title + sheet
-   "x of y" + raster similarity (DM-2). Never invent a silent pair. Proposed pairs stay
-   `status: proposed` at Probable.
+2. Pair in order (a) normalised number → (b) `--number-map` (fixed comma CSV) → (c) proposed PDF
+   raster MAD one-to-one assignment (DM-2 / R1). Never invent a silent pair. Proposed pairs stay
+   `status: proposed` at Probable; `weak` when margin < `weak_margin`.
 3. Diff DWG entities by **geometry hash**, never by AutoCAD handle (Rev B §4.4). Change-source
    priority: DWG → surface → PDF raster (DM-4).
-4. PDF raster diffs are capped at **Probable** (DM-4). Raster parameters (`dpi`, `threshold`,
-   `region_size`) live in `references/params.json` tagged `[GAP — set from T7-R1]` (DM-9).
-5. Renumbered pairs (map / proposed) that keep the same revision while content changed are an
-   **Observation** (DM-3), not a PKG-010 hit.
-6. CRS closure (M4): type L / D / G (`references/row_types.md`, DM-5). L = changed/unchanged at the
-   location (`--rev-diff`); D = present/absent in N (`--package-n`); G = Cannot tell with optional
-   `supporting_refs` from skills 3 / 13 (DM-8). Outcomes only Addressed / Not addressed /
-   Cannot tell. **Never write Closed / Open** (DM-6). Flag `deferred_by_response`. Report only —
-   no findings until rules_v9 PKG-014 (DM-7).
+4. PDF raster evidence is capped at **Probable** (DM-4). Raster params in `references/params.json`
+   are tagged `[PROPOSED — DM-9, from T7-R1 probe]` (R9): 25 dpi, 400×283, mask right 18 %,
+   weak_margin 1.5.
+5. Renumbered pairs that keep the same revision while content changed are an **Observation**
+   (DM-3), not a PKG-010 hit. When the file name has no revision, read the newest revision-table
+   row from PDF text (R3) and record `revision_source`.
+6. CRS closure (M4 / R4–R7): type L / D / G per `references/row_types.md`. L/D outcomes only from
+   `--rev-diff` / `--package-n` evidence — **never from the contractor response** (copied only).
+   Without evidence → Cannot tell. G → Cannot tell + optional `supporting_refs`. Integer `#` only;
+   stop at sign-off. Flag `deferred_by_response`. Report only — no findings until PKG-014 (DM-7).
 7. Write outputs only under the context / evidence folders. The submittal folders are read-only.
 
 ## Procedure (plan → validate → execute → verify)

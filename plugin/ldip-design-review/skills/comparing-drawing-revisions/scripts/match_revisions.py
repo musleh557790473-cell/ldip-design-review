@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Pair drawings between a previous and a current submittal (skill 7 M1).
 
-Pairing levels (SPC-0006 Rev B §4.4; Rev M §4.15 DM-2 / M1):
+Pairing levels (SPC-0006 Rev B §4.4; Rev M §4.15 DM-2 / M1; S31 R1 / R2):
   (a) normalised number — strip spaces, stray single-letter fields (e.g. -G-), revision suffix;
-  (b) --number-map CSV (old,new) — renumbered pairs;
-  (c) proposed — title + sheet "x of y" + raster similarity, Probable; never silent.
+  (b) --number-map CSV (old,new) — fixed comma dialect (R2);
+  (c) proposed — PDF raster MAD, one-to-one assignment, Probable; title+sheet when no PDFs.
+  No pair is assumed silently.
 
 Usage:
   python match_revisions.py --previous <prev.json> --current <curr.json> --out <pairs.json>
-       [--number-map <old,new.csv>]
+       [--number-map <old,new.csv>] [--params <params.json>]
+       [--resolve-base-previous <dir>] [--resolve-base-current <dir>]
 
-Each input JSON is either a skill-6 package.json (sheet_register) or a list of drawing records:
-  [{ "number", "revision", "title", "sheet", "path", "formats", ... }, ...]
-
-Exit: 0 done · 2 input error. No network, no shell calls.
+Exit: 0 done · 2 input error · 3 missing package. No network, no shell calls.
 """
 __version__ = "0.1.0"
 
@@ -24,63 +23,100 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rev_common import (  # noqa: E402
-    EXIT_INPUT, EXIT_OK, atomic_write_json, emit, fail, normalise_number, path_ok,
+    EXIT_DEP, EXIT_INPUT, EXIT_OK, atomic_write_json, emit, fail, normalise_number, path_ok,
     read_json, revision_from_number, sheet_key, title_key,
 )
+from raster_match import load_raster_params, pair_unmatched_by_raster  # noqa: E402
 
 
-def load_drawings(path):
+def _pdf_from_files(files):
+    if isinstance(files, list):
+        for f in files:
+            p = (f.get("path") if isinstance(f, dict) else None) or ""
+            if str(p).lower().endswith(".pdf"):
+                return p
+    elif isinstance(files, dict):
+        return files.get("pdf") or files.get("PDF")
+    return None
+
+
+def load_drawings(path, resolve_base=None):
     raw = read_json(path)
+    base = Path(resolve_base) if resolve_base else None
     if isinstance(raw, list):
-        return [_norm_rec(r, i) for i, r in enumerate(raw)]
+        return [_norm_rec(r, i, base) for i, r in enumerate(raw)]
     if isinstance(raw, dict) and "sheet_register" in raw:
         out = []
         for i, row in enumerate(raw["sheet_register"]):
             nums = row.get("numbers") or {}
             revs = row.get("revisions") or {}
             number = (nums.get("file_name") or nums.get("dwg") or nums.get("pdf")
+                      or (nums[0] if isinstance(nums, list) and nums else None)
                       or row.get("base") or "")
+            if isinstance(number, list):
+                number = number[0] if number else ""
             revision = (revs.get("file_name") or revs.get("dwg") or revs.get("pdf")
                         or revision_from_number(number))
-            title = None
-            sheet = None
+            title = sheet = None
             for car in ("pdf", "dwg", "file_name"):
                 for c in (row.get("carriers") or {}).get(car) or []:
                     title = title or c.get("title")
                     sheet = sheet or c.get("sheet")
+            pdf_path = _pdf_from_files(row.get("files"))
             out.append(_norm_rec({
                 "id": row.get("base") or f"row-{i}",
                 "number": number,
                 "revision": revision,
                 "title": title,
                 "sheet": sheet,
-                "formats": row.get("formats_received") or list((row.get("files") or {}).keys()),
-                "path": ((row.get("files") or {}).get("dwg") or (row.get("files") or {}).get("pdf")
-                         or row.get("base")),
+                "formats": row.get("formats_received") or [],
+                "path": pdf_path or row.get("base"),
+                "pdf": pdf_path,
                 "base": row.get("base"),
-            }, i))
+                "title_block_revision": None,
+            }, i, base))
         return out
     if isinstance(raw, dict) and "drawings" in raw:
-        return [_norm_rec(r, i) for i, r in enumerate(raw["drawings"])]
+        return [_norm_rec(r, i, base) for i, r in enumerate(raw["drawings"])]
     raise ValueError(f"{path} is not a drawing list or package.json")
 
 
-def _norm_rec(r, i):
+def _resolve(p, base):
+    if not p:
+        return None
+    path = Path(p)
+    if path.is_file():
+        return str(path)
+    if base:
+        cand = base / p
+        if cand.is_file():
+            return str(cand)
+        cand2 = base / Path(p).name
+        if cand2.is_file():
+            return str(cand2)
+    return str(path)
+
+
+def _norm_rec(r, i, resolve_base=None):
     number = r.get("number") or ""
+    pdf = r.get("pdf") or (r.get("path") if str(r.get("path") or "").lower().endswith(".pdf") else None)
+    pdf = _resolve(pdf, resolve_base)
     return {
-        "id": r.get("id") or r.get("path") or f"item-{i}",
+        "id": r.get("id") or r.get("path") or r.get("pdf") or f"item-{i}",
         "number": str(number).strip(),
         "revision": (r.get("revision") or revision_from_number(number) or None),
         "title": r.get("title"),
         "sheet": r.get("sheet"),
         "formats": r.get("formats") or [],
-        "path": r.get("path"),
+        "path": _resolve(r.get("path"), resolve_base) or pdf,
+        "pdf": pdf,
         "base": r.get("base"),
         "ingestion": r.get("ingestion"),
         "linework": r.get("linework"),
         "surface": r.get("surface"),
         "pdf_raster": r.get("pdf_raster"),
         "title_block_revision": r.get("title_block_revision"),
+        "revision_source": r.get("revision_source"),
         "norm": normalise_number(number),
         "title_key": title_key(r.get("title")),
         "sheet_key": sheet_key(r.get("sheet")),
@@ -88,13 +124,14 @@ def _norm_rec(r, i):
 
 
 def load_number_map(path):
-    """CSV with columns old,new (header optional)."""
+    """CSV with columns old,new (header optional). Fixed comma dialect (R2)."""
     mapping = {}
-    with open(path, newline="", encoding="utf-8") as fh:
-        sample = fh.read(256)
-        fh.seek(0)
-        dialect = csv.Sniffer().sniff(sample) if sample.strip() else csv.excel
-        rows = list(csv.reader(fh, dialect))
+    try:
+        with open(path, newline="", encoding="utf-8") as fh:
+            # Fixed comma dialect (R2). strict=True so malformed quotes → exit 2, not a silent mis-parse.
+            rows = list(csv.reader(fh, delimiter=",", quotechar='"', strict=True))
+    except csv.Error as exc:
+        raise ValueError(f"number-map CSV error: {exc}") from exc
     if not rows:
         return mapping
     start = 0
@@ -106,12 +143,13 @@ def load_number_map(path):
         old, new = normalise_number(row[0]), normalise_number(row[1])
         if old and new:
             mapping[old] = new
-            mapping[new] = old  # bidirectional lookup aid
+            mapping[new] = old
     return mapping
 
 
-def pair_drawings(previous, current, number_map=None):
+def pair_drawings(previous, current, number_map=None, params=None):
     number_map = number_map or {}
+    params = params or load_raster_params()
     used_prev, used_curr = set(), set()
     pairs = []
 
@@ -144,36 +182,51 @@ def pair_drawings(previous, current, number_map=None):
             used_prev.add(p["id"])
             used_curr.add(c["id"])
 
-    # (c) proposed: title + sheet "x of y" + raster similarity (DM-2 / M1). Never silent.
+    # (c1) title + sheet when unique (synthetic / when text exists) — still proposed
+    by_ts_prev = {}
+    for p in previous:
+        if p["id"] in used_prev:
+            continue
+        if p["title_key"] and p["sheet_key"]:
+            by_ts_prev.setdefault((p["title_key"], p["sheet_key"]), []).append(p)
     for c in current:
         if c["id"] in used_curr:
             continue
-        scored = []
-        for p in previous:
-            if p["id"] in used_prev:
-                continue
-            score, parts = _propose_score(p, c)
-            if score > 0:
-                scored.append((score, parts, p))
-        if not scored:
+        if not (c["title_key"] and c["sheet_key"]):
             continue
-        scored.sort(key=lambda x: -x[0])
-        best_score, best_parts, best_p = scored[0]
-        # Need at least one of title / sheet / raster; unique best score
-        if best_score < 1:
+        cands = [p for p in by_ts_prev.get((c["title_key"], c["sheet_key"]), [])
+                 if p["id"] not in used_prev]
+        if len(cands) == 1:
+            p = cands[0]
+            pairs.append(_pair(p, c, "title_sheet", "proposed",
+                               renumbered=p["norm"] != c["norm"],
+                               verification_status="Probable",
+                               propose_parts=["title", "sheet"]))
+            used_prev.add(p["id"])
+            used_curr.add(c["id"])
+
+    # (c2) PDF raster MAD one-to-one on remaining (R1) — primary for real SHX drawings
+    rem_prev = [p for p in previous if p["id"] not in used_prev]
+    rem_curr = [c for c in current if c["id"] not in used_curr]
+
+    def get_pdf(side):
+        return side.get("pdf") or (side.get("path") if str(side.get("path") or "").lower().endswith(".pdf") else None)
+
+    try:
+        raster_pairs = pair_unmatched_by_raster(rem_prev, rem_curr, params, get_pdf)
+    except ImportError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    for rp in raster_pairs:
+        p, c = rp["previous"], rp["current"]
+        if p["id"] in used_prev or c["id"] in used_curr:
             continue
-        if len(scored) > 1 and scored[1][0] == best_score:
-            continue  # ambiguous — leave unmatched for the reviewer
-        level = "title_sheet"
-        if "raster" in best_parts and not (("title" in best_parts) or ("sheet" in best_parts)):
-            level = "raster_similarity"
-        elif "raster" in best_parts:
-            level = "title_sheet_raster"
-        pairs.append(_pair(best_p, c, level, "proposed",
-                           renumbered=best_p["norm"] != c["norm"],
+        pairs.append(_pair(p, c, "raster_mad", "proposed",
+                           renumbered=p["norm"] != c["norm"],
                            verification_status="Probable",
-                           propose_parts=best_parts))
-        used_prev.add(best_p["id"])
+                           propose_parts=["raster_mad"],
+                           mad=rp["mad"], margin=rp["margin"], weak=rp["weak"]))
+        used_prev.add(p["id"])
         used_curr.add(c["id"])
 
     unmatched_previous = [p for p in previous if p["id"] not in used_prev]
@@ -181,37 +234,8 @@ def pair_drawings(previous, current, number_map=None):
     return pairs, unmatched_previous, unmatched_current
 
 
-def _raster_digests(side):
-    rr = side.get("pdf_raster") or {}
-    digests = set()
-    if rr.get("digest"):
-        digests.add(str(rr["digest"]))
-    for r in rr.get("regions") or []:
-        if r.get("digest"):
-            digests.add(str(r["digest"]))
-    return digests
-
-
-def _propose_score(prev, curr):
-    """Score a proposed pair: title + sheet + raster overlap (Rev M M1(c))."""
-    parts = []
-    score = 0
-    if prev["title_key"] and curr["title_key"] and prev["title_key"] == curr["title_key"]:
-        score += 2
-        parts.append("title")
-    if prev["sheet_key"] and curr["sheet_key"] and prev["sheet_key"] == curr["sheet_key"]:
-        score += 2
-        parts.append("sheet")
-    pd, cd = _raster_digests(prev), _raster_digests(curr)
-    if pd and cd and (pd & cd):
-        score += 1
-        parts.append("raster")
-    # Title+sheet alone is enough (score 4); raster alone (score 1) is enough for a unique match.
-    # Require at least one signal.
-    return score, parts
-
-
-def _pair(prev, curr, level, status, renumbered=False, verification_status=None, propose_parts=None):
+def _pair(prev, curr, level, status, renumbered=False, verification_status=None,
+          propose_parts=None, mad=None, margin=None, weak=None):
     rec = {
         "previous": _pub(prev),
         "current": _pub(curr),
@@ -223,13 +247,20 @@ def _pair(prev, curr, level, status, renumbered=False, verification_status=None,
     }
     if propose_parts:
         rec["propose_parts"] = list(propose_parts)
+    if mad is not None:
+        rec["mad"] = round(float(mad), 4)
+    if margin is not None:
+        rec["margin"] = margin
+    if weak is not None:
+        rec["weak"] = bool(weak)
     return rec
 
 
 def _pub(r):
     return {k: r.get(k) for k in (
-        "id", "number", "revision", "title", "sheet", "formats", "path", "base",
-        "ingestion", "linework", "surface", "pdf_raster", "title_block_revision", "norm",
+        "id", "number", "revision", "title", "sheet", "formats", "path", "pdf", "base",
+        "ingestion", "linework", "surface", "pdf_raster", "title_block_revision",
+        "revision_source", "norm",
     )}
 
 
@@ -239,17 +270,26 @@ def main(argv=None):
     ap.add_argument("--current", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--number-map")
+    ap.add_argument("--params")
+    ap.add_argument("--resolve-base-previous")
+    ap.add_argument("--resolve-base-current")
     a = ap.parse_args(argv)
     try:
         for p in (a.previous, a.current, a.out):
             if not path_ok(p):
                 return fail(EXIT_INPUT, f"path longer than 250 characters: {p}")
-        if a.number_map and not path_ok(a.number_map):
-            return fail(EXIT_INPUT, f"path longer than 250 characters: {a.number_map}")
-        previous = load_drawings(a.previous)
-        current = load_drawings(a.current)
-        nmap = load_number_map(a.number_map) if a.number_map else {}
-        pairs, u_prev, u_curr = pair_drawings(previous, current, nmap)
+        for p in (a.number_map, a.params, a.resolve_base_previous, a.resolve_base_current):
+            if p and not path_ok(p):
+                return fail(EXIT_INPUT, f"path longer than 250 characters: {p}")
+        params = load_raster_params(a.params)
+        previous = load_drawings(a.previous, a.resolve_base_previous)
+        current = load_drawings(a.current, a.resolve_base_current)
+        try:
+            nmap = load_number_map(a.number_map) if a.number_map else {}
+        except ValueError as exc:
+            return fail(EXIT_INPUT, str(exc))
+        pairs, u_prev, u_curr = pair_drawings(previous, current, nmap, params)
+        weak_n = sum(1 for p in pairs if p.get("weak"))
         result = {
             "pairs_version": "1.0",
             "previous_count": len(previous),
@@ -262,13 +302,18 @@ def main(argv=None):
                 "normalised": sum(1 for p in pairs if p["match"] == "normalised"),
                 "number_map": sum(1 for p in pairs if p["match"] == "number_map"),
                 "proposed": sum(1 for p in pairs if p["status"] == "proposed"),
+                "raster_mad": sum(1 for p in pairs if p["match"] == "raster_mad"),
+                "weak": weak_n,
                 "unmatched_previous": len(u_prev),
                 "unmatched_current": len(u_curr),
             },
+            "meta": {"raster_params_tag": params["tag"], "skill_version": __version__},
         }
         atomic_write_json(a.out, result)
         emit({"status": "ok", "out": str(a.out), **result["counts"]})
         return EXIT_OK
+    except RuntimeError as exc:
+        return fail(EXIT_DEP, str(exc))
     except ValueError as exc:
         return fail(EXIT_INPUT, str(exc))
     except OSError as exc:

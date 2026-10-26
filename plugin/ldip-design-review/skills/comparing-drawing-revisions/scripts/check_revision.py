@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""PKG-010 revision advance check for paired drawings (skill 7 M2).
+"""PKG-010 revision advance check for paired drawings (skill 7 M2; S31 R3).
 
-Reads revision from the file name and from the PDF title-block revision field (skill 2 text).
-Orders codes per the PKG-010 method text returned by skill 8 get_rules.py — never hard-codes
-rule values or rule state.
+Reads revision from: title_block_revision → file-name suffix → PDF revision table text (R3).
+Orders codes per the PKG-010 method text from skill 8 get_rules.py — never hard-codes rule
+values or rule state.
 
 Same-number pairs → PKG-010 result.
-Renumbered pairs (number_map / proposed) with the same revision and changed content → Observation
-(DM-3), not a PKG-010 hit.
+Renumbered pairs (map / proposed / raster) with the same revision and changed content →
+Observation (DM-3), not a PKG-010 hit.
 
 Usage:
   python check_revision.py --pairs <pairs.json> --rules <rules_INT.json> --out <rev_diff.json>
@@ -26,10 +26,39 @@ from rev_common import (  # noqa: E402
     EXIT_INPUT, EXIT_OK, atomic_write_json, compare_revisions, emit, fail, load_rules,
     path_ok, read_json, revision_from_number, rule_pkg010,
 )
+from revision_table import revision_from_pdf_text  # noqa: E402
+
+
+def enrich_revision(side):
+    """Fill revision + revision_source on a pair side (mutates a copy)."""
+    s = dict(side)
+    if s.get("title_block_revision"):
+        s["revision"] = s["title_block_revision"]
+        s["revision_source"] = s.get("revision_source") or "title_block"
+        return s
+    fn = revision_from_number(s.get("number"))
+    if fn:
+        s["revision"] = s.get("revision") or fn
+        s["revision_source"] = s.get("revision_source") or "file_name"
+        return s
+    if s.get("revision"):
+        s["revision_source"] = s.get("revision_source") or "explicit"
+        return s
+    # R3: PDF revision table text
+    pdf = s.get("pdf") or (s.get("path") if str(s.get("path") or "").lower().endswith(".pdf") else None)
+    if pdf and Path(pdf).is_file():
+        try:
+            code, src = revision_from_pdf_text(pdf)
+        except RuntimeError:
+            code, src = None, None
+        if code:
+            s["revision"] = code
+            s["revision_source"] = src or "revision_table"
+            s["title_block_revision"] = code
+    return s
 
 
 def rev_of(side):
-    """Prefer title-block revision, then explicit revision, then file-name suffix."""
     return (side.get("title_block_revision")
             or side.get("revision")
             or revision_from_number(side.get("number"))
@@ -51,24 +80,36 @@ def content_changed_set(args, pairs):
                     changed.add(str(d["pair_index"]))
                 if d.get("pair_id"):
                     changed.add(str(d["pair_id"]))
-        for d in ed.get("inventory_diff", {}).get("added") or []:
+        for d in ed.get("raster_diffs") or []:
+            if d.get("changed"):
+                if d.get("pair_index") is not None:
+                    changed.add(str(d["pair_index"]))
+        for d in (ed.get("inventory_diff") or {}).get("deliverables_added") or []:
             changed.add("inventory")
-    # Infer from pairs that carry an explicit flag
     for i, p in enumerate(pairs):
         if p.get("content_changed"):
             changed.add(str(i))
             changed.add(str(p.get("id") or ""))
+        # Raster MAD > 0 implies content differs (R8: take change from raster, not injected)
+        if (p.get("mad") or 0) > 0.5:
+            changed.add(str(i))
+        if p.get("weak"):
+            changed.add(str(i))
     return changed
 
 
 def check_pair(pair, index, rule, method, changed_ids):
-    prev, curr = pair["previous"], pair["current"]
+    prev = enrich_revision(pair["previous"])
+    curr = enrich_revision(pair["current"])
+    # persist enrichment onto the pair for rev_diff output
+    pair["previous"] = prev
+    pair["current"] = curr
     old_r, new_r = rev_of(prev), rev_of(curr)
     comparison = compare_revisions(old_r, new_r, method)
-    renumbered = bool(pair.get("renumbered") or pair.get("match") in ("number_map",) 
-                      or (pair.get("match") == "title_sheet" and pair.get("renumbered")))
-    if pair.get("match") == "number_map":
-        renumbered = True
+    renumbered = bool(pair.get("renumbered") or pair.get("match") == "number_map" or (
+        pair.get("match") in ("raster_mad", "title_sheet", "title_sheet_raster")
+        and (prev.get("norm") or "") != (curr.get("norm") or "")
+    ))
     pair_id = pair.get("id") or f"pair-{index}"
     content_changed = (
         str(index) in changed_ids
@@ -87,6 +128,8 @@ def check_pair(pair, index, rule, method, changed_ids):
             "renumbered": True,
             "previous_revision": old_r,
             "current_revision": new_r,
+            "previous_revision_source": prev.get("revision_source"),
+            "current_revision_source": curr.get("revision_source"),
             "comparison": comparison,
             "content_changed": True,
             "rule_id": None,
@@ -105,6 +148,8 @@ def check_pair(pair, index, rule, method, changed_ids):
             "renumbered": renumbered,
             "previous_revision": old_r,
             "current_revision": new_r,
+            "previous_revision_source": prev.get("revision_source"),
+            "current_revision_source": curr.get("revision_source"),
             "comparison": comparison,
             "content_changed": content_changed,
             "rule_id": "PKG-010",
@@ -125,7 +170,6 @@ def check_pair(pair, index, rule, method, changed_ids):
 
     default_status = (rule.get("default_status") or {}).get("script_output", "Confirmed")
     cap = rule.get("cap") or "Confirmed"
-    # Cap status to rule cap
     status = default_status
     rank = {"Confirmed": 3, "Missing information": 3, "Probable": 2, "Not auto-verifiable": 1}
     if rank.get(status, 0) > rank.get(cap, 3):
@@ -140,6 +184,8 @@ def check_pair(pair, index, rule, method, changed_ids):
         "renumbered": renumbered,
         "previous_revision": old_r,
         "current_revision": new_r,
+        "previous_revision_source": prev.get("revision_source"),
+        "current_revision_source": curr.get("revision_source"),
         "filename_revision": revision_from_number(curr.get("number")),
         "title_block_revision": curr.get("title_block_revision"),
         "comparison": comparison,
@@ -179,7 +225,6 @@ def main(argv=None):
         observations = [c for c in checks if c.get("result") == "observation"]
         pkg = [c for c in checks if c.get("rule_id") == "PKG-010" and c.get("result") != "observation"]
 
-        # Merge into existing rev_diff if present
         existing = {}
         out_path = Path(a.out)
         if out_path.is_file():
@@ -192,7 +237,7 @@ def main(argv=None):
             "rev_diff_version": existing.get("rev_diff_version") or "1.0",
             "previous_submittal": a.previous_submittal or existing.get("previous_submittal"),
             "current_submittal": a.current_submittal or existing.get("current_submittal"),
-            "pairs": existing.get("pairs") or pairs,
+            "pairs": pairs,
             "unmatched_previous": existing.get("unmatched_previous") or pairs_doc.get("unmatched_previous"),
             "unmatched_current": existing.get("unmatched_current") or pairs_doc.get("unmatched_current"),
             "revision_checks": checks,
