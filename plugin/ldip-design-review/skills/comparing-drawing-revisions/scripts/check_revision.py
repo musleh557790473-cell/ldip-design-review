@@ -55,6 +55,8 @@ def enrich_revision(side):
             s["revision"] = code
             s["revision_source"] = src or "revision_table"
             s["title_block_revision"] = code
+        elif src == "not_read":
+            s["revision_source"] = s.get("revision_source") or "not_read"
     return s
 
 
@@ -119,39 +121,46 @@ def check_pair(pair, index, rule, method, changed_ids):
         or pair.get("content_changed") is True
     )
 
-    # DM-3: renumbered + same revision + changed content → Observation (not PKG-010)
-    if renumbered and comparison == "same" and content_changed:
+    base = {
+        "pair_index": index,
+        "pair_id": pair_id,
+        "match": pair.get("match"),
+        "renumbered": renumbered,
+        "previous_revision": old_r,
+        "current_revision": new_r,
+        "previous_revision_source": prev.get("revision_source"),
+        "current_revision_source": curr.get("revision_source"),
+        "filename_revision": revision_from_number(curr.get("number")),
+        "title_block_revision": curr.get("title_block_revision"),
+        "comparison": comparison,
+        "content_changed": content_changed,
+    }
+
+    # R3b / DM-3: PKG-010 applies to **same-number pairs only**. Renumbered (map / proposed)
+    # never yields PKG-010 pass/fail — observation when same rev + changed content, else info.
+    if renumbered:
+        if comparison == "same" and content_changed:
+            return {
+                **base,
+                "rule_id": None,
+                "result": "observation",
+                "severity": "Observation",
+                "status": "Confirmed",
+                "reason": "Renumbered pair keeps the same revision while content changed (DM-3 / R3b); "
+                          "not scored under PKG-010",
+            }
         return {
-            "pair_index": index,
-            "pair_id": pair_id,
-            "match": pair.get("match"),
-            "renumbered": True,
-            "previous_revision": old_r,
-            "current_revision": new_r,
-            "previous_revision_source": prev.get("revision_source"),
-            "current_revision_source": curr.get("revision_source"),
-            "comparison": comparison,
-            "content_changed": True,
+            **base,
             "rule_id": None,
-            "result": "observation",
-            "severity": "Observation",
-            "status": "Confirmed",
-            "reason": "Renumbered pair keeps the same revision while content changed (DM-3); "
-                      "not scored under PKG-010",
+            "result": "info",
+            "severity": None,
+            "status": None,
+            "reason": "Renumbered pair — PKG-010 applies to same-number pairs only (DM-3 / R3b)",
         }
 
     if rule is None:
         return {
-            "pair_index": index,
-            "pair_id": pair_id,
-            "match": pair.get("match"),
-            "renumbered": renumbered,
-            "previous_revision": old_r,
-            "current_revision": new_r,
-            "previous_revision_source": prev.get("revision_source"),
-            "current_revision_source": curr.get("revision_source"),
-            "comparison": comparison,
-            "content_changed": content_changed,
+            **base,
             "rule_id": "PKG-010",
             "result": "not_run",
             "reason": "PKG-010 not returned by get_rules.py (inactive or absent)",
@@ -178,18 +187,7 @@ def check_pair(pair, index, rule, method, changed_ids):
         status = "Missing information" if cap == "Confirmed" else "Probable"
 
     return {
-        "pair_index": index,
-        "pair_id": pair_id,
-        "match": pair.get("match"),
-        "renumbered": renumbered,
-        "previous_revision": old_r,
-        "current_revision": new_r,
-        "previous_revision_source": prev.get("revision_source"),
-        "current_revision_source": curr.get("revision_source"),
-        "filename_revision": revision_from_number(curr.get("number")),
-        "title_block_revision": curr.get("title_block_revision"),
-        "comparison": comparison,
-        "content_changed": content_changed,
+        **base,
         "rule_id": "PKG-010",
         "result": result,
         "severity": rule.get("severity_default") if result == "fail" else None,
@@ -223,7 +221,7 @@ def main(argv=None):
 
         checks = [check_pair(p, i, rule, method, changed) for i, p in enumerate(pairs)]
         observations = [c for c in checks if c.get("result") == "observation"]
-        pkg = [c for c in checks if c.get("rule_id") == "PKG-010" and c.get("result") != "observation"]
+        pkg = [c for c in checks if c.get("rule_id") == "PKG-010"]
 
         existing = {}
         out_path = Path(a.out)
@@ -252,6 +250,7 @@ def main(argv=None):
                 "pkg010_fail": sum(1 for c in pkg if c.get("result") == "fail"),
                 "pkg010_pass": sum(1 for c in pkg if c.get("result") == "pass"),
                 "observations_dm3": len(observations),
+                "renumbered_info": sum(1 for c in checks if c.get("result") == "info"),
                 "pkg010_not_run": sum(1 for c in pkg if c.get("result") == "not_run"),
             },
             "meta": {

@@ -13,9 +13,14 @@ Order **(a) → (b) → (c)**. No silent pairs.
 
 Raster params: `references/params.json` tagged `[PROPOSED — DM-9, from T7-R1 probe]` (R9): 25 dpi, 400×283, mask 18 %, weak_margin 1.5.
 
-## PKG-010 (M2 / DM-3 / R3)
+## PKG-010 (M2 / DM-3 / R3 / R3b)
 
-Load through skill 8. Revision sources (recorded as `revision_source`): `title_block` → `file_name` → **`revision_table`** (newest row from PDF text via pdfplumber). Same-number → PKG-010. Renumbered + same revision + content changed (incl. MAD > 0.5) → **Observation**.
+Load through skill 8. Revision from the **revision table only** (crop title-block strip →
+`extract_words`; headers Revision / Description / Date; newest by date else nearest header;
+reject `%` / `SHEET-nn` / `nn OF nn`). Source `revision_table` or `not_read`.
+
+**Same-number pairs only** → PKG-010 pass/fail. Renumbered (map / proposed): same rev + changed
+content → `observation`; otherwise → `info`. Never PKG-010 pass/fail on renumbered pairs (R3b).
 
 ## Change (M3 / DM-4)
 

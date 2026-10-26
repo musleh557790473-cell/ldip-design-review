@@ -15,9 +15,9 @@ alone do **not** make a row L.
 
 ## D — deliverable / data request
 
-**Request verb** (submit / provide / furnish / supply / include / attach) **plus** a **deliverable
-noun** (report, survey, surface, sections, spot levels / elevations, quantities, drawings, package,
-details, LandXML, IFC model, …).
+**Request verb** (submit / resubmit / provide / furnish / supply / include / attach) **plus** a
+**deliverable noun** (report, survey, surface, sections, spot levels / elevations, quantities,
+drawings, package, details, LandXML, IFC model, …).
 
 Bare “IFC”, “model”, or “package” without a request verb does **not** make a row D.
 

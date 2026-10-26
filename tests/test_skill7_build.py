@@ -100,6 +100,41 @@ def make_pdf(path, grey_level=200, text="REV 00 CONCEPT DESIGN SEPT. 2026"):
     return path
 
 
+def make_rev_table_pdf(path, rows, grey_level=220):
+    """PDF with a Revision/Description/Date table in the right title-block strip (R3).
+
+    Columns stay inside the A4 media box so a ~32 % right-edge crop still sees Date.
+    """
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    path = Path(path)
+    w, h = A4
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFillGray(grey_level / 255.0)
+    c.rect(0, 0, w, h, fill=1, stroke=0)
+    c.setFillGray(0)
+    # Right strip (~32 %): Revision | Description | Date — all within page width
+    x0 = w * 0.68
+    x_desc = x0 + 48
+    x_date = min(w - 55.0, x0 + 155.0)
+    y = h - 60
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(x0, y, "Revision")
+    c.drawString(x_desc, y, "Description")
+    c.drawString(x_date, y, "Date")
+    c.setFont("Helvetica", 9)
+    for code, desc, date in rows:
+        y -= 14
+        # Keep description short so it does not collide with the Date column
+        c.drawString(x0, y, code)
+        c.drawString(x_desc, y, (desc or "")[:18])
+        c.drawString(x_date, y, date)
+    # Decoy tokens that must NOT be read as revision (SHEET / OF / 30%)
+    c.drawString(40, h - 40, "SHEET-01  01 OF 05  30% CONCEPT")
+    c.save()
+    return path
+
+
 # ------------------------------------------------------------------ T7-1
 def test_t7_1_same_number_moved_polyline(tmp_path):
     prev = write(tmp_path / "prev.json", {"drawings": [
@@ -167,8 +202,11 @@ def test_t7_3_renumbered_map_observation(tmp_path):
     rc, msg = run("check_revision.py", "--pairs", pairs, "--rules", pkg010_rules(tmp_path),
                   "--content-changed", "0", "--out", out)
     assert rc == 0, msg
-    assert load(out)["revision_checks"][0]["result"] == "observation"
+    chk = load(out)["revision_checks"][0]
+    assert chk["result"] == "observation"
+    assert chk.get("rule_id") is None  # R3b: never PKG-010 on renumbered
     assert load(out)["counts"]["observations_dm3"] == 1
+    assert load(out)["counts"]["pkg010_fail"] == 0
 
 
 # ------------------------------------------------------------------ T7-4 (R4 / R5)
@@ -347,20 +385,55 @@ def test_r1_assign_unit_margin():
 
 
 # ------------------------------------------------------------------ R3 revision table
-def test_r3_revision_from_text():
+def test_r3_revision_rejects_percent_sheet_of():
+    """R3: never take 30 from 30%, SHEET-01, or 01 OF 05; table column only."""
     sys.path.insert(0, str(SK))
-    from revision_table import revision_from_text
-    code, src = revision_from_text("00 · 30% CONCEPT DESIGN · SEPT. 2026\nTitle block")
+    from revision_table import revision_from_words
+    # Fake header + row: Revision=00, Description starts with 30%, Date
+    words = [
+        {"text": "Revision", "x0": 10, "x1": 50, "top": 10, "bottom": 18},
+        {"text": "Description", "x0": 60, "x1": 120, "top": 10, "bottom": 18},
+        {"text": "Date", "x0": 200, "x1": 230, "top": 10, "bottom": 18},
+        {"text": "00", "x0": 12, "x1": 28, "top": 30, "bottom": 38},
+        {"text": "30%", "x0": 62, "x1": 90, "top": 30, "bottom": 38},
+        {"text": "CONCEPT", "x0": 95, "x1": 140, "top": 30, "bottom": 38},
+        {"text": "SEPT.", "x0": 200, "x1": 230, "top": 30, "bottom": 38},
+        {"text": "2026", "x0": 232, "x1": 260, "top": 30, "bottom": 38},
+        # Decoys outside the revision column
+        {"text": "SHEET-01", "x0": 300, "x1": 360, "top": 50, "bottom": 58},
+        {"text": "01", "x0": 300, "x1": 320, "top": 70, "bottom": 78},
+        {"text": "OF", "x0": 325, "x1": 340, "top": 70, "bottom": 78},
+        {"text": "05", "x0": 345, "x1": 360, "top": 70, "bottom": 78},
+    ]
+    code, src = revision_from_words(words)
     assert code == "00" and src == "revision_table"
-    code, src = revision_from_text(
-        "01 Issued for Approval 08-10-2026\n00 Code-C 17-08-2026")
+
+
+def test_r3_newest_by_date():
+    sys.path.insert(0, str(SK))
+    from revision_table import revision_from_words
+    words = [
+        {"text": "Revision", "x0": 10, "x1": 50, "top": 10, "bottom": 18},
+        {"text": "Description", "x0": 60, "x1": 120, "top": 10, "bottom": 18},
+        {"text": "Date", "x0": 200, "x1": 230, "top": 10, "bottom": 18},
+        {"text": "00", "x0": 12, "x1": 28, "top": 30, "bottom": 38},
+        {"text": "Code-C", "x0": 62, "x1": 100, "top": 30, "bottom": 38},
+        {"text": "17-08-2026", "x0": 200, "x1": 270, "top": 30, "bottom": 38},
+        {"text": "01", "x0": 12, "x1": 28, "top": 50, "bottom": 58},
+        {"text": "Issued", "x0": 62, "x1": 100, "top": 50, "bottom": 58},
+        {"text": "08-10-2026", "x0": 200, "x1": 270, "top": 50, "bottom": 58},
+    ]
+    code, src = revision_from_words(words)
     assert code == "01" and src == "revision_table"
 
 
 def test_r3_check_revision_reads_pdf_table(tmp_path):
-    pdf_old = make_pdf(tmp_path / "old.pdf", 200, "00 · 30% CONCEPT DESIGN · SEPT. 2026")
-    pdf_new = make_pdf(tmp_path / "new.pdf", 210, "00 · 30% CONCEPT DESIGN · SEPT. 2026")
-    # Numbers without revision suffix (NMAR case)
+    pdf_old = make_rev_table_pdf(tmp_path / "old.pdf", [
+        ("00", "30% CONCEPT DESIGN", "SEPT. 2026"),
+    ])
+    pdf_new = make_rev_table_pdf(tmp_path / "new.pdf", [
+        ("00", "30% CONCEPT DESIGN", "SEPT. 2026"),
+    ], grey_level=210)
     prev = write(tmp_path / "prev.json", {"drawings": [
         drawing("LDIP-RCRC-SAP-03-DN-ROD-DWG-00-11000", None, pdf=str(pdf_old)),
     ]})
@@ -374,10 +447,7 @@ def test_r3_check_revision_reads_pdf_table(tmp_path):
     pairs = tmp_path / "pairs.json"
     assert run("match_revisions.py", "--previous", prev, "--current", curr,
                "--number-map", nmap, "--out", pairs)[0] == 0
-    # Inject mad so content_changed without --content-changed (R8 path)
     pdata = load(pairs)
-    pdata["pairs"][0]["match"] = "number_map"
-    pdata["pairs"][0]["renumbered"] = True
     pdata["pairs"][0]["mad"] = 12.0
     write(pairs, pdata)
     out = tmp_path / "rev_diff.json"
@@ -388,6 +458,45 @@ def test_r3_check_revision_reads_pdf_table(tmp_path):
     assert chk["current_revision"] == "00"
     assert chk["previous_revision_source"] == "revision_table"
     assert chk["result"] == "observation"
+    assert chk.get("rule_id") is None
+
+
+def test_r3b_renumbered_never_pkg010_fail(tmp_path):
+    """R3b: renumbered pair with differing/wrong rev codes → info, never PKG-010 fail."""
+    prev = write(tmp_path / "prev.json", {"drawings": [
+        drawing("LDIP-RCRC-SAP-03-CC-CIV-DWG-00-11000-00", "00"),
+    ]})
+    curr = write(tmp_path / "curr.json", {"drawings": [
+        drawing("LDIP-RCRC-SAP-03-CC-CIV-DWG-00-22000-00", "00"),
+    ]})
+    nmap = tmp_path / "map.csv"
+    nmap.write_text(
+        "old,new\nLDIP-RCRC-SAP-03-CC-CIV-DWG-00-11000,LDIP-RCRC-SAP-03-CC-CIV-DWG-00-22000\n",
+        encoding="utf-8")
+    pairs = tmp_path / "pairs.json"
+    assert run("match_revisions.py", "--previous", prev, "--current", curr,
+               "--number-map", nmap, "--out", pairs)[0] == 0
+    # No content change → info (not observation, not PKG-010)
+    out = tmp_path / "rev_diff.json"
+    assert run("check_revision.py", "--pairs", pairs, "--rules", pkg010_rules(tmp_path), "--out", out)[0] == 0
+    chk = load(out)["revision_checks"][0]
+    assert chk["renumbered"] is True
+    assert chk["result"] == "info"
+    assert chk.get("rule_id") is None
+    assert load(out)["counts"]["pkg010_fail"] == 0
+    assert load(out)["counts"]["pkg010_pass"] == 0
+
+
+def test_r5_resubmit_is_d(tmp_path):
+    crs = crs_book(tmp_path / "crs.xlsx", [
+        [20, "Doc", "Resubmit the complete coordinated grading package for the site",
+         "Will be submitted", "A", "Open"],
+    ])
+    out = tmp_path / "closure.json"
+    assert run("check_closed_comments.py", "--crs", crs, "--out", out)[0] == 0
+    row = load(out)["rows"][0]
+    assert row["row_type"] == "D"
+    assert row["deferred_by_response"] is True
 
 
 # ------------------------------------------------------------------ R5 typing

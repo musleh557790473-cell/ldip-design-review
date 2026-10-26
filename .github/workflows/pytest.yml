@@ -21,7 +21,7 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 604 = prior 577 + skill 7 0.1.0 after S31 R1–R9 (synthetics + T7-R1…R4 + D11 SKILL.md).
-          python tools/check_suite.py --expect 604 --tests tests
+          # 607 = 604 + R3/R3b/R5 synthetic gates (reject-%/newest-by-date/PDF table, renumber info, resubmit→D).
+          python tools/check_suite.py --expect 607 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

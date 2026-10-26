@@ -62,7 +62,7 @@ LOC_PAT = re.compile(
 )
 SHEET_IN_REF = re.compile(r"\b(?:sheet|sh\.?)\s*\d+", re.I)
 # D: request verb + deliverable noun (R5)
-REQ_VERB = re.compile(r"\b(submit|provide|furnish|supply|include|attach)\b", re.I)
+REQ_VERB = re.compile(r"\b(submit|resubmit|provide|furnish|supply|include|attach)\b", re.I)
 DELIV_NOUN = re.compile(
     r"\b("
     r"report|survey|surface|sections?|spot\s+levels?|elevations?|quantities|"

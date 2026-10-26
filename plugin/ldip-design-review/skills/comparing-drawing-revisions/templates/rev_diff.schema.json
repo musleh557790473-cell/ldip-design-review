@@ -21,7 +21,7 @@
           "pair_index": {"type": "integer", "minimum": 0},
           "rule_id": {"type": ["string", "null"]},
           "result": {
-            "enum": ["pass", "fail", "missing_information", "incomparable", "not_run", "observation"]
+            "enum": ["pass", "fail", "missing_information", "incomparable", "not_run", "observation", "info"]
           },
           "severity": {"type": ["string", "null"]},
           "status": {"type": ["string", "null"]}
