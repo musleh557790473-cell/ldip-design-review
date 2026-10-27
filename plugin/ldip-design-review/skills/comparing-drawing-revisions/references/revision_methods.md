@@ -15,9 +15,11 @@ Raster params: `references/params.json` tagged `[PROPOSED — DM-9, from T7-R1 p
 
 ## PKG-010 (M2 / DM-3 / R3 / R3b)
 
-Load through skill 8. Revision from the **revision table only** (crop title-block strip →
-`extract_words`; headers Revision / Description / Date; newest by date else nearest header;
-reject `%` / `SHEET-nn` / `nn OF nn`). Source `revision_table` or `not_read`.
+Load through skill 8. Revision from the **revision table only** (pypdfium2 char boxes in the
+title-block strip — not pdfplumber crop; headers Revision / Description / Date; data rows
+**above** the header first, then below; join adjacent Revision-column chars gap ≤ 1.5× width;
+newest by date else farthest above / nearest below; reject `%` / `SHEET-nn` / `nn OF nn`).
+Source `revision_table` or `not_read`. Target ≤ 2 s/PDF.
 
 **Same-number pairs only** → PKG-010 pass/fail. Renumbered (map / proposed): same rev + changed
 content → `observation`; otherwise → `info`. Never PKG-010 pass/fail on renumbered pairs (R3b).

@@ -100,10 +100,12 @@ def make_pdf(path, grey_level=200, text="REV 00 CONCEPT DESIGN SEPT. 2026"):
     return path
 
 
-def make_rev_table_pdf(path, rows, grey_level=220):
+def make_rev_table_pdf(path, rows, grey_level=220, rows_above=False, split_digits=False):
     """PDF with a Revision/Description/Date table in the right title-block strip (R3).
 
-    Columns stay inside the A4 media box so a ~32 % right-edge crop still sees Date.
+    Columns stay inside the A4 media box so a ~32 % right-edge strip still sees Date.
+    ``rows_above=True`` places data rows above the header (NMAR/QRWN layout).
+    ``split_digits=True`` draws each revision digit as a separate character.
     """
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
@@ -113,22 +115,44 @@ def make_rev_table_pdf(path, rows, grey_level=220):
     c.setFillGray(grey_level / 255.0)
     c.rect(0, 0, w, h, fill=1, stroke=0)
     c.setFillGray(0)
-    # Right strip (~32 %): Revision | Description | Date — all within page width
     x0 = w * 0.68
     x_desc = x0 + 48
     x_date = min(w - 55.0, x0 + 155.0)
-    y = h - 60
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(x0, y, "Revision")
-    c.drawString(x_desc, y, "Description")
-    c.drawString(x_date, y, "Date")
-    c.setFont("Helvetica", 9)
-    for code, desc, date in rows:
-        y -= 14
-        # Keep description short so it does not collide with the Date column
-        c.drawString(x0, y, code)
-        c.drawString(x_desc, y, (desc or "")[:18])
-        c.drawString(x_date, y, date)
+
+    def draw_code(x, y, code):
+        if split_digits:
+            cx = x
+            for ch in code:
+                c.drawString(cx, y, ch)
+                cx += 5.5
+        else:
+            c.drawString(x, y, code)
+
+    if rows_above:
+        # Newest at the top (farthest above header), then older rows, then header
+        y = h - 40
+        c.setFont("Helvetica", 9)
+        for code, desc, date in rows:
+            draw_code(x0, y, code)
+            c.drawString(x_desc, y, (desc or "")[:18])
+            c.drawString(x_date, y, date)
+            y -= 14
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x0, y, "Revision")
+        c.drawString(x_desc, y, "Description")
+        c.drawString(x_date, y, "Date")
+    else:
+        y = h - 60
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x0, y, "Revision")
+        c.drawString(x_desc, y, "Description")
+        c.drawString(x_date, y, "Date")
+        c.setFont("Helvetica", 9)
+        for code, desc, date in rows:
+            y -= 14
+            draw_code(x0, y, code)
+            c.drawString(x_desc, y, (desc or "")[:18])
+            c.drawString(x_date, y, date)
     # Decoy tokens that must NOT be read as revision (SHEET / OF / 30%)
     c.drawString(40, h - 40, "SHEET-01  01 OF 05  30% CONCEPT")
     c.save()
@@ -427,13 +451,68 @@ def test_r3_newest_by_date():
     assert code == "01" and src == "revision_table"
 
 
+def test_r3_rows_above_header_farthest():
+    """R3: data rows above the header; without dates pick the farthest (top) row."""
+    sys.path.insert(0, str(SK))
+    from revision_table import revision_from_words
+    # Visual top = small top. Newest "01" farthest above; "00" nearer header.
+    words = [
+        {"text": "0", "x0": 12, "x1": 18, "top": 10, "bottom": 18},
+        {"text": "1", "x0": 19, "x1": 25, "top": 10, "bottom": 18},
+        {"text": "Issued", "x0": 62, "x1": 100, "top": 10, "bottom": 18},
+        {"text": "0", "x0": 12, "x1": 18, "top": 30, "bottom": 38},
+        {"text": "0", "x0": 19, "x1": 25, "top": 30, "bottom": 38},
+        {"text": "Code-C", "x0": 62, "x1": 100, "top": 30, "bottom": 38},
+        {"text": "Revision", "x0": 10, "x1": 50, "top": 50, "bottom": 58},
+        {"text": "Description", "x0": 60, "x1": 120, "top": 50, "bottom": 58},
+        {"text": "Date", "x0": 200, "x1": 230, "top": 50, "bottom": 58},
+    ]
+    code, src = revision_from_words(words)
+    assert code == "01" and src == "revision_table"
+
+
+def test_r3_split_digits_join():
+    """R3: join adjacent Revision-column chars (gap ≤ 1.5× width) — '0'+'0' → '00'."""
+    sys.path.insert(0, str(SK))
+    from revision_table import revision_from_words
+    words = [
+        {"text": "Revision", "x0": 10, "x1": 50, "top": 40, "bottom": 48},
+        {"text": "Description", "x0": 60, "x1": 120, "top": 40, "bottom": 48},
+        {"text": "Date", "x0": 200, "x1": 230, "top": 40, "bottom": 48},
+        # Split digits above the header (NMAR)
+        {"text": "0", "x0": 12, "x1": 17, "top": 20, "bottom": 28},
+        {"text": "0", "x0": 18, "x1": 23, "top": 20, "bottom": 28},
+        {"text": "30", "x0": 62, "x1": 74, "top": 20, "bottom": 28},
+        {"text": "%", "x0": 75, "x1": 82, "top": 20, "bottom": 28},
+        {"text": "CONCEPT", "x0": 85, "x1": 130, "top": 20, "bottom": 28},
+        {"text": "SEPT.", "x0": 200, "x1": 230, "top": 20, "bottom": 28},
+        {"text": "2026", "x0": 232, "x1": 260, "top": 20, "bottom": 28},
+    ]
+    code, src = revision_from_words(words)
+    assert code == "00" and src == "revision_table"
+
+
+def test_r3_pdf_rows_above_and_split_digits(tmp_path):
+    """R3 PDF path: rows above header + split digits → 00 via pypdfium2."""
+    pdf = make_rev_table_pdf(
+        tmp_path / "above.pdf",
+        [("00", "30% CONCEPT", "SEPT. 2026")],
+        rows_above=True,
+        split_digits=True,
+    )
+    sys.path.insert(0, str(SK))
+    from revision_table import revision_from_pdf_text
+    code, src = revision_from_pdf_text(pdf)
+    assert code == "00" and src == "revision_table"
+
+
 def test_r3_check_revision_reads_pdf_table(tmp_path):
     pdf_old = make_rev_table_pdf(tmp_path / "old.pdf", [
         ("00", "30% CONCEPT DESIGN", "SEPT. 2026"),
-    ])
+    ], rows_above=True, split_digits=True)
     pdf_new = make_rev_table_pdf(tmp_path / "new.pdf", [
         ("00", "30% CONCEPT DESIGN", "SEPT. 2026"),
-    ], grey_level=210)
+    ], grey_level=210, rows_above=True, split_digits=True)
     prev = write(tmp_path / "prev.json", {"drawings": [
         drawing("LDIP-RCRC-SAP-03-DN-ROD-DWG-00-11000", None, pdf=str(pdf_old)),
     ]})
