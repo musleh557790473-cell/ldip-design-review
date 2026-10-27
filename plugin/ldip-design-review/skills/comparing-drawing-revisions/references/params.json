@@ -1,0 +1,17 @@
+{
+  "raster": {
+    "tag": "[PROPOSED — DM-9, from T7-R1 probe]",
+    "note": "S31 PR #18 review R1/R9: starting values from the T7-R1 probe (NMAR 53 PDF). Fixed after re-review. Raster-only evidence stays capped at Probable (DM-4).",
+    "dpi": 25,
+    "width": 400,
+    "height": 283,
+    "mask_right_pct": 0.18,
+    "weak_margin": 1.5,
+    "verification_status_cap": "Probable"
+  },
+  "geometry": {
+    "coord_decimals": 3,
+    "hash_uses_handle": false
+  },
+  "change_priority": ["dwg_entity_hash", "surface_delta_z", "pdf_raster"]
+}

@@ -1,0 +1,76 @@
+{
+  "skill": "comparing-drawing-revisions",
+  "note": "Data paths only; previous/current packages and CRS workbooks live under LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0006 Rev B §4.4 + Rev M §4.15 (DM-3…DM-9). Run on sonnet and opus.",
+  "evals": [
+    {
+      "id": "T7-pair-and-move",
+      "query": "Compare the previous QRWN submittal with the current one: pair the sheets and tell me which polylines moved.",
+      "files": [
+        "rulebook/rules_v7.json",
+        "0.ai_context/QRWN/<prev-sub>/package.json",
+        "0.ai_context/QRWN/<curr-sub>/package.json",
+        "0.ai_context/QRWN/<prev-sub>/*.dwg.json",
+        "0.ai_context/QRWN/<curr-sub>/*.dwg.json"
+      ],
+      "expected": [
+        "match_revisions.py pairs by normalised number",
+        "diff_entities.py reports one moved polyline via geometry hash (not handle)",
+        "rev_diff.json written under 0.ai_context/QRWN/<curr-sub>/"
+      ]
+    },
+    {
+      "id": "T7-pkg010-not-advanced",
+      "query": "Did every resubmitted drawing advance its revision from the previous package?",
+      "files": [
+        "rulebook/rules_v7.json",
+        "0.ai_context/NMAR/<prev-sub>/package.json",
+        "0.ai_context/NMAR/<curr-sub>/package.json"
+      ],
+      "expected": [
+        "get_rules.py --agent INT --skill comparing-drawing-revisions returns PKG-010",
+        "check_revision.py marks same-number pairs that kept the revision as PKG-010 fail",
+        "no hard-coded revision order in the skill scripts"
+      ]
+    },
+    {
+      "id": "T7-renumber-observation",
+      "query": "Parsons renumbered a sheet and kept revision 00 while changing the geometry — what do we record?",
+      "files": [
+        "rulebook/rules_v7.json",
+        "evidence/intake/number_map.csv",
+        "0.ai_context/NRJS/<prev-sub>/package.json",
+        "0.ai_context/NRJS/<curr-sub>/package.json"
+      ],
+      "expected": [
+        "match_revisions.py uses --number-map",
+        "check_revision.py records Observation (DM-3), not a PKG-010 fail",
+        "rev_diff.json observations[] contains the pair"
+      ]
+    },
+    {
+      "id": "T7-crs-closure",
+      "query": "Against the last CRS, which comments look addressed, which do not, and which are deferred?",
+      "files": [
+        "findings/<run>/crs/previous_crs.xlsx"
+      ],
+      "expected": [
+        "check_closed_comments.py types rows L / D / G",
+        "outcomes only Addressed / Not addressed / Cannot tell (never Closed / Open)",
+        "deferred_by_response flagged; G rows may list supporting_refs",
+        "closure.json and closure.xlsx written; no findings file"
+      ]
+    },
+    {
+      "id": "T7-inventory-added",
+      "query": "What deliverables were added between the previous and current package?",
+      "files": [
+        "0.ai_context/QRWN/<prev-sub>/package.json",
+        "0.ai_context/QRWN/<curr-sub>/package.json"
+      ],
+      "expected": [
+        "diff_entities.py inventory_diff.deliverables_added lists the new base numbers",
+        "rev_diff.json counts.deliverables_added matches"
+      ]
+    }
+  ]
+}

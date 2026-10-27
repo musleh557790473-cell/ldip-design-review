@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/comparing-drawing-revisions/closure.schema.json",
+  "title": "LDIP CRS closure report (skill 7 M4) — report only, no findings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["closure_version", "marking", "rows", "counts", "meta"],
+  "properties": {
+    "closure_version": {"const": "1.0"},
+    "marking": {"type": "string", "minLength": 10},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["no", "comment", "response", "row_type", "outcome", "deferred_by_response", "evidence"],
+        "properties": {
+          "no": {"type": "string"},
+          "ref": {"type": ["string", "null"]},
+          "comment": {"type": "string"},
+          "response": {"type": "string"},
+          "status_code": {"type": ["string", "null"]},
+          "row_type": {"enum": ["L", "D", "G"]},
+          "row_type_reason": {"type": "string"},
+          "outcome": {"enum": ["Addressed", "Not addressed", "Cannot tell"]},
+          "deferred_by_response": {"type": "boolean"},
+          "evidence": {"type": "string"},
+          "comment_status_raw": {"type": ["string", "null"]},
+          "supporting_refs": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["rows", "L", "D", "G", "Addressed", "Not addressed", "Cannot tell", "deferred_by_response"],
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "meta": {"type": "object"}
+  }
+}

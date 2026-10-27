@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/comparing-drawing-revisions/rev_diff.schema.json",
+  "title": "LDIP revision diff (skill 7) — SPC-0002 path 0.ai_context/{site}/{sub}/rev_diff.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["rev_diff_version", "pairs", "revision_checks", "entity_diffs", "counts"],
+  "properties": {
+    "rev_diff_version": {"const": "1.0"},
+    "previous_submittal": {"type": ["string", "null"]},
+    "current_submittal": {"type": ["string", "null"]},
+    "pairs": {"type": "array", "items": {"type": "object"}},
+    "unmatched_previous": {"type": "array"},
+    "unmatched_current": {"type": "array"},
+    "revision_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pair_index", "comparison", "result"],
+        "properties": {
+          "pair_index": {"type": "integer", "minimum": 0},
+          "rule_id": {"type": ["string", "null"]},
+          "result": {
+            "enum": ["pass", "fail", "missing_information", "incomparable", "not_run", "observation", "info"]
+          },
+          "severity": {"type": ["string", "null"]},
+          "status": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "observations": {"type": "array"},
+    "entity_diffs": {"type": "array"},
+    "surface_diffs": {"type": "array"},
+    "raster_diffs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "verification_status": {"enum": ["Probable"]},
+          "verification_status_cap": {"const": "Probable"}
+        }
+      }
+    },
+    "inventory_diff": {"type": "object"},
+    "counts": {"type": "object"},
+    "meta": {"type": "object"}
+  }
+}
