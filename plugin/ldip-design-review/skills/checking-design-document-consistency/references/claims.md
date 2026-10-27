@@ -18,7 +18,7 @@ Patterns are detection aids only — not rulebook values.
 | `balanced` | `\bbalanced\b`, `cut\s*(and|&)\s*fill\s+balanc`, `earthworks?\s+balanc` | C3 |
 | `import` | `\bimport(?:ed)?\s+(?:fill|material)\b`, `\bborrow\b` | C3 |
 | `export` | `\bexport(?:ed)?\b`, `\bdispos(?:al|ed)\s+off[- ]?site\b` | C3 |
-| `basis_ratio` | `0\.2|20\s*%`, `0\.8|80\s*%`, `0\.6|60\s*%` near rock / suitable / disposal | C2 |
+| `basis_ratio` | ratio tokens **only with** rock / suitable / disposal context (R4) | C2 |
 | `pavement_depth` | `(\d+(?:\.\d+)?)\s*mm` near pavement / wearing / ToS / thickness | C4 |
 
 ## Notes
@@ -26,3 +26,6 @@ Patterns are detection aids only — not rulebook values.
 - Page numbers come from skill-2 `content.pages[].page`.
 - OCR spans (`source_type: pdf_ocr`) are accepted but capped at Probable evidence elsewhere.
 - Absence of a claim is itself evidence for C2 (“basis not stated”).
+- **R4:** skip TOC pages; attach each claim to a section page-range.
+- **R5:** rebuild page text in bbox reading order before matching.
+- **R9:** `balanced` counts for C3 only when `section == earthworks`.

@@ -82,19 +82,47 @@ def _drawing_cut_fill(table):
 
 
 def _road_model(register):
-    """Skill 10 / 13 road quantities when present — never recompute (DN-3)."""
+    """Skill 10 / 13 road quantities when present — never recompute (DN-3).
+
+    C6: refuse BOQ-vs-itself — register must be an independent model / linework source.
+    """
     if not register:
-        return None, None
-    roads = register.get("roads") or register.get("summary") or register
+        return None, None, "absent"
+    src = str(register.get("source") or register.get("origin") or "").strip().lower()
+    # Explicit BOQ / self sources are rejected
+    if src in ("boq", "read_boq", "boq.json", "self", "same"):
+        return None, None, "self"
+    roads = register.get("roads") or register.get("summary") or {}
+    if not isinstance(roads, dict):
+        roads = {}
+    # Flat register without a roads wrapper still ok when source is independent
+    if not roads and any(k in register for k in (
+            "road_area_m2", "road_surface_area_m2", "kerb_length_m", "curb_length_m")):
+        roads = register
     area = roads.get("road_area_m2") or roads.get("road_surface_area_m2") or roads.get("area_m2")
     kerb = roads.get("kerb_length_m") or roads.get("curb_length_m") or roads.get("kerb_m")
-    # linework totals
     lw = register.get("linework") or {}
     if kerb is None:
         kerb = lw.get("curb_length_m") or lw.get("kerb_length_m")
     if area is None:
         area = lw.get("road_area_m2")
-    return area, kerb
+    # Without an explicit independent source and without linework, treat as self-risk
+    independent = src in ("skill10", "skill_10", "linework", "model", "road_register",
+                          "register", "earthworks_profile", "skill13") or bool(lw)
+    if (area is not None or kerb is not None) and not independent:
+        # Still allow when caller set independent:true
+        if not register.get("independent"):
+            return area, kerb, "unproven"
+    return area, kerb, "ok"
+
+
+def _doc_no(meta, kind="boq"):
+    """R8: prefer real document_no from inputs; never leave findings as bare labels only."""
+    if kind == "boq":
+        return meta.get("boq_document_no") or meta.get("document_no") or "BOQ"
+    if kind == "report":
+        return meta.get("report_document_no") or meta.get("document_no") or "DESIGN-REPORT"
+    return meta.get("document_no") or kind
 
 
 def comparison_row(check, quantity, sources, values, units, difference, pct, result,
@@ -192,55 +220,56 @@ def run_c1(boq, profile, drawing, params, rows, findings, meta):
             continue
 
         flagged = False
-        # Compare BOQ base vs model (primary); also vs drawing when both present
-        for other_name, other_v in (("model", model_v), ("drawing_table", draw_v)):
-            if boq_v is None or other_v is None:
-                continue
-            flag, diff, pd = exceeds_quantity_tol(boq_v, other_v, unit, params)
+
+        def _pair(left_name, left_v, right_name, right_v, qty_label, note=None):
+            nonlocal flagged
+            if left_v is None or right_v is None:
+                return
+            flag, diff, pd = exceeds_quantity_tol(left_v, right_v, unit, params)
             result = "flag" if flag else "pass"
+            vals = {left_name: left_v, right_name: right_v}
+            if left_name == "boq_base" and rec is not None:
+                vals["boq_factor"] = rec.get("factor")
             rows.append(comparison_row(
-                "C1", f"{name}_boq_vs_{other_name}",
-                ["boq", other_name], {"boq_base": boq_v, other_name: other_v,
-                                      "boq_factor": (rec or {}).get("factor")},
-                unit, diff, pd, result,
+                "C1", qty_label, [left_name.replace("_base", ""), right_name],
+                vals, unit, diff, pd, result,
                 severity="Minor" if flag else None,
                 status="Probable" if flag else None,
                 evidence=[
-                    evid("E01", "xlsx_cell", f"BOQ {name} base={boq_v}",
-                         measured_value=boq_v, unit=unit,
-                         artifact_path=(rec or {}).get("address")),
-                    evid("E02", "script_output", f"{other_name}={other_v}",
-                         measured_value=other_v, unit=unit),
+                    evid("E01", "xlsx_cell" if "boq" in left_name else "script_output",
+                         f"{left_name}={left_v}", measured_value=left_v, unit=unit,
+                         artifact_path=(rec or {}).get("address") if "boq" in left_name else None),
+                    evid("E02", "script_output", f"{right_name}={right_v}",
+                         measured_value=right_v, unit=unit),
                 ],
-                note="DN-6: BOQ base before factor",
+                note=note or "DN-6: BOQ base before factor" if "boq" in left_name else "R7 three-way",
             ))
             if flag:
                 flagged = True
                 findings.append(finding_stub(
                     "C1",
-                    f"BOQ {name} disagrees with {other_name}",
-                    f"BOQ {name} base {boq_v:g} {unit} differs from {other_name} "
-                    f"{other_v:g} {unit} beyond the starting tolerance "
+                    f"{name}: {left_name} disagrees with {right_name}",
+                    f"{name} {left_name} {left_v:g} {unit} differs from {right_name} "
+                    f"{right_v:g} {unit} beyond the starting tolerance "
                     f"(>{params['qty_pct']*100:.0f}% and >{params['qty_abs_m3']:g} m³).",
                     "inconsistency", "Minor", "Probable",
                     [
-                        evid("E01", "xlsx_cell", f"base={boq_v}", measured_value=boq_v, unit=unit),
-                        evid("E02", "script_output", f"{other_name}={other_v}",
-                             measured_value=other_v, unit=unit),
+                        evid("E01", "xlsx_cell" if "boq" in left_name else "script_output",
+                             f"{left_name}={left_v}", measured_value=left_v, unit=unit),
+                        evid("E02", "script_output", f"{right_name}={right_v}",
+                             measured_value=right_v, unit=unit),
                     ],
                     meta["site"], meta["sub"], meta["run"],
-                    location={"document_no": "BOQ",
+                    location={"document_no": _doc_no(meta, "boq"),
                               "table": {"sheet": (rec or {}).get("sheet") or "BOQ",
                                         "cells": [((rec or {}).get("cell") or "A1")]}},
                 ))
-        if model_v is not None and draw_v is not None and boq_v is None:
-            flag, diff, pd = exceeds_quantity_tol(model_v, draw_v, unit, params)
-            rows.append(comparison_row(
-                "C1", f"{name}_model_vs_drawing", ["model", "drawing_table"],
-                {"model": model_v, "drawing_table": draw_v}, unit, diff, pd,
-                "flag" if flag else "pass",
-                severity="Minor" if flag else None, status="Probable" if flag else None,
-            ))
+
+        # R7: always emit the three pairs when both sides exist
+        _pair("boq_base", boq_v, "model", model_v, f"{name}_boq_vs_model")
+        _pair("boq_base", boq_v, "drawing_table", draw_v, f"{name}_boq_vs_drawing")
+        _pair("model", model_v, "drawing_table", draw_v, f"{name}_model_vs_drawing",
+              note="R7: model vs drawing table")
         if not flagged and boq_v is not None and model_v is None and draw_v is None:
             rows.append(comparison_row(
                 "C1", name, ["boq"], {"boq_base": boq_v}, unit, None, None, "information",
@@ -305,36 +334,44 @@ def run_c3(boq, report, rows, findings, meta):
     claims = (report or {}).get("claims") or []
     disposal = _base_of(_boq_earth(boq, "disposal"))
     imp = _base_of(_boq_earth(boq, "import"))
-    balanced = "balanced" in families or any(c.get("family") == "balanced" for c in claims)
+    # R9: balanced only when tagged in the earthworks section (or families_present already filtered)
+    bal_claims = [
+        c for c in claims
+        if c.get("family") == "balanced" and (
+            c.get("in_earthworks_section") is True or c.get("section") == "earthworks")
+    ]
+    balanced = bool(bal_claims) or ("balanced" in families and not any(
+        c.get("family") == "balanced" and c.get("in_earthworks_section") is False for c in claims))
 
     if not balanced and disposal is None and imp is None:
         rows.append(comparison_row(
             "C3", "report_vs_quantities", ["report", "boq"], {}, None, None, None, "not_run",
-            note="no balance/import/export claim and no disposal/import quantities"))
+            note="no earthworks balance/import/export claim and no disposal/import quantities"))
         return
 
-    values = {"balanced_claim": balanced, "disposal_base": disposal, "import_base": imp}
-    # "balanced" claim conflicts with non-trivial disposal or import
+    values = {"balanced_claim": balanced, "disposal_base": disposal, "import_base": imp,
+              "balanced_section": "earthworks" if bal_claims else None}
     conflict = balanced and (
         (disposal is not None and abs(disposal) > 1.0) or
         (imp is not None and abs(imp) > 1.0)
     )
     if conflict:
-        page = next((c.get("page") for c in claims if c.get("family") == "balanced"), None)
+        page = (bal_claims[0].get("page") if bal_claims else None) or next(
+            (c.get("page") for c in claims if c.get("family") == "balanced"), None)
         rows.append(comparison_row(
             "C3", "balanced_vs_disposal_import", ["report", "boq"], values, "m3",
             None, None, "observation", severity="Observation",
             evidence=[
                 evid("E01", "pdf_vector_text", "balanced", tier="extracted_text_crop",
-                     artifact_path=f"page:{page}" if page else None),
+                     artifact_path=f"page:{page}" if page else "page:1"),
                 evid("E02", "xlsx_cell", f"disposal={disposal}; import={imp}"),
             ],
-            note="report claims balanced but BOQ has disposal/import",
+            note="report claims balanced (earthworks) but BOQ has disposal/import",
         ))
         findings.append(finding_stub(
             "C3", "Report claims balanced earthworks but BOQ shows disposal/import",
-            f"The report states earthworks are balanced, yet the BOQ records disposal "
-            f"base={disposal} and import base={imp}.",
+            f"The earthworks section states quantities are balanced, yet the BOQ records "
+            f"disposal base={disposal} and import base={imp}.",
             "inconsistency", "Observation", "Probable",
             [
                 evid("E01", "pdf_vector_text", "balanced", tier="extracted_text_crop",
@@ -342,7 +379,7 @@ def run_c3(boq, report, rows, findings, meta):
                 evid("E02", "xlsx_cell", f"disposal={disposal}; import={imp}"),
             ],
             meta["site"], meta["sub"], meta["run"],
-            location={"document_no": "DESIGN-REPORT", "pdf": {"page": int(page or 1)}},
+            location={"document_no": _doc_no(meta, "report"), "pdf": {"page": int(page or 1)}},
         ))
     else:
         rows.append(comparison_row(
@@ -411,22 +448,21 @@ def run_c4(report, profile, params, rows, findings, meta):
                 evid("E02", "script_output", f"median={median}", measured_value=median, unit="m"),
             ],
             meta["site"], meta["sub"], meta["run"],
-            location={"document_no": "DESIGN-REPORT",
+            location={"document_no": _doc_no(meta, "report"),
                       "pdf": {"page": int(depth_claims[0].get("page") or 1)}},
         ))
 
 
 def run_c5(boq, rows, findings, meta):
-    errors = (boq.get("summary") or {}).get("cell_errors") or []
-    # Also collect item-level errors
+    errors = list((boq.get("summary") or {}).get("cell_errors") or [])
     for sh in boq.get("sheets") or []:
         for it in sh.get("items") or []:
             if it.get("error"):
                 errors.append({
                     "sheet": it.get("sheet"), "cell": it.get("cell"),
-                    "address": it.get("address"), "value": it["error"], "kind": "item_error",
+                    "address": it.get("address"), "value": it["error"],
+                    "kind": "item_error", "formula": it.get("formula"),
                 })
-    # de-dupe by address
     seen = set()
     uniq = []
     for e in errors:
@@ -436,68 +472,114 @@ def run_c5(boq, rows, findings, meta):
         seen.add(key)
         uniq.append(e)
 
-    if not uniq:
-        # Part arithmetic: suitable fill ≈ excavation − disposal when all three present
-        cut = _base_of(_boq_earth(boq, "cut"))
-        fill = _base_of(_boq_earth(boq, "fill"))
-        disposal = _base_of(_boq_earth(boq, "disposal"))
-        if cut is not None and fill is not None and disposal is not None:
-            expected = cut - disposal
-            diff = abs(expected - fill)
-            # soft check — observation band only when far off (>10% of cut)
-            pd = (diff / abs(cut)) if cut else None
-            result = "flag" if pd is not None and pd > 0.10 else "pass"
-            rows.append(comparison_row(
-                "C5", "part_arithmetic_fill", ["boq"],
-                {"cut": cut, "disposal": disposal, "fill": fill, "expected_fill": expected},
-                "m3", diff, pd, result,
-                severity="Minor" if result == "flag" else None,
-                status="Probable" if result == "flag" else None,
-                note="suitable fill = excavation − disposal",
-            ))
-            if result == "flag":
-                findings.append(finding_stub(
-                    "C5", "BOQ part arithmetic: fill ≠ excavation − disposal",
-                    f"Fill base {fill:g} differs from excavation {cut:g} − disposal "
-                    f"{disposal:g} = {expected:g}.",
-                    "inconsistency", "Minor", "Probable",
-                    [evid("E01", "xlsx_cell", f"cut={cut}; disposal={disposal}; fill={fill}")],
-                    meta["site"], meta["sub"], meta["run"],
-                ))
-        else:
-            rows.append(comparison_row(
-                "C5", "internal_integrity", ["boq"], {"cell_errors": 0}, None, None, None, "pass",
-                note="no #REF! / error cells",
-            ))
-        return
-
     for e in uniq:
         addr = e.get("address") or f"{e.get('sheet')}!{e.get('cell')}"
         rows.append(comparison_row(
             "C5", "cell_error", ["boq"],
-            {"address": addr, "value": e.get("value")}, None, None, None, "flag",
+            {"address": addr, "value": e.get("value"), "formula": e.get("formula"),
+             "kind": e.get("kind")}, None, None, None, "flag",
             severity="Minor", status="Confirmed",
             evidence=[evid("E01", "xlsx_cell", f"{addr}={e.get('value')}")],
-            note="Confirmed allowed for xlsx_cell errors (SPC-0003 evidence tier)",
+            note="Confirmed allowed for xlsx_cell errors (SPC-0003 evidence tier); "
+                 "R3 includes #REF! inside formulas",
         ))
         findings.append(finding_stub(
             "C5", f"BOQ cell error at {addr}",
-            f"BOQ cell {addr} contains {e.get('value')} (principal-quantities / item error).",
+            f"BOQ cell {addr} contains {e.get('value')}"
+            + (f" in formula {e.get('formula')}" if e.get("formula") else "")
+            + " (principal-quantities / item error).",
             "inconsistency", "Minor", "Confirmed",
             [evid("E01", "xlsx_cell", f"{addr}={e.get('value')}")],
             meta["site"], meta["sub"], meta["run"],
-            location={"document_no": "BOQ",
+            location={"document_no": _doc_no(meta, "boq"),
                       "table": {"sheet": e.get("sheet") or "BOQ",
                                 "cells": [e.get("cell") or "A1"]}},
+        ))
+
+    # R3: principal-quantity SUMIF/SUM vs part-item totals
+    for pc in (boq.get("summary") or {}).get("principal_checks") or []:
+        if pc.get("result") == "flag":
+            rows.append(comparison_row(
+                "C5", "principal_vs_parts", ["boq"],
+                {"address": pc.get("address"), "cached": pc.get("cached_value"),
+                 "part_sum": pc.get("part_sum"), "formula": pc.get("formula")},
+                "m3", pc.get("difference"), pc.get("pct_difference"), "flag",
+                severity="Minor", status="Probable",
+                note="R3: principal quantity link ≠ sum of part items",
+            ))
+            findings.append(finding_stub(
+                "C5", "Principal quantity does not equal part items",
+                f"Principal cell {pc.get('address')} cached {pc.get('cached_value')} "
+                f"differs from part-item sum {pc.get('part_sum')}.",
+                "inconsistency", "Minor", "Probable",
+                [evid("E01", "xlsx_cell", f"{pc.get('address')}={pc.get('cached_value')}")],
+                meta["site"], meta["sub"], meta["run"],
+                location={"document_no": _doc_no(meta, "boq"),
+                          "table": {"sheet": pc.get("sheet") or "Principal Quantities",
+                                    "cells": [pc.get("cell") or "A1"]}},
+            ))
+        elif pc.get("result") == "pass":
+            rows.append(comparison_row(
+                "C5", "principal_vs_parts", ["boq"],
+                {"address": pc.get("address"), "cached": pc.get("cached_value"),
+                 "part_sum": pc.get("part_sum")}, "m3", pc.get("difference"),
+                pc.get("pct_difference"), "pass",
+                note="R3: principal quantity matches part items",
+            ))
+
+    # Part arithmetic: suitable fill ≈ excavation − disposal
+    cut = _base_of(_boq_earth(boq, "cut"))
+    fill = _base_of(_boq_earth(boq, "fill"))
+    disposal = _base_of(_boq_earth(boq, "disposal"))
+    if cut is not None and fill is not None and disposal is not None:
+        expected = cut - disposal
+        diff = abs(expected - fill)
+        pd = (diff / abs(cut)) if cut else None
+        result = "flag" if pd is not None and pd > 0.10 else "pass"
+        rows.append(comparison_row(
+            "C5", "part_arithmetic_fill", ["boq"],
+            {"cut": cut, "disposal": disposal, "fill": fill, "expected_fill": expected},
+            "m3", diff, pd, result,
+            severity="Minor" if result == "flag" else None,
+            status="Probable" if result == "flag" else None,
+            note="suitable fill = excavation − disposal",
+        ))
+        if result == "flag":
+            findings.append(finding_stub(
+                "C5", "BOQ part arithmetic: fill ≠ excavation − disposal",
+                f"Fill base {fill:g} differs from excavation {cut:g} − disposal "
+                f"{disposal:g} = {expected:g}.",
+                "inconsistency", "Minor", "Probable",
+                [evid("E01", "xlsx_cell", f"cut={cut}; disposal={disposal}; fill={fill}")],
+                meta["site"], meta["sub"], meta["run"],
+                location={"document_no": _doc_no(meta, "boq"), "package_level": True},
+            ))
+    elif not uniq and not ((boq.get("summary") or {}).get("principal_checks") or []):
+        rows.append(comparison_row(
+            "C5", "internal_integrity", ["boq"], {"cell_errors": 0}, None, None, None, "pass",
+            note="no #REF! / error cells",
         ))
 
 
 def run_c6(boq, register, params, stage, rows, findings, meta):
     road = _boq_road(boq, "road_area")
     kerb = _boq_road(boq, "kerb")
-    model_area, model_kerb = _road_model(register)
+    model_area, model_kerb, provenance = _road_model(register)
     pct = stage_pct(stage)
     finding_ok = pct is not None and pct >= params["c6_finding_from_pct"]
+
+    if provenance in ("self", "unproven") and register is not None:
+        # C6: never BOQ vs itself — refuse comparison
+        rows.append(comparison_row(
+            "C6", "road_boq_vs_model", ["boq", "model"],
+            {"boq_road_area": _base_of(road), "boq_kerb": _base_of(kerb),
+             "refused_model_area": model_area, "refused_model_kerb": model_kerb,
+             "provenance": provenance},
+            None, None, None, "not_run",
+            note="C6 refused: model/register is not an independent skill-10/linework source "
+                 "(never BOQ vs itself)",
+        ))
+        return
 
     pairs = [
         ("road_area", _base_of(road), model_area, _unit_of(road, "m2"), road),
@@ -506,6 +588,16 @@ def run_c6(boq, register, params, stage, rows, findings, meta):
     any_data = False
     for name, boq_v, model_v, unit, rec in pairs:
         if boq_v is None and model_v is None:
+            continue
+        # Extra guard: identical numeric twin with no linework → self
+        if (boq_v is not None and model_v is not None and abs(float(boq_v) - float(model_v)) < 1e-9
+                and provenance != "ok"):
+            rows.append(comparison_row(
+                "C6", name, ["boq", "model"], {"boq_base": boq_v, "model": model_v},
+                unit, None, None, "not_run",
+                note="C6 refused: model equals BOQ base without independent provenance",
+            ))
+            any_data = True
             continue
         any_data = True
         values = {"boq_base": boq_v, "model": model_v, "boq_factor": (rec or {}).get("factor")}
@@ -539,6 +631,7 @@ def run_c6(boq, register, params, stage, rows, findings, meta):
                         evid("E02", "script_output", f"model={model_v}", measured_value=model_v, unit=unit),
                     ],
                     meta["site"], meta["sub"], meta["run"],
+                    location={"document_no": _doc_no(meta, "boq"), "package_level": True},
                 ))
     if not any_data:
         rows.append(comparison_row(
@@ -577,6 +670,8 @@ def main(argv=None):
     ap.add_argument("--site", default="QRWN")
     ap.add_argument("--sub", default="SYN")
     ap.add_argument("--run", default=None)
+    ap.add_argument("--document-no", default=None, dest="document_no",
+                    help="Fallback Parsons document number for findings (R8)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
@@ -587,17 +682,25 @@ def main(argv=None):
         profile = read_json(a.profile) if a.profile else None
         drawing = read_json(a.drawing_table) if a.drawing_table else None
         register = read_json(a.road_register) if a.road_register else None
+        boq_doc = ((boq.get("source") or {}).get("document_no")
+                   or a.document_no or Path(a.boq).stem)
+        report_doc = (report or {}).get("document_no") or a.document_no
         meta = {
             "site": a.site,
             "sub": a.sub,
             "run": a.run or f"{a.site}-{a.sub}-19700101T0000",
             "stage": a.stage,
             "stage_pct": stage_pct(a.stage),
+            "boq_document_no": boq_doc,
+            "report_document_no": report_doc,
+            "document_no": a.document_no or boq_doc,
             "params": {
                 "qty_pct": params["qty_pct"],
                 "qty_abs_m3": params["qty_abs_m3"],
                 "c4_abs_m": params["c4_abs_m"],
                 "c6_finding_from_pct": params["c6_finding_from_pct"],
+                "tag": ((params.get("raw") or {}).get("tolerances") or {}).get("tag")
+                       or (params.get("raw") or {}).get("tag"),
             },
             "tool": {"script": "check_consistency.py", "version": __version__},
             "decisions": ["DN-3", "DN-4", "DN-5", "DN-6", "DN-7"],

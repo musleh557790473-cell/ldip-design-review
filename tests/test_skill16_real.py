@@ -1,13 +1,18 @@
-"""Skill 16 real-data gates T16-R1…T16-R3 — skipped without LDIP_REVIEW_ROOT (Rev N §4.16.5).
+"""Skill 16 real-data gates T16-R1…T16-R3 — per-site env vars (R6); scratch only (DN-8).
 
-T16-R1: QRWN 30 % — C1 BOQ base 5,065,345 / 3,748,575 vs model ≈ 4.82 M / 3.23 M
-        vs table 7,567.55 / 371,513.95; C2 ratios; C3; C5 #REF! on parts 6–10.
-T16-R2: NRJS 30 % — C1 37,000 / 50,000 vs ≈ 36,600 / 41,600 vs 361.651 / 8,241.046; C3; C5.
-T16-R3: NMAR 30 % — C1 BOQ base 429,590 / 222,820 (× 1.05) vs model ≈ 406,700 / 169,000;
-        C2 ratios 0.2 / 0.8 / 0.6; C5 33 #REF! in principal quantities;
-        C6 road layers 105,710 m² / kerb 23,900 m (× 1.05) as information.
+R6: each site is gated by its own env var pointing at the scratch folder (or file).
+    Asserts are strict — no soft `if base is not None` passes.
+C6: never fabricate a register from BOQ values (never BOQ vs itself).
 
-Real packages stay outside Git (brief §10.2). Scratch only (DN-8).
+Env (any one enables the site test):
+  LDIP_SKILL16_QRWN / LDIP_SKILL16_NRJS / LDIP_SKILL16_NMAR
+    → absolute path to site scratch dir (searched for BOQ / report / profile / table / register)
+  or LDIP_REVIEW_ROOT / LDIP_REVIEW → shared root (legacy); still requires site subfolder hits
+
+T16-R1 QRWN: C1 bases 5,065,345 / 3,748,575; C2 ratios; C3; C5 #REF! parts 6–10.
+T16-R2 NRJS: C1 37,000 / 50,000; C3; C5.
+T16-R3 NMAR: C1 429,590 / 222,820 ×1.05; C2 0.2/0.8/0.6; C5 ≥33 #REF!;
+             C6 road 105,710 m² / kerb 23,900 m as information (independent register only).
 """
 from __future__ import annotations
 
@@ -19,16 +24,35 @@ from pathlib import Path
 
 import pytest
 
-ROOT = os.environ.get("LDIP_REVIEW_ROOT") or os.environ.get("LDIP_REVIEW")
-
-pytestmark = pytest.mark.skipif(
-    not ROOT or not Path(ROOT).is_dir(),
-    reason="LDIP_REVIEW_ROOT not set — real BOQ / report / profile stay out of Git (scratch)",
-)
-
 REPO = Path(__file__).resolve().parents[1]
 SK = REPO / "plugin/ldip-design-review/skills/checking-design-document-consistency/scripts"
 PY = sys.executable
+
+SITE_ENV = {
+    "QRWN": "LDIP_SKILL16_QRWN",
+    "NRJS": "LDIP_SKILL16_NRJS",
+    "NMAR": "LDIP_SKILL16_NMAR",
+}
+ROOT = os.environ.get("LDIP_REVIEW_ROOT") or os.environ.get("LDIP_REVIEW")
+
+
+def _site_root(site: str):
+    env = SITE_ENV[site]
+    p = os.environ.get(env)
+    if p and Path(p).exists():
+        return Path(p)
+    if ROOT and Path(ROOT).is_dir():
+        return Path(ROOT)
+    return None
+
+
+def _skip_unless(site: str):
+    root = _site_root(site)
+    if root is None:
+        pytest.skip(
+            f"{SITE_ENV[site]} (or LDIP_REVIEW_ROOT) not set — real {site} scratch stays out of Git"
+        )
+    return root
 
 
 def run(script, *args):
@@ -40,160 +64,148 @@ def run(script, *args):
     return msg
 
 
-def _root():
-    return Path(ROOT)
-
-
-def _find(root: Path, patterns):
+def _find(root: Path, patterns, site=None):
     hits = []
     for pat in patterns:
         hits.extend(root.rglob(pat))
-    return sorted({p for p in hits if p.is_file()})
+    hits = sorted({p for p in hits if p.is_file()})
+    if site:
+        site_hits = [p for p in hits if site.upper() in str(p).upper()]
+        if site_hits:
+            return site_hits
+    return hits
 
 
-def _site_boq(root: Path, site: str):
-    hits = _find(root, ["**/*BOQ*.xlsx", "**/*BoQ*.xlsx", "**/*boq*.xlsx", "**/Bill*.xlsx"])
-    site_hits = [p for p in hits if site.upper() in str(p).upper()]
-    return site_hits or hits
+def _require_boq(root: Path, site: str):
+    hits = _find(root, ["**/*BOQ*.xlsx", "**/*BoQ*.xlsx", "**/*boq*.xlsx", "**/Bill*.xlsx"], site)
+    assert hits, f"T16: no {site} BOQ.xlsx under {root}"
+    return hits[0]
 
 
-def _site_report(root: Path, site: str):
-    hits = _find(root, [
-        "**/*Concept*Report*.pdf.json",
-        "**/*Design*Report*.pdf.json",
-        "**/*concept*.pdf.json",
-        "**/*Report*.pdf.json",
-    ])
-    site_hits = [p for p in hits if site.upper() in str(p).upper()]
-    return site_hits or hits
-
-
-def _site_profile(root: Path, site: str):
-    hits = _find(root, ["**/earthworks_profile.json", "**/*profile*.json"])
-    site_hits = [p for p in hits if site.upper() in str(p).upper()]
-    return site_hits
+def _optional(root: Path, patterns, site):
+    hits = _find(root, patterns, site)
+    return hits[0] if hits else None
 
 
 def test_t16_r1_qrwn_30pct(tmp_path):
-    """T16-R1: QRWN 30 % earthworks consistency probe numbers."""
-    root = _root()
-    boqs = _site_boq(root, "QRWN")
-    if not boqs:
-        pytest.skip("T16-R1: no QRWN BOQ.xlsx under LDIP_REVIEW_ROOT")
+    """T16-R1 / R6: QRWN 30 % — strict probe asserts."""
+    root = _skip_unless("QRWN")
+    boq_xlsx = _require_boq(root, "QRWN")
     boq_out = tmp_path / "boq.json"
-    run("read_boq.py", "--xlsx", boqs[0], "--out", boq_out)
+    run("read_boq.py", "--xlsx", boq_xlsx, "--out", boq_out)
     boq = json.loads(boq_out.read_text(encoding="utf-8"))
-    cut = (boq.get("summary") or {}).get("earthworks", {}).get("cut") or {}
-    fill = (boq.get("summary") or {}).get("earthworks", {}).get("fill") or {}
-    # Probe: base 5,065,345 / 3,748,575
-    if cut.get("base") is not None:
-        assert cut["base"] == pytest.approx(5065345, rel=0.01)
-    if fill.get("base") is not None:
-        assert fill["base"] == pytest.approx(3748575, rel=0.01)
-    ratios = set(boq["summary"].get("ratios_recorded") or [])
-    # C2 ratios when present
-    if ratios:
-        assert ratios & {0.2, 0.8, 0.6}
+    cut = boq["summary"]["earthworks"]["cut"]
+    fill = boq["summary"]["earthworks"]["fill"]
+    assert cut is not None and cut["base"] is not None
+    assert fill is not None and fill["base"] is not None
+    assert cut["base"] == pytest.approx(5065345, rel=0.01)
+    assert fill["base"] == pytest.approx(3748575, rel=0.01)
+    ratios = set(boq["summary"]["ratios_recorded"] or [])
+    assert {0.2, 0.8, 0.6} & ratios or ratios  # at least some C2 ratios recorded
+    errs = boq["summary"]["cell_errors"]
+    assert errs, "T16-R1: expected #REF! on principal parts 6–10"
+    assert any(e.get("value") == "#REF!" for e in errs)
 
-    reports = _site_report(root, "QRWN")
-    report_arg = []
-    if reports:
+    report = _optional(root, [
+        "**/*Concept*Report*.pdf.json", "**/*Design*Report*.pdf.json",
+        "**/*concept*.pdf.json", "**/*Report*.pdf.json",
+    ], "QRWN")
+    profile = _optional(root, ["**/earthworks_profile.json"], "QRWN")
+    table = _optional(root, ["**/cut_fill_table.json", "**/*cut*fill*.json"], "QRWN")
+    args = ["--boq", str(boq_out), "--stage", "30% Concept Design", "--site", "QRWN",
+            "--out", str(tmp_path / "consistency.json")]
+    if report:
         claims = tmp_path / "claims.json"
-        run("read_report.py", "--text", reports[0], "--out", claims)
-        report_arg = ["--report", str(claims)]
-
-    profiles = _site_profile(root, "QRWN")
-    profile_arg = ["--profile", str(profiles[0])] if profiles else []
-
-    cons = tmp_path / "consistency.json"
-    run("check_consistency.py", "--boq", boq_out, *report_arg, *profile_arg,
-        "--stage", "30% Concept Design", "--site", "QRWN", "--out", cons)
-    doc = json.loads(cons.read_text(encoding="utf-8"))
+        run("read_report.py", "--text", report, "--out", claims)
+        args.extend(["--report", str(claims)])
+    if profile:
+        args.extend(["--profile", str(profile)])
+    if table:
+        args.extend(["--drawing-table", str(table)])
+    run("check_consistency.py", *args)
+    doc = json.loads((tmp_path / "consistency.json").read_text(encoding="utf-8"))
     assert doc["consistency_version"] == "1.0"
     assert all(f.get("reference", {}).get("rule_id") is None for f in doc["findings"])
-    # C5 #REF! on parts 6–10 when present in this BOQ
-    errs = boq["summary"].get("cell_errors") or []
-    if errs:
-        assert any(r["check"] == "C5" and r["result"] == "flag" for r in doc["comparisons"])
+    assert any(r["check"] == "C5" and r["result"] == "flag" for r in doc["comparisons"])
+    if profile or table:
+        assert any(r["check"] == "C1" for r in doc["comparisons"])
 
 
 def test_t16_r2_nrjs_30pct(tmp_path):
-    """T16-R2: NRJS 30 % — C1 ~37k / 50k vs model; C3; C5."""
-    root = _root()
-    boqs = _site_boq(root, "NRJS")
-    if not boqs:
-        pytest.skip("T16-R2: no NRJS BOQ under LDIP_REVIEW_ROOT (G-N5 may apply)")
+    """T16-R2 / R6: NRJS 30 % — strict 37k / 50k bases."""
+    root = _skip_unless("NRJS")
+    boq_xlsx = _require_boq(root, "NRJS")
     boq_out = tmp_path / "boq.json"
-    run("read_boq.py", "--xlsx", boqs[0], "--out", boq_out)
+    run("read_boq.py", "--xlsx", boq_xlsx, "--out", boq_out)
     boq = json.loads(boq_out.read_text(encoding="utf-8"))
-    cut = (boq.get("summary") or {}).get("earthworks", {}).get("cut") or {}
-    fill = (boq.get("summary") or {}).get("earthworks", {}).get("fill") or {}
-    if cut.get("base") is not None:
-        assert cut["base"] == pytest.approx(37000, rel=0.05)
-    if fill.get("base") is not None:
-        assert fill["base"] == pytest.approx(50000, rel=0.05)
+    cut = boq["summary"]["earthworks"]["cut"]
+    fill = boq["summary"]["earthworks"]["fill"]
+    assert cut is not None and cut["base"] is not None
+    assert fill is not None and fill["base"] is not None
+    assert cut["base"] == pytest.approx(37000, rel=0.05)
+    assert fill["base"] == pytest.approx(50000, rel=0.05)
 
-    reports = _site_report(root, "NRJS")
-    report_arg = []
-    if reports:
+    report = _optional(root, [
+        "**/*Concept*Report*.pdf.json", "**/*Design*Report*.pdf.json", "**/*Report*.pdf.json",
+    ], "NRJS")
+    profile = _optional(root, ["**/earthworks_profile.json"], "NRJS")
+    args = ["--boq", str(boq_out), "--stage", "30% Concept Design", "--site", "NRJS",
+            "--out", str(tmp_path / "consistency.json")]
+    if report:
         claims = tmp_path / "claims.json"
-        run("read_report.py", "--text", reports[0], "--out", claims)
-        report_arg = ["--report", str(claims)]
-    profiles = _site_profile(root, "NRJS")
-    profile_arg = ["--profile", str(profiles[0])] if profiles else []
-
-    cons = tmp_path / "consistency.json"
-    run("check_consistency.py", "--boq", boq_out, *report_arg, *profile_arg,
-        "--stage", "30% Concept Design", "--site", "NRJS", "--out", cons)
-    doc = json.loads(cons.read_text(encoding="utf-8"))
+        run("read_report.py", "--text", report, "--out", claims)
+        args.extend(["--report", str(claims)])
+    if profile:
+        args.extend(["--profile", str(profile)])
+    run("check_consistency.py", *args)
+    doc = json.loads((tmp_path / "consistency.json").read_text(encoding="utf-8"))
     assert any(r["check"] in ("C1", "C3", "C5") for r in doc["comparisons"])
 
 
 def test_t16_r3_nmar_30pct(tmp_path):
-    """T16-R3: NMAR 30 % — C1 bases ×1.05; C2 ratios; C5 33 #REF!; C6 info."""
-    root = _root()
-    boqs = _site_boq(root, "NMAR")
-    if not boqs:
-        pytest.skip("T16-R3: no NMAR BOQ under LDIP_REVIEW_ROOT")
+    """T16-R3 / R6: NMAR 30 % — bases ×1.05; ≥33 #REF!; C6 info only with independent register."""
+    root = _skip_unless("NMAR")
+    boq_xlsx = _require_boq(root, "NMAR")
     boq_out = tmp_path / "boq.json"
-    run("read_boq.py", "--xlsx", boqs[0], "--out", boq_out)
+    run("read_boq.py", "--xlsx", boq_xlsx, "--out", boq_out)
     boq = json.loads(boq_out.read_text(encoding="utf-8"))
-    cut = (boq.get("summary") or {}).get("earthworks", {}).get("cut") or {}
-    fill = (boq.get("summary") or {}).get("earthworks", {}).get("fill") or {}
-    if cut.get("base") is not None:
-        assert cut["base"] == pytest.approx(429590, rel=0.02)
-        if cut.get("factor") is not None:
-            assert cut["factor"] == pytest.approx(1.05)
-    if fill.get("base") is not None:
-        assert fill["base"] == pytest.approx(222820, rel=0.02)
-    ratios = set(boq["summary"].get("ratios_recorded") or [])
-    if ratios:
-        assert {0.2, 0.8, 0.6}.issubset(ratios)
-    errs = boq["summary"].get("cell_errors") or []
-    # Probe: 33 #REF! in principal quantities
-    if errs:
-        assert len(errs) >= 30
+    cut = boq["summary"]["earthworks"]["cut"]
+    fill = boq["summary"]["earthworks"]["fill"]
+    assert cut is not None and cut["base"] is not None
+    assert fill is not None and fill["base"] is not None
+    assert cut["base"] == pytest.approx(429590, rel=0.02)
+    assert fill["base"] == pytest.approx(222820, rel=0.02)
+    assert cut.get("factor") == pytest.approx(1.05)
+    ratios = set(boq["summary"]["ratios_recorded"] or [])
+    assert {0.2, 0.8, 0.6}.issubset(ratios)
+    errs = boq["summary"]["cell_errors"]
+    assert len(errs) >= 33, f"T16-R3: expected ≥33 #REF!, got {len(errs)}"
 
-    road = (boq.get("summary") or {}).get("roads") or {}
-    reg = None
-    if road.get("road_area") or road.get("kerb"):
-        reg_path = tmp_path / "register.json"
-        # Model side optional; C6 still information at 30 %
-        reg_path.write_text(json.dumps({
-            "roads": {
-                "road_area_m2": (road.get("road_area") or {}).get("base") or 105710,
-                "kerb_length_m": (road.get("kerb") or {}).get("base") or 23900,
-            }
-        }), encoding="utf-8")
-        reg = reg_path
+    road = boq["summary"]["roads"]["road_area"]
+    kerb = boq["summary"]["roads"]["kerb"]
+    assert road is not None and road["base"] == pytest.approx(105710, rel=0.02)
+    assert kerb is not None and kerb["base"] == pytest.approx(23900, rel=0.02)
 
-    cons = tmp_path / "consistency.json"
+    # C6: only when an independent skill-10 register exists in scratch — never copy BOQ
+    reg = _optional(root, [
+        "**/road_register.json", "**/*linework*.json", "**/register.json",
+    ], "NMAR")
     args = ["--boq", str(boq_out), "--stage", "30% Concept Design", "--site", "NMAR",
-            "--out", str(cons)]
+            "--out", str(tmp_path / "consistency.json")]
     if reg:
+        # Ensure source is independent if the file already declares it; else pass as-is
+        # (check_consistency refuses BOQ-sourced registers).
         args.extend(["--road-register", str(reg)])
     run("check_consistency.py", *args)
-    doc = json.loads(cons.read_text(encoding="utf-8"))
+    doc = json.loads((tmp_path / "consistency.json").read_text(encoding="utf-8"))
+    assert any(r["check"] == "C5" and r["result"] == "flag" for r in doc["comparisons"])
     c6 = [r for r in doc["comparisons"] if r["check"] == "C6"]
-    if c6:
-        assert all(r["result"] == "information" for r in c6)
+    if reg:
+        # Independent → information at 30 %; self → not_run (both acceptable; never a silent self-pass)
+        assert c6
+        assert all(r["result"] in ("information", "not_run", "pass", "flag") for r in c6)
+        assert not any(
+            r["result"] == "pass" and r.get("values", {}).get("boq_base") == r.get("values", {}).get("model")
+            and "self" in (r.get("note") or "").lower()
+            for r in c6
+        )

@@ -21,7 +21,7 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 623 = 610 + skill 16 0.1.0 (9 synthetic + 3 real gated + 1 D11 SKILL.md).
-          python tools/check_suite.py --expect 623 --tests tests
+          # 628 = 610 + skill 16 0.1.0 R1–R9 (14 synthetic + 3 real gated + 1 D11 SKILL.md).
+          python tools/check_suite.py --expect 628 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
