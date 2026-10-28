@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Locate earthworks / pavement / geotech claims in skill-2 PDF text (skill 16; DN-2).
 
-R4: skip TOC pages; attach claims to section ranges; basis_ratio needs rock/suitable/disposal context.
-R5: rebuild page text in bbox reading order (top→bottom, left→right).
-R9: `balanced` is only meaningful inside the earthworks section (tagged on the claim).
+R4b: multi-page TOC — any page with ≥ N dot-leader / page-number lines is TOC;
+     sections located on the first **body** page with the heading.
+R5: rebuild page text by bbox **lines** (cluster by y, then left→right).
+R9: `balanced` only in earthworks section; drop ICT / non-earthworks context.
 
 Usage:
   python read_report.py --text <report.pdf.json|claims.json|report.txt> --out <report_claims.json>
@@ -39,76 +40,120 @@ SECTION_HEADINGS = {
 
 TOC_HINT = re.compile(r"\b(contents|table\s+of\s+contents|\btoc\b)\b", re.I)
 TOC_DOT_LEADERS = re.compile(r"\.{3,}\s*\d+\s*$", re.M)
-# Numbered major heading (closes prior section when not one of the three tracked sections)
+# Page-number-at-end lines (TOC style without requiring dots)
+TOC_PAGE_NUM_LINE = re.compile(r"^.{4,100}?\s+(\d{1,3})\s*$", re.M)
+TOC_LEADER_MIN = 3  # R4b: ≥ N leader / page-number lines ⇒ TOC
+LINE_Y_TOL = 3.0  # R5: spans within this many pt share a line
+
 OTHER_HEADING = re.compile(
     r"(?:^|\n)\s*(\d+(?:\.\d+)*)\s+([A-Z][A-Za-z][\w\s/-]{1,60})",
 )
+# R9: ICT / telecom / etc. close earthworks; balanced needs earthworks context
+ICT_HINT = re.compile(r"\b(ICT|information\s+and\s+communications?|telecom)\b", re.I)
+EARTHWORKS_CONTEXT = re.compile(r"\b(earthworks?|cut|fill|grading|excavation|embankment)\b", re.I)
 
 CLAIM_PATTERNS = {
     "balanced": re.compile(
         r"\bbalanced\b|cut\s*(?:and|&)\s*fill\s+balanc\w*|earthworks?\s+balanc\w*", re.I),
     "import": re.compile(r"\bimport(?:ed)?\s+(?:fill|material)\b|\bborrow\b", re.I),
     "export": re.compile(r"\bexport(?:ed)?\b|\bdispos(?:al|ed)\s+off[- ]?site\b", re.I),
-    # R4: basis_ratio requires rock / suitable / disposal context near the ratio tokens
     "basis_ratio": re.compile(
         r"(?:rock|suitable|disposal|spoil).{0,60}(?:0\.[268]|[268]0\s*%)"
         r"|(?:0\.[268]|[268]0\s*%).{0,60}(?:rock|suitable|disposal|spoil)"
         r"|(?:rock|suitable|disposal).{0,80}(?:0\.2|20\s*%).{0,40}(?:0\.8|80\s*%)",
         re.I | re.S),
     "pavement_depth": re.compile(
-        r"(?:pavement|wearing|thickness|ToS|top\s+of\s+subgrade).{0,40}?(\d+(?:\.\d+)?)\s*mm"
-        r"|(\d+(?:\.\d+)?)\s*mm.{0,40}?(?:pavement|wearing|thickness|ToS)",
+        r"(?:pavement|wearing|thickness|ToS|top\s+of\s+subgrade).{0,80}?(\d+(?:\.\d+)?)\s*mm"
+        r"|(\d+(?:\.\d+)?)\s*mm.{0,80}?(?:pavement|wearing|thickness|ToS|subgrade)",
         re.I | re.S),
 }
 
 
-def _bbox_key(span):
-    """R5: top then left; missing bbox → end."""
+def _bbox(span):
     bb = span.get("bbox") or span.get("bbox_pt")
     if not bb or len(bb) < 2:
-        return (1e9, 1e9)
-    return (round(float(bb[1]), 1), round(float(bb[0]), 1))
+        return None
+    return [float(bb[0]), float(bb[1]), float(bb[2]) if len(bb) > 2 else float(bb[0]),
+            float(bb[3]) if len(bb) > 3 else float(bb[1])]
 
 
 def page_text(page):
-    """R5: join spans in bbox reading order, then OCR spans similarly."""
-    parts = []
-    spans = list(page.get("spans") or [])
-    spans.sort(key=_bbox_key)
+    """R5: cluster spans into lines by y, sort each line by x, join with newlines."""
+    spans = list(page.get("spans") or []) + list(page.get("ocr_spans") or [])
+    rows = []
     for sp in spans:
         t = sp.get("text")
-        if t:
-            parts.append(str(t))
-    ocr = list(page.get("ocr_spans") or [])
-    ocr.sort(key=_bbox_key)
-    for sp in ocr:
-        t = sp.get("text")
-        if t:
-            parts.append(str(t))
-    return " ".join(parts)
+        if not t:
+            continue
+        bb = _bbox(sp)
+        if bb is None:
+            rows.append((1e9, 1e9, str(t)))
+        else:
+            rows.append((bb[1], bb[0], str(t)))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: (round(r[0] / LINE_Y_TOL) * LINE_Y_TOL, r[1]))
+    lines = []
+    cur_y = None
+    cur = []
+    for y, x, t in rows:
+        y_key = round(y / LINE_Y_TOL) * LINE_Y_TOL
+        if cur_y is None or abs(y_key - cur_y) <= LINE_Y_TOL:
+            cur.append((x, t))
+            if cur_y is None:
+                cur_y = y_key
+        else:
+            cur.sort(key=lambda p: p[0])
+            lines.append(" ".join(p[1] for p in cur))
+            cur = [(x, t)]
+            cur_y = y_key
+    if cur:
+        cur.sort(key=lambda p: p[0])
+        lines.append(" ".join(p[1] for p in cur))
+    return "\n".join(lines)
 
 
-def is_toc_page(text, page_no):
-    """R4: TOC pages — 'contents' heading or many dotted leaders / section-title+page lines."""
+def _toc_score(text):
+    """Count TOC-like lines (dot leaders + trailing page numbers)."""
+    if not text:
+        return 0
+    leaders = TOC_DOT_LEADERS.findall(text)
+    page_lines = TOC_PAGE_NUM_LINE.findall(text)
+    return max(len(leaders), len(page_lines) // 2)
+
+
+def is_toc_page(text, page_no, force=False):
+    """R4b: ≥ TOC_LEADER_MIN leader/page-number lines ⇒ TOC (any page)."""
     if not text:
         return False
-    if TOC_HINT.search(text[:400]) and page_no <= 5:
+    if force:
+        return _toc_score(text) >= TOC_LEADER_MIN or bool(TOC_HINT.search(text[:500]))
+    if TOC_HINT.search(text[:500]) and page_no <= 12:
         return True
-    leaders = TOC_DOT_LEADERS.findall(text)
-    if len(leaders) >= 5:
+    if _toc_score(text) >= TOC_LEADER_MIN:
         return True
-    # Early pages that list every section heading once with page numbers
-    hits = sum(1 for pat in SECTION_HEADINGS.values() if pat.search(text))
-    if page_no <= 4 and hits >= 2 and re.search(r"\b\d{1,3}\s*$", text, re.M):
-        # Likely TOC if short lines dominate
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()] or text.split(".")
-        if len(lines) >= 6 and sum(1 for ln in lines if len(ln) < 80) >= max(4, len(lines) // 2):
-            return True
     return False
 
 
+def mark_toc_pages(pages):
+    """R4b: mark TOC pages; extend contiguous block after the first TOC hit."""
+    for p in pages:
+        p["is_toc"] = is_toc_page(p.get("text") or "", p["page"])
+    # Extend: once a TOC page is seen, keep marking following pages with enough leaders
+    seen_toc = False
+    for p in pages:
+        if p["is_toc"]:
+            seen_toc = True
+            continue
+        if seen_toc and _toc_score(p.get("text") or "") >= TOC_LEADER_MIN:
+            p["is_toc"] = True
+        elif seen_toc and not p["is_toc"]:
+            # Body started — stop extending (but later TOC-score pages still marked above)
+            seen_toc = False
+    return pages
+
+
 def load_pages(path):
-    """Return list of {page, text, is_toc} from skill-2 JSON, claims JSON, or .txt."""
     path = Path(path)
     if not path_ok(path):
         raise ValueError(f"path longer than 250 characters: {path}")
@@ -117,7 +162,8 @@ def load_pages(path):
 
     if path.suffix.lower() == ".txt":
         text = path.read_text(encoding="utf-8")
-        return [{"page": 1, "text": text, "is_toc": is_toc_page(text, 1)}]
+        pages = [{"page": 1, "text": text, "is_toc": False}]
+        return mark_toc_pages(pages)
 
     doc = read_json(path)
     if isinstance(doc, dict) and "claims" in doc and "pages" not in (doc.get("content") or {}):
@@ -128,43 +174,41 @@ def load_pages(path):
         for p in pages:
             pg = int(p.get("page") or 1)
             text = p.get("text") or ""
-            out.append({"page": pg, "text": text, "is_toc": bool(p.get("is_toc")) or is_toc_page(text, pg)})
-        return out
+            out.append({"page": pg, "text": text, "is_toc": bool(p.get("is_toc"))})
+        # Honour explicit is_toc; still run multi-page TOC detection
+        return mark_toc_pages(out)
 
     content = doc.get("content") or doc
     pages_out = []
     for p in content.get("pages") or []:
         pg = int(p.get("page") or len(pages_out) + 1)
-        text = page_text(p)
-        pages_out.append({"page": pg, "text": text, "is_toc": is_toc_page(text, pg)})
+        pages_out.append({"page": pg, "text": page_text(p), "is_toc": False})
     if not pages_out and isinstance(doc.get("text"), str):
-        pages_out = [{"page": 1, "text": doc["text"], "is_toc": is_toc_page(doc["text"], 1)}]
-    return pages_out
+        pages_out = [{"page": 1, "text": doc["text"], "is_toc": False}]
+    return mark_toc_pages(pages_out)
 
 
 def _heading_events(pages):
-    """Yield (page, section_name|None, title) for tracked + other numbered headings."""
     events = []
     for p in pages:
         if p.get("is_toc"):
             continue
         text = p["text"] or ""
-        # Tracked sections
         for name, pat in SECTION_HEADINGS.items():
             if pat.search(text):
                 events.append({"page": p["page"], "section": name, "title": name})
-        # Other numbered headings close ranges (e.g. "5 Drainage")
         for m in OTHER_HEADING.finditer(text):
             title = m.group(2).strip()
-            low = title.casefold()
             tracked = None
             for name, pat in SECTION_HEADINGS.items():
-                if pat.search(title) or pat.search(low):
+                if pat.search(title):
                     tracked = name
                     break
             if tracked is None:
                 events.append({"page": p["page"], "section": None, "title": title})
-    # de-dupe same page+section
+        # ICT / similar also closes earthworks (R9)
+        if ICT_HINT.search(text):
+            events.append({"page": p["page"], "section": None, "title": "ICT"})
     out, seen = [], set()
     for e in sorted(events, key=lambda x: (x["page"], x["section"] or "")):
         key = (e["page"], e["section"], e["title"].casefold())
@@ -176,22 +220,17 @@ def _heading_events(pages):
 
 
 def locate_sections(pages):
-    """R4: first non-TOC hit per tracked section; page_end at next heading (tracked or other)."""
+    """R4b: first **body** (non-TOC) page with each heading."""
     events = _heading_events(pages)
-    # First occurrence of each tracked section
     seen = {}
     for e in events:
         if e["section"] and e["section"] not in seen:
             seen[e["section"]] = {"section": e["section"], "page": e["page"]}
     ordered = sorted(seen.values(), key=lambda h: h["page"])
     for h in ordered:
-        # End at the next heading event after this section starts (any heading)
         end = 10**9
         for e in events:
-            if e["page"] > h["page"]:
-                # Don't let another mention of the same section close itself
-                if e["section"] == h["section"]:
-                    continue
+            if e["page"] > h["page"] and e["section"] != h["section"]:
                 end = e["page"] - 1
                 break
         h["page_end"] = end if end >= h["page"] else h["page"]
@@ -206,7 +245,6 @@ def section_for_page(sections, page):
 
 
 def extract_claims(pages, sections):
-    """Extract claims from non-TOC pages; tag section (R4 / R9)."""
     claims = []
     for p in pages:
         if p.get("is_toc"):
@@ -217,11 +255,21 @@ def extract_claims(pages, sections):
         sec = section_for_page(sections, p["page"])
         for family, pat in CLAIM_PATTERNS.items():
             for m in pat.finditer(text):
+                if family == "balanced":
+                    # R9: require earthworks section AND local earthworks context (drop ICT p152)
+                    window = text[max(0, m.start() - 100): m.end() + 100]
+                    if sec != "earthworks":
+                        continue
+                    if not EARTHWORKS_CONTEXT.search(window):
+                        continue
+                    if ICT_HINT.search(window) and not EARTHWORKS_CONTEXT.search(
+                            text[max(0, m.start() - 40): m.end() + 40]):
+                        continue
                 rec = {
                     "family": family,
                     "page": p["page"],
                     "section": sec,
-                    "extract": m.group(0)[:240],
+                    "extract": m.group(0)[:240].replace("\n", " "),
                     "span": [m.start(), m.end()],
                 }
                 if family == "pavement_depth":
@@ -229,16 +277,15 @@ def extract_claims(pages, sections):
                     if mm is not None:
                         rec["value_mm"] = float(mm)
                         rec["value_m"] = float(mm) / 1000.0
-                # R9: balanced outside earthworks is recorded but marked in_section=False
                 if family == "balanced":
-                    rec["in_earthworks_section"] = sec == "earthworks"
+                    rec["in_earthworks_section"] = True
                 claims.append(rec)
     return claims
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--text", required=True, help="skill-2 .pdf.json, claims JSON, or .txt")
+    ap.add_argument("--text", required=True)
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
@@ -248,12 +295,7 @@ def main(argv=None):
             return fail(EXIT_INPUT, f"no pages/text in {a.text}")
         sections = locate_sections(pages)
         claims = extract_claims(pages, sections)
-        # families_present for C3: R9 — balanced only counts when in earthworks section
-        families = set()
-        for c in claims:
-            if c["family"] == "balanced" and not c.get("in_earthworks_section"):
-                continue
-            families.add(c["family"])
+        families = sorted({c["family"] for c in claims})
         out = {
             "report_claims_version": "1.0",
             "source": {"path": str(a.text)},
@@ -261,12 +303,11 @@ def main(argv=None):
             "claims": claims,
             "pages_read": len(pages),
             "toc_pages": [p["page"] for p in pages if p.get("is_toc")],
-            "families_present": sorted(families),
+            "families_present": families,
             "document_no": None,
             "tool": {"script": "read_report.py", "version": __version__},
             "claims_ref": str(CLAIMS_MD.relative_to(SKILL_ROOT)) if CLAIMS_MD.is_file() else None,
         }
-        # Optional document_no from skill-2 title block
         try:
             raw = read_json(a.text)
             tb = (raw.get("content") or raw).get("title_block") or raw.get("title_block") or {}
@@ -280,6 +321,7 @@ def main(argv=None):
             "pages": len(pages),
             "toc_pages": out["toc_pages"],
             "sections": [s["section"] for s in sections],
+            "section_pages": {s["section"]: s["page"] for s in sections},
             "claims": len(claims),
             "families": out["families_present"],
         })

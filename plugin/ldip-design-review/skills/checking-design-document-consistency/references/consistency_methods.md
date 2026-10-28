@@ -32,20 +32,20 @@ Tag: `[PROPOSED — DN-5, confirm on first 60 % package (R-L5)]` in `params.json
 - Areas / lengths (m² / m): difference > **10 %**
 - C4: median off > **0.05 m**
 
-## Review fixes (R1–R9)
+## Review fixes (R1–R9 + S32 re-review)
 
 | Ri | Fix |
 |----|-----|
-| R1 | Parsons header synonyms; role prefer import over fill; part sheets before principal; synthetic fixture |
+| R1 | Roles **only** from part sheets `4-EARTHWORKS` / `6- Roads and Pavings` (+ A-List cross-check); never Dayworks/Electrical; cut/fill from base×factor totals; Dayworks+Electrical trap fixture |
 | R2 | Dual openpyxl pass (formulas + cached values) |
-| R3 | `#REF!` inside formulas; principal SUMIF/SUM vs part totals |
-| R4 | Skip TOC; claims tagged to section ranges; basis_ratio needs rock/suitable/disposal context |
-| R5 | Page text in bbox reading order |
-| R6 | Real tests: per-site `LDIP_SKILL16_*` env vars; strict asserts |
+| R3 / R3b | `#REF!` in formulas; **grouped** C5 findings (A-List / parts only); other sheets → information count |
+| R4 / R4b | Multi-page TOC (≥ N leader lines); sections on first **body** page |
+| R5 | Bbox **line** rebuild; synthetic OOO spans → 550 mm |
+| R6 / R6b | `site.json` / `LDIP_SKILL16_<SITE>_{BOQ,REPORT,…}` + strict bases / C3 Obs / 550 mm / C5 |
 | C6 | Never BOQ vs itself — independent `source` / linework required |
 | R7 | C1 always emits three pairs when sources present |
 | R8 | DN-5 tag on params; findings carry real `document_no` |
-| R9 | `balanced` only counts inside the earthworks section |
+| R9 | `balanced` only in earthworks section with earthworks context; drop ICT |
 
 ## Evidence (SPC-0003)
 

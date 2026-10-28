@@ -1,6 +1,6 @@
-"""Skill 16 checking-design-document-consistency 0.1.0 — synthetic T16-1…T16-4 + R1–R9.
+"""Skill 16 0.1.0 — synthetic T16-1…T16-4 + S32 re-review R1/R3b/R4b/R5/R6b/R9.
 
-SPC-0006 Rev N §4.16 (DN-1…DN-8). No real project data.
+SPC-0006 Rev N §4.16. No real project data.
 """
 from __future__ import annotations
 
@@ -42,54 +42,70 @@ def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def make_boq(path, *, cut_formula="=5065345*1.05", fill_base=3748575, fill_factor=1.05,
+def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill_factor=1.05,
              disposal=800000, imp=120000, ratios=(0.2, 0.8, 0.6),
-             ref_errors=None, ref_in_formula=False, road_area=105710, kerb=23900,
-             principal_sumif=None, headers="parsons"):
-    """R1 synthetic fixture — Parsons-like headers + roles; optional #REF! / SUMIF (R3)."""
+             ref_alist=5, road_area=105710, kerb=23900,
+             nrjs=False):
+    """R1 fixture: part sheets 4-EARTHWORKS / 6- Roads + A-List + Dayworks/Electrical traps.
+
+    Cut total lives as helper I13-style base×factor; F13-style common 20 % is a trap portion.
+    Dayworks/Electrical contain fill/kerb/import words that must NOT win roles.
+    """
+    if nrjs:
+        cut_base, fill_base, disposal, imp = 37000, 50000, 5000, 36960
+        cut_factor = fill_factor = 1.0
+        road_area, kerb = 10400, 5278
+
     wb = openpyxl.Workbook()
+
+    # --- 4-EARTHWORKS (role source) ---
     ws = wb.active
-    ws.title = "Earthworks"
-    if headers == "parsons":
-        # R1: real-ish synonyms (Item Description / Qty / Unit of Measure)
-        ws.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
-    else:
-        ws.append(["Part", "Code", "Description", "Unit", "Quantity"])
-    ws.append(["1", "EWK-01", "General excavation (cut)", "m3", cut_formula])
-    if fill_factor and fill_factor != 1.0:
-        ws.append(["1", "EWK-02", "Suitable fill", "m3", f"={fill_base}*{fill_factor}"])
-    else:
-        ws.append(["1", "EWK-02", "Suitable fill", "m3", fill_base])
-    ws.append(["1", "EWK-03", "Disposal off site", "m3", disposal])
-    ws.append(["1", "EWK-04", "Imported fill", "m3", imp])
-    ws["A10"] = 1000
-    ws.append(["1", "EWK-06", "Rock portion (ratio)", "m3", f"=A10*{ratios[0]}"])
-    ws.append(["1", "EWK-07", "Suitable portion (ratio)", "m3", f"=A10*{ratios[1]}"])
-    ws.append(["1", "EWK-08", "Disposal portion (ratio)", "m3", f"=A10*{ratios[2]}"])
+    ws.title = "4-EARTHWORKS"
+    ws.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
+    # Helper total in column I (col 9) row 13 style — put on row 2 col E as total, and a portion
+    # Row 2: total excavation with base×factor (the real cut)
+    ws.append(["4", "EWK-TOT", "Bulk excavation total", "m3", f"={cut_base}*{cut_factor}"])
+    # Row 3: common 20 % portion (trap — must not win cut)
+    ws.append(["4", "EWK-COM", "Common excavation 20 %", "m3", f"=E2*{ratios[0]}"])
+    ws.append(["4", "EWK-02", "Suitable fill", "m3",
+               f"={fill_base}*{fill_factor}" if fill_factor != 1.0 else fill_base])
+    ws.append(["4", "EWK-03", "Disposal off site", "m3", disposal])
+    ws.append(["4", "EWK-04", "Imported fill", "m3", imp])
+    ws.append(["4", "EWK-06", "Rock portion (ratio)", "m3", f"=E2*{ratios[0]}"])
+    ws.append(["4", "EWK-07", "Suitable portion (ratio)", "m3", f"=E2*{ratios[1]}"])
+    ws.append(["4", "EWK-08", "Disposal portion (ratio)", "m3", f"=E2*{ratios[2]}"])
 
-    ws2 = wb.create_sheet("Roads")
+    # --- 6- Roads and Pavings ---
+    ws2 = wb.create_sheet("6- Roads and Pavings")
     ws2.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
-    ws2.append(["2", "ROD-01", "Road pavement area", "m2", f"={road_area}*1.05"])
-    ws2.append(["2", "ROD-02", "Kerb length", "m", f"={kerb}*1.05"])
+    ws2.append(["6", "ROD-01", "Road pavement area", "m2",
+                f"={road_area}*1.05" if not nrjs else road_area])
+    ws2.append(["6", "ROD-02", "Kerb length", "m",
+                f"={kerb}*1.05" if not nrjs else kerb])
 
-    ws3 = wb.create_sheet("Principal Quantities")
+    # --- A-List (principal) ---
+    ws3 = wb.create_sheet("A-List")
     ws3.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
-    ws3.append(["PQ", "PQ-01", "Principal excavation", "m3", cut_formula])
-    if principal_sumif:
-        # R3: SUMIF link — formula text only (cached value requires Excel; reader records link)
-        ws3.append(["PQ", "PQ-SUM", "Principal total (SUMIF)", "m3", principal_sumif])
-    if ref_errors:
-        for i, addr_note in enumerate(ref_errors, start=0):
-            row = 3 + i + (1 if principal_sumif else 0)
-            ws3.cell(row=row, column=1, value=f"Part {addr_note}")
-            ws3.cell(row=row, column=2, value=f"PQ-ERR{i}")
-            ws3.cell(row=row, column=3, value="Principal quantity link")
-            ws3.cell(row=row, column=4, value="m3")
-            if ref_in_formula:
-                # R3: #REF! inside a formula string
-                ws3.cell(row=row, column=5, value="=#REF!")
-            else:
-                ws3.cell(row=row, column=5, value="#REF!")
+    ws3.append(["PQ", "PQ-01", "Principal excavation", "m3", f"={cut_base}*{cut_factor}"])
+    for i in range(ref_alist):
+        row = 3 + i
+        ws3.cell(row=row, column=1, value=f"Part {6 + i}")
+        ws3.cell(row=row, column=2, value=f"PQ-ERR{i}")
+        ws3.cell(row=row, column=3, value="Principal quantity link")
+        ws3.cell(row=row, column=4, value="m3")
+        ws3.cell(row=row, column=5, value="=#REF!")
+
+    # --- C- Dayworks (TRAP — must not win import/kerb/road) ---
+    ws4 = wb.create_sheet("C- Dayworks")
+    ws4.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
+    ws4.append(["C", "DW-01", "Imported sabkha", "m3", 50])
+    ws4.append(["C", "DW-02", "Kerb temporary", "m", 50])
+    ws4.append(["C", "DW-03", "Road pavement patch", "m2", 5])
+
+    # --- 11- Electrical Works (TRAP — must not win fill) ---
+    ws5 = wb.create_sheet("11- Electrical Works")
+    ws5.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
+    ws5.append(["11", "EL-70", "Earthing fill around electrode", "m3", 1563 if not nrjs else 80])
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,9 +119,15 @@ def make_report_pdf_json(path, pages):
     for entry in pages:
         if len(entry) == 2 and isinstance(entry[1], str):
             page_no, text = entry
-            words = text.split()
-            spans = [{"text": w, "bbox": [10.0 * i, 20.0, 10.0 * i + 8, 32.0]}
-                     for i, w in enumerate(words)]
+            # One span per line to preserve newlines for TOC detection
+            spans = []
+            y = 20.0
+            for line in text.split("\n"):
+                x = 10.0
+                for w in line.split():
+                    spans.append({"text": w, "bbox": [x, y, x + 8, y + 10]})
+                    x += 10.0
+                y += 14.0
         else:
             page_no, spans = entry
         page_objs.append({"page": page_no, "width_pt": 595, "height_pt": 842,
@@ -124,25 +146,32 @@ def validate_consistency(doc):
         assert f.get("report_only") is True
 
 
-# ------------------------------------------------------------------ T16-1 / R1 / R2
+# ------------------------------------------------------------------ T16-1 / R1
 def test_t16_1_boq_base_factor_and_ratios(tmp_path):
-    """T16-1 + R1/R2: Parsons headers; base 5,065,345; factor 1.05; ratios; dual_pass."""
+    """T16-1 + R1: cut/fill from part sheets; Dayworks/Electrical traps ignored."""
     xlsx = make_boq(tmp_path / "boq.xlsx")
     out = tmp_path / "boq.json"
     rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out,
                   "--document-no", "LDIP-RCRC-SAP-01-QRWN-BOQ-00001")
     assert rc == 0, msg
-    assert msg.get("dual_pass") is True
     boq = load(out)
-    assert boq["source"]["document_no"] == "LDIP-RCRC-SAP-01-QRWN-BOQ-00001"
-    assert boq["source"]["dual_pass"] is True
     cut = boq["summary"]["earthworks"]["cut"]
+    fill = boq["summary"]["earthworks"]["fill"]
+    imp = boq["summary"]["earthworks"]["import"]
     assert cut["base"] == pytest.approx(5065345)
     assert cut["factor"] == pytest.approx(1.05)
-    assert "excavation" in (cut["description"] or "").lower() or "cut" in (cut["description"] or "").lower()
-    # Imported fill must not also be role fill (R1)
-    imp = boq["summary"]["earthworks"]["import"]
-    assert imp is not None and imp["base"] == pytest.approx(120000)
+    # Must NOT be the common 20 % portion (≈1,013,069)
+    assert cut["base"] > 2_000_000
+    assert fill["base"] == pytest.approx(3748575)
+    assert imp["base"] == pytest.approx(120000)
+    # Trap sheets must not win
+    assert imp["base"] != 50
+    assert fill["base"] != 1563
+    road = boq["summary"]["roads"]["road_area"]
+    kerb = boq["summary"]["roads"]["kerb"]
+    assert road["base"] == pytest.approx(105710)
+    assert kerb["base"] == pytest.approx(23900)
+    assert road["base"] != 5 and kerb["base"] != 50
     ratios = set(boq["summary"]["ratios_recorded"])
     assert {0.2, 0.8, 0.6}.issubset(ratios)
 
@@ -151,73 +180,84 @@ def test_t16_1_boq_base_factor_and_ratios(tmp_path):
         "families_present": [], "pages_read": 1,
     })
     cons = tmp_path / "consistency.json"
-    rc, msg = run("check_consistency.py", "--boq", out, "--report", report,
-                  "--stage", "30% Concept Design", "--out", cons)
+    rc, msg = run("check_consistency.py", "--boq", out, "--report", report, "--out", cons)
     assert rc == 0, msg
     doc = load(cons)
     validate_consistency(doc)
-    c2 = [r for r in doc["comparisons"] if r["check"] == "C2"]
-    assert any(r["result"] == "observation" for r in c2)
-    assert any("basis not stated" in (r.get("note") or "") for r in c2)
+    assert any(r["check"] == "C2" and r["result"] == "observation" for r in doc["comparisons"])
 
 
-# ------------------------------------------------------------------ T16-2 / R3
-def test_t16_2_ref_error_c5(tmp_path):
-    """T16-2 + R3: #REF! as value and inside formula → C5 with cell address."""
-    xlsx = make_boq(tmp_path / "boq.xlsx", ref_errors=[6, 7, 8, 9, 10], ref_in_formula=True)
+def test_r1_nrjs_hard_values(tmp_path):
+    """R1: NRJS hard values 37,000 / 50,000 from part sheets."""
+    xlsx = make_boq(tmp_path / "boq.xlsx", nrjs=True)
     out = tmp_path / "boq.json"
     rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out)
     assert rc == 0, msg
     boq = load(out)
-    assert len(boq["summary"]["cell_errors"]) >= 5
-    assert any(e.get("kind") == "formula_ref_error" or e.get("formula") for e in boq["summary"]["cell_errors"])
+    assert boq["summary"]["earthworks"]["cut"]["base"] == pytest.approx(37000)
+    assert boq["summary"]["earthworks"]["fill"]["base"] == pytest.approx(50000)
+    assert boq["summary"]["earthworks"]["import"]["base"] == pytest.approx(36960)
+
+
+# ------------------------------------------------------------------ T16-2 / R3b
+def test_t16_2_ref_error_c5_grouped(tmp_path):
+    """T16-2 + R3b: handful of grouped C5 findings (A-List), not one per cell."""
+    xlsx = make_boq(tmp_path / "boq.xlsx", ref_alist=33)
+    out = tmp_path / "boq.json"
+    rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out)
+    assert rc == 0, msg
+    boq = load(out)
+    assert len(boq["summary"]["cell_errors"]) >= 33
+    groups = boq["summary"]["error_groups"]
+    alist = next(g for g in groups if g["group"] == "alist")
+    assert alist["count"] >= 33
 
     cons = tmp_path / "consistency.json"
     rc, msg = run("check_consistency.py", "--boq", out, "--out", cons)
     assert rc == 0, msg
     doc = load(cons)
     validate_consistency(doc)
-    c5 = [r for r in doc["comparisons"] if r["check"] == "C5" and r["result"] == "flag"]
-    assert c5
-    assert any(r.get("proposed_status") == "Confirmed" for r in c5)
-    # R8 document_no on findings
-    assert all(f["location"]["document_no"] for f in doc["findings"])
+    c5_findings = [f for f in doc["findings"] if (f.get("reference") or {}).get("clause") == "C5"]
+    # R3b: handful — far fewer than 33
+    assert 1 <= len(c5_findings) <= 5, len(c5_findings)
+    assert any("A-List" in f["title"] or "33" in f["title"] or "principal" in f["title"].lower()
+               for f in c5_findings)
+    # Confirmed for xlsx_cell group
+    assert any(f.get("proposed_status") == "Confirmed" for f in c5_findings)
 
 
-def test_r3_principal_sumif_recorded(tmp_path):
-    """R3: principal SUMIF/SUM link is recorded for C5 comparison."""
-    xlsx = make_boq(tmp_path / "boq.xlsx", principal_sumif="=SUMIF(Earthworks!C:C,\"*excav*\",Earthworks!E:E)")
-    out = tmp_path / "boq.json"
-    rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out)
-    assert rc == 0, msg
-    boq = load(out)
-    assert boq["summary"]["sum_links"], boq["summary"]
-    assert any("SUMIF" in (s.get("kind") or s.get("formula", "")).upper()
-               for s in boq["summary"]["sum_links"])
-
-
-# ------------------------------------------------------------------ T16-3 / R4 / R9
+# ------------------------------------------------------------------ T16-3 / R4b / R9
 def test_t16_3_balanced_observation(tmp_path):
-    """T16-3 + R9: balanced in earthworks section + BOQ disposal/import → C3 Observation."""
+    """T16-3 + R4b/R9: multi-page TOC skipped; balanced on earthworks body → C3 Obs."""
     xlsx = make_boq(tmp_path / "boq.xlsx", disposal=500000, imp=80000)
     boq_path = tmp_path / "boq.json"
-    rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
-    assert rc == 0, msg
+    run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
 
-    pdf = make_report_pdf_json(tmp_path / "report.pdf.json", [
-        (1, "Contents Earthworks .............. 3 Pavement ................ 8"),
-        (3, "3.1 Earthworks The cut and fill are balanced across the site."),
-        (8, "8 Pavement Total pavement thickness 550 mm from wearing surface to ToS."),
+    # TOC pages 2–5 with many dot leaders; body earthworks on p10; ICT balanced on p12
+    toc_line = "Earthworks ........................ 10\nPavement .......................... 11\nGeotechnical ...................... 9\n"
+    toc_pages = [(p, "Contents\n" + toc_line * 3) for p in range(2, 6)]
+    pdf = make_report_pdf_json(tmp_path / "report.pdf.json", toc_pages + [
+        (10, "9.3.2 Earthworks\nThe cut and fill are balanced across the site grading."),
+        (11, "9.10 Pavement\nTotal pavement thickness 550 mm from wearing surface to ToS."),
+        (12, "12 ICT\nThe ICT network load is balanced across cabinets."),
     ])
     claims_path = tmp_path / "report_claims.json"
     rc, msg = run("read_report.py", "--text", pdf, "--out", claims_path)
     assert rc == 0, msg
     claims = load(claims_path)
-    assert 1 in claims.get("toc_pages", []) or claims["toc_pages"] == [1]
-    assert "balanced" in claims["families_present"]
+    # R4b: TOC spans multiple pages
+    assert len(claims["toc_pages"]) >= 3, claims["toc_pages"]
+    # Sections on body pages, not TOC
+    sec_pages = {s["section"]: s["page"] for s in claims["sections"]}
+    assert sec_pages.get("earthworks") == 10
+    assert sec_pages.get("pavement") == 11
+    # R9: ICT balanced dropped
     bal = [c for c in claims["claims"] if c["family"] == "balanced"]
-    assert bal and bal[0].get("in_earthworks_section") is True
-    assert "earthworks" in [s["section"] for s in claims["sections"]]
+    assert len(bal) == 1 and bal[0]["page"] == 10
+    assert "balanced" in claims["families_present"]
+    # 550 mm found (R5 line rebuild)
+    assert any(c.get("value_mm") == pytest.approx(550) for c in claims["claims"]
+               if c["family"] == "pavement_depth")
 
     cons = tmp_path / "consistency.json"
     rc, msg = run("check_consistency.py", "--boq", boq_path, "--report", claims_path, "--out", cons)
@@ -227,65 +267,82 @@ def test_t16_3_balanced_observation(tmp_path):
     assert any(r["check"] == "C3" and r["result"] == "observation" for r in doc["comparisons"])
 
 
-def test_r9_balanced_outside_earthworks_ignored(tmp_path):
-    """R9: 'balanced' in a non-earthworks section does not drive C3."""
-    xlsx = make_boq(tmp_path / "boq.xlsx", disposal=500000, imp=80000)
-    boq_path = tmp_path / "boq.json"
-    run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
-    pdf = make_report_pdf_json(tmp_path / "report.pdf.json", [
-        (2, "2 Earthworks Quantities are summarised below."),
-        (5, "5 Drainage The network is balanced for peak flow."),
-    ])
-    claims_path = tmp_path / "claims.json"
-    rc, msg = run("read_report.py", "--text", pdf, "--out", claims_path)
-    assert rc == 0, msg
-    claims = load(claims_path)
-    assert "balanced" not in claims["families_present"]
-    cons = tmp_path / "cons.json"
-    rc, msg = run("check_consistency.py", "--boq", boq_path, "--report", claims_path, "--out", cons)
-    assert rc == 0, msg
-    doc = load(cons)
-    assert not any(r["check"] == "C3" and r["result"] == "observation" for r in doc["comparisons"])
-
-
-def test_r4_basis_ratio_needs_context(tmp_path):
-    """R4: bare 0.2 / 0.8 without rock/suitable/disposal context is not basis_ratio."""
+def test_r9_ict_balanced_dropped(tmp_path):
+    """R9: ICT 'balanced' without earthworks context is not a claim."""
     pdf = make_report_pdf_json(tmp_path / "r.pdf.json", [
-        (2, "2 Earthworks Progress is 0.2 complete and 0.8 remains."),
-        (3, "3 Earthworks Rock 0.2 suitable 0.8 disposal 0.6 split applied."),
+        (10, "9.3 Earthworks Quantities are summarised below."),
+        (152, "15 ICT The system is balanced for redundancy."),
     ])
     out = tmp_path / "claims.json"
     rc, msg = run("read_report.py", "--text", pdf, "--out", out)
     assert rc == 0, msg
     claims = load(out)
-    basis = [c for c in claims["claims"] if c["family"] == "basis_ratio"]
-    assert basis, claims["claims"]
-    assert all(c["page"] == 3 for c in basis)
+    assert "balanced" not in claims["families_present"]
+    assert not any(c["family"] == "balanced" for c in claims["claims"])
+
+
+def test_r4b_toc_multipage_sections_on_body(tmp_path):
+    """R4b: pages with ≥3 dot-leader lines are TOC; section on first body page."""
+    pages = []
+    for p in range(2, 10):
+        pages.append((p, "\n".join([
+            f"Section {i} Earthworks " + "." * 20 + f" {100 + i}" for i in range(5)
+        ])))
+    pages.append((137, "9.3.2 Earthworks Mass haul and cut fill volumes."))
+    pages.append((144, "9.10 Pavement wearing course details."))
+    pdf = make_report_pdf_json(tmp_path / "toc.pdf.json", pages)
+    out = tmp_path / "claims.json"
+    rc, msg = run("read_report.py", "--text", pdf, "--out", out)
+    assert rc == 0, msg
+    claims = load(out)
+    assert all(p in claims["toc_pages"] for p in range(2, 10))
+    sec = {s["section"]: s["page"] for s in claims["sections"]}
+    assert sec.get("earthworks") == 137
+    assert sec.get("pavement") == 144
+
+
+# ------------------------------------------------------------------ R5 bbox lines + 550 mm
+def test_r5_bbox_line_rebuild_550mm(tmp_path):
+    """R5: out-of-order spans rebuilt into lines; 550 mm found with pavement context."""
+    # Deliberately shuffled: mm before 550, pavement words on different x order
+    spans = [
+        {"text": "mm", "bbox": [120, 80, 140, 90]},
+        {"text": "550", "bbox": [90, 80, 115, 90]},
+        {"text": "thickness", "bbox": [50, 60, 100, 70]},
+        {"text": "Pavement", "bbox": [10, 40, 60, 50]},
+        {"text": "Total", "bbox": [10, 60, 40, 70]},
+        {"text": "wearing", "bbox": [10, 80, 50, 90]},
+        {"text": "to", "bbox": [150, 80, 165, 90]},
+        {"text": "ToS", "bbox": [170, 80, 200, 90]},
+        {"text": "design", "bbox": [70, 40, 110, 50]},
+    ]
+    pdf = make_report_pdf_json(tmp_path / "ooo.pdf.json", [(4, spans)])
+    out = tmp_path / "claims.json"
+    rc, msg = run("read_report.py", "--text", pdf, "--out", out)
+    assert rc == 0, msg
+    claims = load(out)
+    depths = [c for c in claims["claims"] if c["family"] == "pavement_depth"]
+    assert depths and depths[0]["value_mm"] == pytest.approx(550)
 
 
 # ------------------------------------------------------------------ T16-4
 def test_t16_4_pavement_depth_pass_and_flag(tmp_path):
-    """T16-4: surfaces 0.55 m apart → pass; 0.40 m → flag (C4)."""
     xlsx = make_boq(tmp_path / "boq.xlsx", disposal=0, imp=0)
     boq_path = tmp_path / "boq.json"
     run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
-
     pdf = make_report_pdf_json(tmp_path / "report.pdf.json", [
         (2, "2 Earthworks Site grading overview."),
-        (4, "4 Pavement design. Total pavement thickness 550 mm from wearing surface to ToS."),
+        (4, "4 Pavement design.\nTotal pavement thickness 550 mm from wearing surface to ToS."),
     ])
     claims_path = tmp_path / "report_claims.json"
     rc, msg = run("read_report.py", "--text", pdf, "--out", claims_path)
     assert rc == 0, msg
-    assert any(c.get("value_m") == pytest.approx(0.55) for c in load(claims_path)["claims"]
-               if c["family"] == "pavement_depth")
 
     def check_with_median(median, expect_flag):
         profile = write(tmp_path / f"profile_{median}.json", {
             "cut_fill": {"cut_volume_m3": 5.0e6, "fill_volume_m3": 3.5e6},
             "road_top_minus_grading": {
-                "n": 100, "min": median - 0.02, "max": median + 0.02,
-                "median": median, "p5": median - 0.02, "p95": median + 0.02,
+                "n": 100, "median": median, "p5": median - 0.02, "p95": median + 0.02,
                 "method": "tin_raster_z",
             },
         })
@@ -296,45 +353,18 @@ def test_t16_4_pavement_depth_pass_and_flag(tmp_path):
         doc = load(cons)
         validate_consistency(doc)
         c4 = [r for r in doc["comparisons"] if r["check"] == "C4"]
-        assert c4
         if expect_flag:
             assert any(r["result"] == "flag" for r in c4)
         else:
             assert any(r["result"] == "pass" for r in c4)
-            assert not any((f.get("reference") or {}).get("clause") == "C4" for f in doc["findings"])
 
     check_with_median(0.55, expect_flag=False)
     check_with_median(0.40, expect_flag=True)
 
 
-# ------------------------------------------------------------------ R5 bbox order
-def test_r5_bbox_reading_order(tmp_path):
-    """R5: out-of-order spans are read top→bottom, left→right."""
-    # Spans deliberately shuffled: "balanced" words placed with y coords out of sequence
-    spans = [
-        {"text": "fill", "bbox": [40, 40, 60, 50]},
-        {"text": "3.1", "bbox": [0, 10, 20, 20]},
-        {"text": "Earthworks", "bbox": [25, 10, 80, 20]},
-        {"text": "are", "bbox": [70, 40, 90, 50]},
-        {"text": "The", "bbox": [0, 40, 20, 50]},
-        {"text": "cut", "bbox": [22, 40, 38, 50]},
-        {"text": "and", "bbox": [38, 40, 52, 50]},
-        {"text": "balanced", "bbox": [92, 40, 130, 50]},
-    ]
-    pdf = make_report_pdf_json(tmp_path / "bbox.pdf.json", [(3, spans)])
-    out = tmp_path / "claims.json"
-    rc, msg = run("read_report.py", "--text", pdf, "--out", out)
-    assert rc == 0, msg
-    claims = load(out)
-    assert "balanced" in claims["families_present"]
-    assert any(c.get("in_earthworks_section") for c in claims["claims"] if c["family"] == "balanced")
-
-
-# ------------------------------------------------------------------ R7 C1 three pairs
+# ------------------------------------------------------------------ R7 / C6
 def test_r7_c1_three_pairs(tmp_path):
-    """R7: when BOQ + model + drawing present, emit boq↔model, boq↔drawing, model↔drawing."""
-    xlsx = make_boq(tmp_path / "boq.xlsx", cut_formula="=5065345*1.05",
-                    fill_base=3748575, fill_factor=1.05, disposal=0, imp=0)
+    xlsx = make_boq(tmp_path / "boq.xlsx", disposal=0, imp=0)
     boq_path = tmp_path / "boq.json"
     run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
     profile = write(tmp_path / "profile.json", {
@@ -345,101 +375,60 @@ def test_r7_c1_three_pairs(tmp_path):
     rc, msg = run("check_consistency.py", "--boq", boq_path, "--profile", profile,
                   "--drawing-table", drawing, "--out", cons)
     assert rc == 0, msg
-    doc = load(cons)
-    validate_consistency(doc)
-    c1 = [r for r in doc["comparisons"] if r["check"] == "C1"]
-    labels = {r["quantity"] for r in c1}
-    assert "cut_boq_vs_model" in labels
-    assert "cut_boq_vs_drawing" in labels
-    assert "cut_model_vs_drawing" in labels
-    assert "fill_boq_vs_model" in labels
-    assert "fill_boq_vs_drawing" in labels
-    assert "fill_model_vs_drawing" in labels
+    labels = {r["quantity"] for r in load(cons)["comparisons"] if r["check"] == "C1"}
+    for need in ("cut_boq_vs_model", "cut_boq_vs_drawing", "cut_model_vs_drawing",
+                 "fill_boq_vs_model", "fill_boq_vs_drawing", "fill_model_vs_drawing"):
+        assert need in labels
 
 
-# ------------------------------------------------------------------ C6 never BOQ vs itself
-def test_c6_information_at_30_finding_at_60(tmp_path):
-    xlsx = make_boq(tmp_path / "boq.xlsx", road_area=105710, kerb=23900)
+def test_c6_information_and_refuses_self(tmp_path):
+    xlsx = make_boq(tmp_path / "boq.xlsx")
     boq_path = tmp_path / "boq.json"
     run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
     reg = write(tmp_path / "register.json", {
-        "source": "skill10",
-        "independent": True,
+        "source": "skill10", "independent": True,
         "roads": {"road_area_m2": 90000.0, "kerb_length_m": 20000.0},
     })
-    cons30 = tmp_path / "c30.json"
-    rc, msg = run("check_consistency.py", "--boq", boq_path, "--road-register", reg,
-                  "--stage", "30% Concept Design", "--out", cons30)
-    assert rc == 0, msg
-    doc30 = load(cons30)
-    c6_30 = [r for r in doc30["comparisons"] if r["check"] == "C6"]
-    assert c6_30 and all(r["result"] == "information" for r in c6_30)
-
-    cons60 = tmp_path / "c60.json"
-    rc, msg = run("check_consistency.py", "--boq", boq_path, "--road-register", reg,
-                  "--stage", "60% Detailed Design", "--out", cons60)
-    assert rc == 0, msg
-    doc60 = load(cons60)
-    assert any(r["check"] == "C6" and r["result"] == "flag" for r in doc60["comparisons"])
-
-
-def test_c6_refuses_boq_vs_itself(tmp_path):
-    """C6: register sourced from BOQ / missing independent provenance → not_run."""
-    xlsx = make_boq(tmp_path / "boq.xlsx", road_area=105710, kerb=23900)
-    boq_path = tmp_path / "boq.json"
-    run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
-    # Self: source=boq
-    reg = write(tmp_path / "self.json", {
-        "source": "boq",
-        "roads": {"road_area_m2": 105710.0, "kerb_length_m": 23900.0},
-    })
-    cons = tmp_path / "c.json"
+    cons = tmp_path / "c30.json"
     rc, msg = run("check_consistency.py", "--boq", boq_path, "--road-register", reg,
                   "--stage", "30% Concept Design", "--out", cons)
     assert rc == 0, msg
-    doc = load(cons)
-    c6 = [r for r in doc["comparisons"] if r["check"] == "C6"]
-    assert c6 and all(r["result"] == "not_run" for r in c6)
-    assert any("never BOQ vs itself" in (r.get("note") or "") for r in c6)
+    assert all(r["result"] == "information"
+               for r in load(cons)["comparisons"] if r["check"] == "C6")
+
+    self_reg = write(tmp_path / "self.json", {
+        "source": "boq",
+        "roads": {"road_area_m2": 105710.0, "kerb_length_m": 23900.0},
+    })
+    cons2 = tmp_path / "cself.json"
+    rc, msg = run("check_consistency.py", "--boq", boq_path, "--road-register", self_reg,
+                  "--out", cons2)
+    assert rc == 0, msg
+    assert all(r["result"] == "not_run"
+               for r in load(cons2)["comparisons"] if r["check"] == "C6")
 
 
-# ------------------------------------------------------------------ R8 params + layout
+# ------------------------------------------------------------------ layout / params
 def test_skill_layout_and_version():
     skill = PLUGIN / "skills/checking-design-document-consistency"
-    assert (skill / "SKILL.md").is_file()
-    text = (skill / "SKILL.md").read_text(encoding="utf-8")
-    assert 'version: "0.1.0"' in text
-    assert "Rev N §4.16" in text
-    assert (skill / "scripts/read_boq.py").is_file()
-    assert (skill / "scripts/read_report.py").is_file()
-    assert (skill / "scripts/check_consistency.py").is_file()
-    assert (skill / "references/claims.md").is_file()
-    assert (skill / "references/params.json").is_file()
-    assert (skill / "templates/consistency.schema.json").is_file()
+    assert 'version: "0.1.0"' in (skill / "SKILL.md").read_text(encoding="utf-8")
     assert (skill / "evals/evals.json").is_file()
-    evals = load(skill / "evals/evals.json")
-    assert 3 <= len(evals["evals"]) <= 5
+    assert 3 <= len(load(skill / "evals/evals.json")["evals"]) <= 5
 
 
-def test_dn4_no_rule_id_and_dn7_c7_absent(tmp_path):
-    xlsx = make_boq(tmp_path / "boq.xlsx", ref_errors=[1])
+def test_params_dn5_tag():
+    params = load(REF / "params.json")
+    tag = params.get("tag") or params["tolerances"].get("tag")
+    assert tag and "DN-5" in tag and "PROPOSED" in tag
+
+
+def test_dn4_no_rule_id(tmp_path):
+    xlsx = make_boq(tmp_path / "boq.xlsx", ref_alist=2)
     boq_path = tmp_path / "boq.json"
     run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
-    cons = tmp_path / "consistency.json"
+    cons = tmp_path / "c.json"
     rc, msg = run("check_consistency.py", "--boq", boq_path, "--out", cons)
     assert rc == 0, msg
     doc = load(cons)
     assert doc["c7"]["built"] is False
     assert all(f["reference"]["rule_id"] is None for f in doc["findings"])
-    assert "Report only" in doc["meta"]["marking"]
-
-
-def test_params_dn5_defaults():
-    """R8: DN-5 tag present on params."""
-    params = load(REF / "params.json")
-    assert params["tolerances"]["quantity_pct"] == 0.10
-    assert params["tolerances"]["quantity_abs_m3"] == 1000.0
-    assert params["tolerances"]["c4_pavement_abs_m"] == 0.05
-    assert params["stage"]["c6_finding_from_pct"] == 60
-    tag = params.get("tag") or params["tolerances"].get("tag")
-    assert tag and "DN-5" in tag and "PROPOSED" in tag

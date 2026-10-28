@@ -454,78 +454,105 @@ def run_c4(report, profile, params, rows, findings, meta):
 
 
 def run_c5(boq, rows, findings, meta):
-    errors = list((boq.get("summary") or {}).get("cell_errors") or [])
-    for sh in boq.get("sheets") or []:
-        for it in sh.get("items") or []:
-            if it.get("error"):
-                errors.append({
-                    "sheet": it.get("sheet"), "cell": it.get("cell"),
-                    "address": it.get("address"), "value": it["error"],
-                    "kind": "item_error", "formula": it.get("formula"),
-                })
-    seen = set()
-    uniq = []
-    for e in errors:
-        key = e.get("address") or f"{e.get('sheet')}!{e.get('cell')}"
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(e)
+    """R3b: handful of grouped findings — roads/earthworks + A-List only (DN-1).
 
-    for e in uniq:
-        addr = e.get("address") or f"{e.get('sheet')}!{e.get('cell')}"
-        rows.append(comparison_row(
-            "C5", "cell_error", ["boq"],
-            {"address": addr, "value": e.get("value"), "formula": e.get("formula"),
-             "kind": e.get("kind")}, None, None, None, "flag",
-            severity="Minor", status="Confirmed",
-            evidence=[evid("E01", "xlsx_cell", f"{addr}={e.get('value')}")],
-            note="Confirmed allowed for xlsx_cell errors (SPC-0003 evidence tier); "
-                 "R3 includes #REF! inside formulas",
-        ))
-        findings.append(finding_stub(
-            "C5", f"BOQ cell error at {addr}",
-            f"BOQ cell {addr} contains {e.get('value')}"
-            + (f" in formula {e.get('formula')}" if e.get("formula") else "")
-            + " (principal-quantities / item error).",
-            "inconsistency", "Minor", "Confirmed",
-            [evid("E01", "xlsx_cell", f"{addr}={e.get('value')}")],
-            meta["site"], meta["sub"], meta["run"],
-            location={"document_no": _doc_no(meta, "boq"),
-                      "table": {"sheet": e.get("sheet") or "BOQ",
-                                "cells": [e.get("cell") or "A1"]}},
-        ))
+    One finding per pattern (e.g. "A-List: 33 principal quantities are #REF!").
+    Other sheets → information row with count only.
+    """
+    groups = list((boq.get("summary") or {}).get("error_groups") or [])
+    # Fallback if older boq.json without error_groups
+    if not groups:
+        errors = list((boq.get("summary") or {}).get("cell_errors") or [])
+        alist = [e for e in errors if "list" in (e.get("sheet") or "").lower()
+                 or "principal" in (e.get("sheet") or "").lower()
+                 or e.get("sheet_kind") == "alist"]
+        ew = [e for e in errors if e.get("sheet_kind") == "earthworks"
+              or "earthwork" in (e.get("sheet") or "").lower()]
+        rd = [e for e in errors if e.get("sheet_kind") == "roads"
+              or "road" in (e.get("sheet") or "").lower()]
+        other_n = len(errors) - len(alist) - len(ew) - len(rd)
+        if alist:
+            groups.append({"group": "alist", "label": "A-List", "count": len(alist),
+                           "cells": [e.get("address") for e in alist[:50]], "in_scope": True,
+                           "pattern": f"A-List: {len(alist)} principal quantities are #REF!"})
+        if ew:
+            groups.append({"group": "earthworks", "label": "earthworks part", "count": len(ew),
+                           "cells": [e.get("address") for e in ew[:50]], "in_scope": True,
+                           "pattern": f"earthworks part: {len(ew)} cells are #REF!"})
+        if rd:
+            groups.append({"group": "roads", "label": "roads part", "count": len(rd),
+                           "cells": [e.get("address") for e in rd[:50]], "in_scope": True,
+                           "pattern": f"roads part: {len(rd)} cells are #REF!"})
+        if other_n > 0:
+            groups.append({"group": "other", "label": "other sheets", "count": other_n,
+                           "cells": [], "in_scope": False,
+                           "pattern": f"other sheets: {other_n} #REF! cells (information only)"})
 
-    # R3: principal-quantity SUMIF/SUM vs part-item totals
-    for pc in (boq.get("summary") or {}).get("principal_checks") or []:
-        if pc.get("result") == "flag":
+    in_scope_findings = 0
+    for g in groups:
+        cells = g.get("cells") or []
+        if g.get("in_scope"):
+            in_scope_findings += 1
             rows.append(comparison_row(
-                "C5", "principal_vs_parts", ["boq"],
-                {"address": pc.get("address"), "cached": pc.get("cached_value"),
-                 "part_sum": pc.get("part_sum"), "formula": pc.get("formula")},
-                "m3", pc.get("difference"), pc.get("pct_difference"), "flag",
-                severity="Minor", status="Probable",
-                note="R3: principal quantity link ≠ sum of part items",
+                "C5", "cell_error_group", ["boq"],
+                {"group": g.get("group"), "count": g.get("count"), "pattern": g.get("pattern"),
+                 "cells": cells[:20]}, None, None, None, "flag",
+                severity="Minor", status="Confirmed",
+                evidence=[evid(f"E{i+1:02d}", "xlsx_cell", c) for i, c in enumerate(cells[:10])],
+                note="R3b: one finding per pattern; roads/earthworks + A-List only (DN-1)",
             ))
             findings.append(finding_stub(
-                "C5", "Principal quantity does not equal part items",
-                f"Principal cell {pc.get('address')} cached {pc.get('cached_value')} "
-                f"differs from part-item sum {pc.get('part_sum')}.",
-                "inconsistency", "Minor", "Probable",
-                [evid("E01", "xlsx_cell", f"{pc.get('address')}={pc.get('cached_value')}")],
+                "C5", (g.get("pattern") or f"{g.get('label')}: #REF!")[:120],
+                f"{g.get('pattern')} Cells (evidence): {', '.join(cells[:15])}"
+                + ("…" if len(cells) > 15 else "") + ".",
+                "inconsistency", "Minor", "Confirmed",
+                [evid(f"E{i+1:02d}", "xlsx_cell", c) for i, c in enumerate(cells[:10])]
+                or [evid("E01", "xlsx_cell", g.get("pattern") or "#REF!")],
                 meta["site"], meta["sub"], meta["run"],
                 location={"document_no": _doc_no(meta, "boq"),
-                          "table": {"sheet": pc.get("sheet") or "Principal Quantities",
-                                    "cells": [pc.get("cell") or "A1"]}},
+                          "table": {"sheet": g.get("label") or "BOQ",
+                                    "cells": [c.split("!")[-1] if c and "!" in c else (c or "A1")
+                                              for c in cells[:5]] or ["A1"]}},
             ))
-        elif pc.get("result") == "pass":
+        else:
             rows.append(comparison_row(
-                "C5", "principal_vs_parts", ["boq"],
-                {"address": pc.get("address"), "cached": pc.get("cached_value"),
-                 "part_sum": pc.get("part_sum")}, "m3", pc.get("difference"),
-                pc.get("pct_difference"), "pass",
-                note="R3: principal quantity matches part items",
+                "C5", "cell_error_other", ["boq"],
+                {"group": g.get("group"), "count": g.get("count"), "pattern": g.get("pattern")},
+                None, None, None, "information",
+                note="R3b: other-discipline #REF! counted only (DN-1 scope)",
             ))
+
+    # R3: principal-quantity SUMIF/SUM vs part-item totals (grouped, not per cell)
+    flagged_pc = [pc for pc in (boq.get("summary") or {}).get("principal_checks") or []
+                  if pc.get("result") == "flag"]
+    if flagged_pc:
+        cells = [pc.get("address") for pc in flagged_pc]
+        rows.append(comparison_row(
+            "C5", "principal_vs_parts", ["boq"],
+            {"count": len(flagged_pc), "cells": cells}, "m3", None, None, "flag",
+            severity="Minor", status="Probable",
+            note="R3: principal quantity link ≠ sum of part items",
+        ))
+        findings.append(finding_stub(
+            "C5", f"Principal quantities disagree with part items ({len(flagged_pc)})",
+            f"{len(flagged_pc)} principal SUMIF/SUM link(s) disagree with earthworks/roads "
+            f"part totals. Cells: {', '.join(c for c in cells if c)}.",
+            "inconsistency", "Minor", "Probable",
+            [evid(f"E{i+1:02d}", "xlsx_cell", c) for i, c in enumerate(cells[:10])],
+            meta["site"], meta["sub"], meta["run"],
+            location={"document_no": _doc_no(meta, "boq"), "package_level": True},
+        ))
+        in_scope_findings += 1
+    else:
+        for pc in (boq.get("summary") or {}).get("principal_checks") or []:
+            if pc.get("result") == "pass":
+                rows.append(comparison_row(
+                    "C5", "principal_vs_parts", ["boq"],
+                    {"address": pc.get("address"), "cached": pc.get("cached_value"),
+                     "part_sum": pc.get("part_sum")}, "m3", pc.get("difference"),
+                    pc.get("pct_difference"), "pass",
+                    note="R3: principal quantity matches part items",
+                ))
 
     # Part arithmetic: suitable fill ≈ excavation − disposal
     cut = _base_of(_boq_earth(boq, "cut"))
@@ -554,11 +581,13 @@ def run_c5(boq, rows, findings, meta):
                 meta["site"], meta["sub"], meta["run"],
                 location={"document_no": _doc_no(meta, "boq"), "package_level": True},
             ))
-    elif not uniq and not ((boq.get("summary") or {}).get("principal_checks") or []):
+            in_scope_findings += 1
+    elif in_scope_findings == 0 and not groups:
         rows.append(comparison_row(
             "C5", "internal_integrity", ["boq"], {"cell_errors": 0}, None, None, None, "pass",
             note="no #REF! / error cells",
         ))
+
 
 
 def run_c6(boq, register, params, stage, rows, findings, meta):

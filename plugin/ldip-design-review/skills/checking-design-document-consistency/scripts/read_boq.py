@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Read a roads / earthworks BOQ workbook (skill 16, SPC-0006 Rev N §4.16; DN-2 / DN-6).
 
-Dual openpyxl passes (R2): formulas (`data_only=False`) + cached values (`data_only=True`).
-Detects `#REF!` as values **and** inside formulas (R3). Principal-quantity SUMIF/SUM links
-are compared to part-item totals (R3). Header / role synonyms cover real Parsons layouts (R1).
+R1: roles only from part sheets (4-EARTHWORKS, 6- Roads and Pavings) + A-List cross-check —
+    never Dayworks / Electrical trap sheets. Cut/fill from base×factor totals (I13-style).
+R2: dual openpyxl passes (formulas + cached values).
+R3: `#REF!` in values and formulas; principal SUMIF vs parts.
 
 Usage:
   python read_boq.py --xlsx <boq.xlsx> --out <boq.json>
@@ -23,24 +24,22 @@ from cons_common import (  # noqa: E402
     is_cell_error, main_guard, parse_base_factor, path_ok,
 )
 
-# R1 — role keywords (roads + earthworks only — DN-1). Order matters for prefer_* below.
 ROLE_PATTERNS = [
-    ("import", re.compile(r"\b(import(?:ed)?(?:\s+fill)?|borrow)\b", re.I)),
+    ("import", re.compile(r"\b(import(?:ed)?(?:\s+\w+)?|borrow)\b", re.I)),
     ("disposal", re.compile(r"\b(dispos\w+|spoil|waste\s+material|cut\s+to\s+spoil)\b", re.I)),
     ("rock", re.compile(r"\b(rock|hard\s+material)\b", re.I)),
     ("cut", re.compile(
         r"\b(cut|excavation|excavate|bulk\s+excav|general\s+excav|common\s+excav|"
         r"earthworks?\s+excav|site\s+clear)\b", re.I)),
-    ("fill", re.compile(r"\b(suitable\s+fill|fill|embankment|compaction)\b", re.I)),
+    ("fill", re.compile(r"\b(suitable\s+fill|(?<!import(?:ed)\s)\bfill\b|embankment)\b", re.I)),
     ("road_area", re.compile(
         r"\b(road\s+(?:pavement|surfacing|area|layer|layers?)|carriageway|asphalt|"
-        r"flexible\s+pavement|pavement\s+area)\b", re.I)),
+        r"flexible\s+pavement|pavement\s+area|road\s+layers?)\b", re.I)),
     ("kerb", re.compile(r"\b(kerb|curb)s?\b", re.I)),
 ]
 CODE_RE = re.compile(r"\b([A-Z]{1,3}\d{2,4}(?:\.\d+)?|[A-Z]{2,5}-\d{2,4})\b")
 UNIT_RE = re.compile(r"\b(m3|m³|m2|m²|m|nr|no\.?|sum|item)\b", re.I)
 
-# R1 — header synonyms (independent column match; no elif stealing)
 HEADER_RULES = [
     ("desc", re.compile(r"^(item\s*)?(desc(ription)?|particulars?|works?|activity)$|"
                         r"item\s*description|description\s*of\s*works?", re.I)),
@@ -51,7 +50,15 @@ HEADER_RULES = [
 ]
 SUM_LINK_RE = re.compile(r"=\s*(SUMIF|SUMIFS|SUM|VLOOKUP)\s*\(", re.I)
 REF_IN_FORMULA = re.compile(r"#REF!", re.I)
-PRINCIPAL_SHEET = re.compile(r"principal|summary\s*quant|pq\b", re.I)
+RATIO_FACTOR_RE = re.compile(r"\*\s*(0?\.\d+)\s*$")
+
+# R1 — sheet kinds (DN-1: roads + earthworks parts only for roles)
+SHEET_EARTHWORKS = re.compile(r"earthworks?", re.I)
+SHEET_ROADS = re.compile(r"roads?\b.*pav|\broads?\b|pavings?", re.I)
+SHEET_ALIST = re.compile(r"a\s*-?\s*list|principal\s*quant", re.I)
+SHEET_TRAP = re.compile(r"dayworks?|electrical", re.I)
+TOTAL_HINT = re.compile(r"\b(total|bulk|general)\b", re.I)
+PORTION_HINT = re.compile(r"\b(common|portion|ratio|20\s*%|80\s*%|60\s*%)\b", re.I)
 
 
 def need_openpyxl():
@@ -67,21 +74,31 @@ def cell_addr(row, col):
     return f"{get_column_letter(col)}{row}"
 
 
+def sheet_kind(name):
+    """R1: classify sheet — earthworks / roads / alist / trap / other."""
+    n = name or ""
+    if SHEET_TRAP.search(n):
+        return "trap"
+    if SHEET_ALIST.search(n):
+        return "alist"
+    if SHEET_EARTHWORKS.search(n):
+        return "earthworks"
+    if SHEET_ROADS.search(n):
+        return "roads"
+    return "other"
+
+
 def classify_role(text):
-    """R1: mutually prefer import/disposal over bare fill; return role list."""
     roles = []
     for name, pat in ROLE_PATTERNS:
         if pat.search(text or ""):
             roles.append(name)
-    # "Imported fill" → import only (not also fill)
     if "import" in roles and "fill" in roles:
         roles = [r for r in roles if r != "fill"]
-    # "Rock excavation" keeps both rock and cut
     return roles
 
 
 def header_map(row_vals):
-    """R1: map each header independently (first match per role wins)."""
     cols = {}
     for i, v in enumerate(row_vals, start=1):
         if v is None:
@@ -98,12 +115,15 @@ def header_map(row_vals):
     return cols
 
 
-def _sheet_is_principal(name):
-    return bool(PRINCIPAL_SHEET.search(name or ""))
+def _is_ratio_formula(formula):
+    if not formula:
+        return False
+    if RATIO_RE.match(str(formula).strip()):
+        return True
+    return bool(RATIO_FACTOR_RE.search(str(formula))) and "*" in str(formula) and not parse_base_factor(formula)
 
 
 def read_sheet(ws_f, ws_v=None):
-    """Scan one sheet using formula workbook + optional value workbook (R2)."""
     items = []
     errors = []
     formulas = []
@@ -111,18 +131,16 @@ def read_sheet(ws_f, ws_v=None):
     sum_links = []
     headers = None
     header_row = None
+    kind = sheet_kind(ws_f.title)
     max_row = ws_f.max_row or 0
     max_col = ws_f.max_column or 0
 
     for r in range(1, max_row + 1):
         vals_f = [ws_f.cell(r, c).value for c in range(1, max_col + 1)]
-        vals_v = None
-        if ws_v is not None:
-            vals_v = [ws_v.cell(r, c).value for c in range(1, max_col + 1)]
+        vals_v = [ws_v.cell(r, c).value for c in range(1, max_col + 1)] if ws_v is not None else None
 
         if headers is None:
             hm = header_map(vals_f)
-            # Also try value-row headers (rare) then fall through
             if "qty" not in hm and vals_v:
                 hm = header_map(vals_v) or hm
             if "qty" in hm and ("desc" in hm or "code" in hm):
@@ -133,37 +151,41 @@ def read_sheet(ws_f, ws_v=None):
         for c, v in enumerate(vals_f, start=1):
             addr = f"{ws_f.title}!{cell_addr(r, c)}"
             v_cached = vals_v[c - 1] if vals_v and c <= len(vals_v) else None
-
-            # R3: #REF! as value OR inside a formula string
             if is_cell_error(v) or is_cell_error(v_cached):
                 errors.append({
                     "sheet": ws_f.title, "cell": cell_addr(r, c), "address": addr,
                     "value": str(v if is_cell_error(v) else v_cached).strip(),
-                    "kind": "cell_error",
+                    "kind": "cell_error", "sheet_kind": kind,
                 })
                 continue
             if isinstance(v, str) and v.startswith("=") and REF_IN_FORMULA.search(v):
                 errors.append({
                     "sheet": ws_f.title, "cell": cell_addr(r, c), "address": addr,
                     "value": "#REF!", "formula": v, "kind": "formula_ref_error",
+                    "sheet_kind": kind,
                 })
                 continue
-
             if isinstance(v, str) and v.startswith("="):
                 bf = parse_base_factor(v)
                 if bf:
                     base, factor = bf
+                    # Row description for associating helper cells (I13-style)
+                    desc_guess = None
+                    if headers and headers.get("desc") and headers["desc"] <= len(vals_f):
+                        d = vals_f[headers["desc"] - 1]
+                        desc_guess = str(d).strip() if d is not None else None
                     formulas.append({
                         "sheet": ws_f.title, "cell": cell_addr(r, c), "address": addr,
                         "formula": v, "base": base, "factor": factor,
                         "stated_value": base * factor,
                         "cached_value": float(v_cached) if isinstance(v_cached, (int, float)) else None,
+                        "description": desc_guess, "sheet_kind": kind, "row": r,
                     })
                 elif RATIO_RE.match(v.strip()):
                     m = RATIO_RE.match(v.strip())
                     ratios.append({
                         "sheet": ws_f.title, "cell": cell_addr(r, c), "address": addr,
-                        "formula": v, "ratio": float(m.group(1)),
+                        "formula": v, "ratio": float(m.group(1)), "sheet_kind": kind,
                     })
                 elif SUM_LINK_RE.match(v.strip()):
                     sum_links.append({
@@ -171,6 +193,7 @@ def read_sheet(ws_f, ws_v=None):
                         "formula": v,
                         "cached_value": float(v_cached) if isinstance(v_cached, (int, float)) else None,
                         "kind": SUM_LINK_RE.match(v.strip()).group(1).upper(),
+                        "sheet_kind": kind,
                     })
 
         if headers and r != header_row:
@@ -216,7 +239,6 @@ def read_sheet(ws_f, ws_v=None):
                     base, factor = bf
                     stated = base * factor
                 elif isinstance(qty_cached, (int, float)):
-                    # R2: non-base×factor formula — use cached value as stated; base unknown
                     stated = float(qty_cached)
                     base = stated
                     factor = 1.0
@@ -248,7 +270,9 @@ def read_sheet(ws_f, ws_v=None):
                 "cached_value": float(qty_cached) if isinstance(qty_cached, (int, float)) else None,
                 "roles": classify_role(desc_s),
                 "error": err,
-                "principal_sheet": _sheet_is_principal(ws_f.title),
+                "sheet_kind": kind,
+                "is_ratio": _is_ratio_formula(formula),
+                "principal_sheet": kind == "alist",
             })
 
     return {
@@ -260,67 +284,122 @@ def read_sheet(ws_f, ws_v=None):
         "ratios": ratios,
         "sum_links": sum_links,
         "errors": errors,
-        "principal_sheet": _sheet_is_principal(ws_f.title),
+        "sheet_kind": kind,
+        "principal_sheet": kind == "alist",
     }
 
 
+def _pick_cut(ew_items, ew_forms):
+    """R1: excavation total base — prefer base×factor total (I13-style), not common 20 %."""
+    # Candidates: cut-role items that are not ratio portions
+    cands = [it for it in ew_items
+             if "cut" in it["roles"] and not it.get("error") and not it.get("is_ratio")
+             and it.get("base") is not None]
+    # Prefer total/bulk/general over common/portion
+    totals = [it for it in cands if TOTAL_HINT.search(it.get("description") or "")
+              and not PORTION_HINT.search(it.get("description") or "")]
+    if totals:
+        return max(totals, key=lambda it: float(it["base"]))
+    non_portion = [it for it in cands if not PORTION_HINT.search(it.get("description") or "")]
+    if non_portion:
+        # Prefer largest base×factor (the total), not a small common slice
+        with_factor = [it for it in non_portion if it.get("factor") and abs(float(it["factor"]) - 1.0) > 1e-9]
+        if with_factor:
+            return max(with_factor, key=lambda it: float(it["base"]))
+        return max(non_portion, key=lambda it: float(it["base"]))
+    # Fall back to largest base×factor on earthworks sheet (helper cell I13)
+    if ew_forms:
+        return {
+            "base": max(ew_forms, key=lambda f: f["base"])["base"],
+            "factor": max(ew_forms, key=lambda f: f["base"])["factor"],
+            "quantity": max(ew_forms, key=lambda f: f["base"])["stated_value"],
+            "formula": max(ew_forms, key=lambda f: f["base"])["formula"],
+            "address": max(ew_forms, key=lambda f: f["base"])["address"],
+            "sheet": max(ew_forms, key=lambda f: f["base"])["sheet"],
+            "description": max(ew_forms, key=lambda f: f["base"]).get("description") or "excavation total (helper)",
+            "unit": "m3", "code": None, "part": None,
+        }
+    if cands:
+        return max(cands, key=lambda it: float(it["base"]))
+    return None
+
+
+def _pick_fill(ew_items, ew_forms):
+    """R1: suitable + imported fill total on earthworks part sheet."""
+    suitable = [it for it in ew_items
+                if "fill" in it["roles"] and "import" not in it["roles"]
+                and not it.get("error") and it.get("base") is not None and not it.get("is_ratio")]
+    imported = [it for it in ew_items
+                if "import" in it["roles"] and not it.get("error") and it.get("base") is not None]
+    if suitable:
+        # Prefer largest suitable (I23-style total with factor)
+        best = max(suitable, key=lambda it: float(it["base"]))
+        return best
+    # Sum suitable+imported bases when only portions exist
+    if imported and not suitable:
+        return None  # fill separate from import
+    return None
+
+
+def _pick_role(items, role):
+    cands = [it for it in items
+             if role in it["roles"] and not it.get("error") and it.get("base") is not None
+             and not it.get("is_ratio")]
+    if not cands:
+        cands = [it for it in items
+                 if role in it["roles"] and not it.get("error") and it.get("quantity") is not None]
+    if not cands:
+        return None
+    return max(cands, key=lambda it: float(it.get("base") or it.get("quantity") or 0))
+
+
 def summarise(sheets):
-    """Pick earthworks / road totals from roles; prefer part sheets over principal (R1)."""
+    """R1: roles from earthworks/roads part sheets only — never trap sheets."""
     all_items = [it for sh in sheets for it in sh["items"]]
     all_forms = [f for sh in sheets for f in sh["formulas"]]
     all_ratios = [r for sh in sheets for r in sh["ratios"]]
     all_errors = [e for sh in sheets for e in sh["errors"]]
     all_sum_links = [s for sh in sheets for s in sh["sum_links"]]
 
-    # Also fold item-level formula_ref / cell errors into cell_errors
     for it in all_items:
         if it.get("error"):
             all_errors.append({
                 "sheet": it.get("sheet"), "cell": it.get("cell"),
                 "address": it.get("address"), "value": it["error"],
                 "kind": "item_error", "formula": it.get("formula"),
+                "sheet_kind": it.get("sheet_kind"),
             })
 
-    def first_role(role):
-        # Prefer non-principal part items (R1)
-        for prefer_principal in (False, True):
-            for it in all_items:
-                if bool(it.get("principal_sheet")) != prefer_principal:
-                    continue
-                if role in it["roles"] and it.get("base") is not None and not it.get("error"):
-                    return it
-            for it in all_items:
-                if bool(it.get("principal_sheet")) != prefer_principal:
-                    continue
-                if role in it["roles"] and it.get("quantity") is not None and not it.get("error"):
-                    return it
-        return None
+    ew_items = [it for it in all_items if it.get("sheet_kind") == "earthworks"]
+    rd_items = [it for it in all_items if it.get("sheet_kind") == "roads"]
+    ew_forms = [f for f in all_forms if f.get("sheet_kind") == "earthworks"]
+    # Ratios only from earthworks/roads part sheets (not traps)
+    part_ratios = [r for r in all_ratios if r.get("sheet_kind") in ("earthworks", "roads")]
 
-    cut = first_role("cut")
-    fill = first_role("fill")
-    disposal = first_role("disposal")
-    rock = first_role("rock")
-    imp = first_role("import")
-    road = first_role("road_area")
-    kerb = first_role("kerb")
+    cut = _pick_cut(ew_items, ew_forms)
+    fill = _pick_fill(ew_items, ew_forms)
+    disposal = _pick_role(ew_items, "disposal")
+    rock = _pick_role(ew_items, "rock")
+    imp = _pick_role(ew_items, "import")
+    road = _pick_role(rd_items, "road_area")
+    kerb = _pick_role(rd_items, "kerb")
 
-    # R3: principal SUMIF/SUM vs part-item totals (by role)
+    # R3: principal / A-List SUMIF vs part items (earthworks+roads only)
     principal_checks = []
-    part_items = [it for it in all_items if not it.get("principal_sheet") and not it.get("error")]
+    part_items = [it for it in all_items
+                  if it.get("sheet_kind") in ("earthworks", "roads") and not it.get("error")]
     for link in all_sum_links:
-        # Compare cached principal total to sum of part bases with matching unit when possible
-        part_sum = sum(float(it["base"]) for it in part_items
-                       if it.get("base") is not None
-                       and (not link.get("sheet") or True))
+        if link.get("sheet_kind") not in ("alist", "earthworks", "roads"):
+            continue
+        part_sum = sum(float(it["base"]) for it in part_items if it.get("base") is not None)
         cached = link.get("cached_value")
         if cached is None:
             principal_checks.append({
                 **link, "part_sum": part_sum, "result": "not_run",
-                "note": "no cached value (open workbook in Excel once to cache)",
+                "note": "no cached value",
             })
             continue
-        # Only flag when the link lives on a principal sheet and part_sum is non-zero
-        if _sheet_is_principal(link.get("sheet")) and part_sum > 0:
+        if link.get("sheet_kind") == "alist" and part_sum > 0:
             diff = abs(cached - part_sum)
             pd = diff / max(abs(cached), abs(part_sum), 1e-12)
             principal_checks.append({
@@ -330,7 +409,6 @@ def summarise(sheets):
         else:
             principal_checks.append({**link, "part_sum": part_sum, "result": "information"})
 
-    # de-dupe errors by address
     seen = set()
     uniq_errors = []
     for e in all_errors:
@@ -338,9 +416,14 @@ def summarise(sheets):
         if key in seen:
             continue
         seen.add(key)
+        if "sheet_kind" not in e:
+            e = {**e, "sheet_kind": sheet_kind(e.get("sheet"))}
         uniq_errors.append(e)
 
-    ratio_vals = sorted({round(r["ratio"], 4) for r in all_ratios})
+    # R3b: group errors for scoped reporting
+    error_groups = _group_errors(uniq_errors)
+
+    ratio_vals = sorted({round(r["ratio"], 4) for r in part_ratios})
     return {
         "earthworks": {
             "cut": _qty_rec(cut),
@@ -354,13 +437,62 @@ def summarise(sheets):
             "kerb": _qty_rec(kerb),
         },
         "ratios_recorded": ratio_vals,
-        "ratios": all_ratios,
-        "base_factor_formulas": all_forms,
+        "ratios": part_ratios,
+        "base_factor_formulas": [f for f in all_forms if f.get("sheet_kind") in ("earthworks", "roads")],
         "sum_links": all_sum_links,
         "principal_checks": principal_checks,
         "cell_errors": uniq_errors,
+        "error_groups": error_groups,
         "item_count": len(all_items),
+        "role_scope": ["earthworks", "roads"],
     }
+
+
+def _group_errors(errors):
+    """R3b: group #REF! by sheet kind for handful of findings."""
+    groups = {
+        "alist": {"label": "A-List", "cells": [], "count": 0},
+        "earthworks": {"label": "earthworks part", "cells": [], "count": 0},
+        "roads": {"label": "roads part", "cells": [], "count": 0},
+        "other": {"label": "other sheets", "cells": [], "count": 0},
+    }
+    sumif_ref = []
+    for e in errors:
+        kind = e.get("sheet_kind") or sheet_kind(e.get("sheet"))
+        bucket = kind if kind in groups else "other"
+        if kind == "trap":
+            bucket = "other"
+        groups[bucket]["cells"].append(e.get("address") or e.get("cell"))
+        groups[bucket]["count"] += 1
+        if e.get("kind") == "formula_ref_error" and e.get("formula") and SUM_LINK_RE.search(e["formula"]):
+            sumif_ref.append(e)
+    out = []
+    for key in ("alist", "earthworks", "roads"):
+        g = groups[key]
+        if g["count"]:
+            out.append({
+                "group": key, "label": g["label"], "count": g["count"],
+                "cells": g["cells"][:50],
+                "in_scope": True,
+                "pattern": f"{g['label']}: {g['count']} cells are #REF!",
+            })
+    if sumif_ref:
+        parts = sorted({e.get("sheet") for e in sumif_ref})
+        out.append({
+            "group": "sumif_ref", "label": "part summaries",
+            "count": len(sumif_ref),
+            "cells": [e.get("address") for e in sumif_ref[:50]],
+            "in_scope": True,
+            "pattern": f"part summaries: SUMIF(#REF!) in {', '.join(parts)}",
+        })
+    other = groups["other"]
+    if other["count"]:
+        out.append({
+            "group": "other", "label": other["label"], "count": other["count"],
+            "cells": [], "in_scope": False,
+            "pattern": f"other sheets: {other['count']} #REF! cells (information only)",
+        })
+    return out
 
 
 def _qty_rec(it):
@@ -370,14 +502,13 @@ def _qty_rec(it):
         "base": it.get("base"),
         "factor": it.get("factor"),
         "quantity": it.get("quantity"),
-        "unit": it.get("unit"),
+        "unit": it.get("unit") or "m3",
         "description": it.get("description"),
         "code": it.get("code"),
         "address": it.get("address"),
         "formula": it.get("formula"),
         "sheet": it.get("sheet"),
         "part": it.get("part"),
-        "document_no": it.get("document_no"),
     }
 
 
@@ -385,8 +516,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--xlsx", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--document-no", default=None, dest="document_no",
-                    help="Parsons BOQ document number (R8); recorded on summary")
+    ap.add_argument("--document-no", default=None, dest="document_no")
     a = ap.parse_args(argv)
 
     miss = need_openpyxl()
@@ -401,7 +531,6 @@ def main(argv=None):
         if not xlsx.is_file():
             return fail(EXIT_INPUT, f"BOQ workbook not found: {xlsx}")
 
-        # R2: dual pass — formulas, then cached values
         wb_f = openpyxl.load_workbook(xlsx, data_only=False, read_only=False)
         try:
             wb_v = openpyxl.load_workbook(xlsx, data_only=True, read_only=False)
@@ -422,13 +551,14 @@ def main(argv=None):
             "source": {
                 "path": str(xlsx),
                 "sheets": [s["name"] for s in sheets],
+                "sheet_kinds": {s["name"]: s["sheet_kind"] for s in sheets},
                 "document_no": doc_no,
                 "dual_pass": wb_v is not None,
             },
             "sheets": sheets,
             "summary": summary,
             "tool": {"script": "read_boq.py", "version": __version__},
-            "note": "DN-6: compare base before factor; factor recorded as stated, not judged. R2 dual openpyxl pass.",
+            "note": "R1: roles from earthworks/roads part sheets only. R2 dual pass. DN-6 base before factor.",
         }
         atomic_write_json(a.out, out)
         emit({
@@ -437,10 +567,13 @@ def main(argv=None):
             "sheets": len(sheets),
             "items": summary["item_count"],
             "cell_errors": len(summary["cell_errors"]),
+            "error_groups": len(summary["error_groups"]),
             "base_factor": len(summary["base_factor_formulas"]),
             "ratios": summary["ratios_recorded"],
             "dual_pass": True,
             "document_no": doc_no,
+            "cut_base": (summary["earthworks"]["cut"] or {}).get("base"),
+            "fill_base": (summary["earthworks"]["fill"] or {}).get("base"),
         })
         return EXIT_OK
 
