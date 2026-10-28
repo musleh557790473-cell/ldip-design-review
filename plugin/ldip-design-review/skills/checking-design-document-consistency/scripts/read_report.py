@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Locate earthworks / pavement / geotech claims in skill-2 PDF text (skill 16; DN-2).
 
-R4b: multi-page TOC — any page with ≥ N dot-leader / page-number lines is TOC;
-     sections located on the first **body** page with the heading.
+R4c: TOC = early consecutive contents run after the cover (dot leaders only);
+     sections start at numbered headings (e.g. `9.3.2 Earthworks Assessment`).
 R5: rebuild page text by bbox **lines** (cluster by y, then left→right).
 R9: `balanced` only in earthworks section; drop ICT / non-earthworks context.
 
@@ -26,31 +26,33 @@ from cons_common import (  # noqa: E402
 
 CLAIMS_MD = SKILL_ROOT / "references" / "claims.md"
 
-SECTION_HEADINGS = {
+# R4c: section starts at a numbered heading (9.3.2 / 1.3.2 …), not bare keywords.
+NUMBERED_HEADING = re.compile(
+    r"(?:^|\n)\s*(\d+(?:\.\d+)+)\s+([A-Z][A-Za-z][\w\s/-]{1,80})",
+)
+SECTION_TITLE = {
     "earthworks": re.compile(
-        r"(?:^\s*|\b)(?:\d+(?:\.\d+)*\s+)?(?:earthworks?|cut\s*(?:and|&|/)\s*fill|grading|mass\s+haul)\b",
-        re.I),
+        r"^(?:earthworks?|cut\s*(?:and|&|/)\s*fill|grading|mass\s+haul)\b", re.I),
     "pavement": re.compile(
-        r"(?:^\s*|\b)(?:\d+(?:\.\d+)*\s+)?(?:pavement|road\s+construction|flexible\s+pavement|wearing\s+course)\b",
-        re.I),
+        r"^(?:pavement|road\s+construction|flexible\s+pavement|wearing\s+course)\b", re.I),
     "geotechnical": re.compile(
-        r"(?:^\s*|\b)(?:\d+(?:\.\d+)*\s+)?(?:geotech(?:nical)?|ground\s+condition|foundation)\b",
-        re.I),
+        r"^(?:geotech(?:nical)?|ground\s+condition|foundation)\b", re.I),
 }
 
 TOC_HINT = re.compile(r"\b(contents|table\s+of\s+contents|\btoc\b)\b", re.I)
 TOC_DOT_LEADERS = re.compile(r"\.{3,}\s*\d+\s*$", re.M)
 # Page-number-at-end lines (TOC style without requiring dots)
 TOC_PAGE_NUM_LINE = re.compile(r"^.{4,100}?\s+(\d{1,3})\s*$", re.M)
-TOC_LEADER_MIN = 3  # R4b: ≥ N leader / page-number lines ⇒ TOC
+TOC_LEADER_MIN = 3
+TOC_EARLY_MAX_PAGE = 20  # R4c: TOC only at document start (after cover)
 LINE_Y_TOL = 3.0  # R5: spans within this many pt share a line
 
-OTHER_HEADING = re.compile(
-    r"(?:^|\n)\s*(\d+(?:\.\d+)*)\s+([A-Z][A-Za-z][\w\s/-]{1,60})",
-)
 # R9: ICT / telecom / etc. close earthworks; balanced needs earthworks context
 ICT_HINT = re.compile(r"\b(ICT|information\s+and\s+communications?|telecom)\b", re.I)
-EARTHWORKS_CONTEXT = re.compile(r"\b(earthworks?|cut|fill|grading|excavation|embankment)\b", re.I)
+EARTHWORKS_CONTEXT = re.compile(r"\b(earthworks?|cut|fill|grading|excavation|embankments?)\b", re.I)
+PAVEMENT_DEPTH_CONTEXT = re.compile(r"\bpavement\b", re.I)
+SUBGRADE_CONTEXT = re.compile(r"\b(?:subgrade|ToS|top\s+of\s+subgrade)\b", re.I)
+STORMWATER_FREEBOARD = re.compile(r"\b(?:free\s*board|storm\s*water|stormwater)\b", re.I)
 
 CLAIM_PATTERNS = {
     "balanced": re.compile(
@@ -114,42 +116,57 @@ def page_text(page):
 
 
 def _toc_score(text):
-    """Count TOC-like lines (dot leaders + trailing page numbers)."""
+    """Count TOC-like lines (dot leaders preferred; trailing page numbers weaker)."""
     if not text:
         return 0
     leaders = TOC_DOT_LEADERS.findall(text)
+    if leaders:
+        return len(leaders)
     page_lines = TOC_PAGE_NUM_LINE.findall(text)
-    return max(len(leaders), len(page_lines) // 2)
-
-
-def is_toc_page(text, page_no, force=False):
-    """R4b: ≥ TOC_LEADER_MIN leader/page-number lines ⇒ TOC (any page)."""
-    if not text:
-        return False
-    if force:
-        return _toc_score(text) >= TOC_LEADER_MIN or bool(TOC_HINT.search(text[:500]))
-    if TOC_HINT.search(text[:500]) and page_no <= 12:
-        return True
-    if _toc_score(text) >= TOC_LEADER_MIN:
-        return True
-    return False
+    return len(page_lines) // 2
 
 
 def mark_toc_pages(pages):
-    """R4b: mark TOC pages; extend contiguous block after the first TOC hit."""
-    for p in pages:
-        p["is_toc"] = is_toc_page(p.get("text") or "", p["page"])
-    # Extend: once a TOC page is seen, keep marking following pages with enough leaders
-    seen_toc = False
-    for p in pages:
-        if p["is_toc"]:
-            seen_toc = True
+    """R4c: TOC = early consecutive contents run after the cover only.
+
+    Mid-document tables with page-number columns must NOT be marked TOC.
+    """
+    ordered = sorted(pages, key=lambda p: p["page"])
+    for p in ordered:
+        p["is_toc"] = False
+    if not ordered:
+        return pages
+
+    # Cover = first page; TOC starts on the first early page with Contents / leaders.
+    start_i = None
+    for i, p in enumerate(ordered):
+        if p["page"] > TOC_EARLY_MAX_PAGE:
+            break
+        text = p.get("text") or ""
+        score = _toc_score(text)
+        hinted = bool(TOC_HINT.search(text[:800]))
+        # Page 1 with no Contents hint is cover even if it has a few leaders
+        if p["page"] == ordered[0]["page"] and not hinted and score < TOC_LEADER_MIN + 2:
             continue
-        if seen_toc and _toc_score(p.get("text") or "") >= TOC_LEADER_MIN:
+        if hinted or score >= TOC_LEADER_MIN:
+            start_i = i
+            break
+    if start_i is None:
+        return pages
+
+    prev_page = None
+    for j in range(start_i, len(ordered)):
+        p = ordered[j]
+        text = p.get("text") or ""
+        score = _toc_score(text)
+        hinted = bool(TOC_HINT.search(text[:800]))
+        if prev_page is not None and p["page"] != prev_page + 1:
+            break
+        if j == start_i or score >= TOC_LEADER_MIN or hinted:
             p["is_toc"] = True
-        elif seen_toc and not p["is_toc"]:
-            # Body started — stop extending (but later TOC-score pages still marked above)
-            seen_toc = False
+            prev_page = p["page"]
+        else:
+            break
     return pages
 
 
@@ -189,28 +206,29 @@ def load_pages(path):
 
 
 def _heading_events(pages):
+    """R4c: only numbered headings open/close sections (scorecards ignored)."""
     events = []
     for p in pages:
         if p.get("is_toc"):
             continue
         text = p["text"] or ""
-        for name, pat in SECTION_HEADINGS.items():
-            if pat.search(text):
-                events.append({"page": p["page"], "section": name, "title": name})
-        for m in OTHER_HEADING.finditer(text):
-            title = m.group(2).strip()
+        for m in NUMBERED_HEADING.finditer(text):
+            num, title = m.group(1), m.group(2).strip()
             tracked = None
-            for name, pat in SECTION_HEADINGS.items():
+            for name, pat in SECTION_TITLE.items():
                 if pat.search(title):
                     tracked = name
                     break
-            if tracked is None:
-                events.append({"page": p["page"], "section": None, "title": title})
+            events.append({
+                "page": p["page"],
+                "section": tracked,
+                "title": f"{num} {title}",
+            })
         # ICT / similar also closes earthworks (R9)
         if ICT_HINT.search(text):
             events.append({"page": p["page"], "section": None, "title": "ICT"})
     out, seen = [], set()
-    for e in sorted(events, key=lambda x: (x["page"], x["section"] or "")):
+    for e in sorted(events, key=lambda x: (x["page"], x["section"] or "", x["title"])):
         key = (e["page"], e["section"], e["title"].casefold())
         if key in seen:
             continue
@@ -220,7 +238,7 @@ def _heading_events(pages):
 
 
 def locate_sections(pages):
-    """R4b: first **body** (non-TOC) page with each heading."""
+    """R4c: first body page with a numbered section heading."""
     events = _heading_events(pages)
     seen = {}
     for e in events:
@@ -230,7 +248,7 @@ def locate_sections(pages):
     for h in ordered:
         end = 10**9
         for e in events:
-            if e["page"] > h["page"] and e["section"] != h["section"]:
+            if e["page"] > h["page"] and (e["section"] is None or e["section"] != h["section"]):
                 end = e["page"] - 1
                 break
         h["page_end"] = end if end >= h["page"] else h["page"]
@@ -277,6 +295,15 @@ def extract_claims(pages, sections):
                     if mm is not None:
                         rec["value_mm"] = float(mm)
                         rec["value_m"] = float(mm) / 1000.0
+                    window = text[max(0, m.start() - 80): m.end() + 80]
+                    # R10: drop stormwater freeboard; tag pavement+subgrade preference
+                    if STORMWATER_FREEBOARD.search(window) and not (
+                            PAVEMENT_DEPTH_CONTEXT.search(window)
+                            and SUBGRADE_CONTEXT.search(window)):
+                        continue
+                    rec["pavement_subgrade"] = bool(
+                        PAVEMENT_DEPTH_CONTEXT.search(window)
+                        and SUBGRADE_CONTEXT.search(window))
                 if family == "balanced":
                     rec["in_earthworks_section"] = True
                 claims.append(rec)

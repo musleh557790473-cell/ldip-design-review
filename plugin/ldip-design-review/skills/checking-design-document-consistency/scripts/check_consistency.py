@@ -388,10 +388,29 @@ def run_c3(boq, report, rows, findings, meta):
         ))
 
 
+def _pick_pavement_depth_claim(claims):
+    """R10: prefer pavement-section / pavement+subgrade 550 mm; not stormwater 500."""
+    depth_claims = [c for c in claims
+                    if c.get("family") == "pavement_depth" and c.get("value_m") is not None]
+    if not depth_claims:
+        return None
+    in_pav = [c for c in depth_claims if c.get("section") == "pavement"]
+    pool = in_pav or depth_claims
+    both = [c for c in pool if c.get("pavement_subgrade")]
+    if both:
+        pool = both
+    # Prefer 550 mm (wearing → ToS) when several depths remain
+    prefer_550 = [c for c in pool if abs(float(c.get("value_mm") or 0) - 550.0) < 1e-6]
+    if prefer_550:
+        return prefer_550[0]
+    return pool[0]
+
+
 def run_c4(report, profile, params, rows, findings, meta):
     """Pavement depth claim vs skill-13 road_top − ToS stats (DN-3, no recompute)."""
     claims = (report or {}).get("claims") or []
-    depth_claims = [c for c in claims if c.get("family") == "pavement_depth" and c.get("value_m") is not None]
+    depth_claim = _pick_pavement_depth_claim(claims)
+    depth_claims = [depth_claim] if depth_claim else []
     stats = _profile_pavement(profile)
     median = stats.get("median")
     p5 = stats.get("p5") or stats.get("dz_p5")

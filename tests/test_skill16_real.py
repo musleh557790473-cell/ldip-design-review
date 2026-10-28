@@ -37,7 +37,8 @@ EXPECT = {
         "road": 538020, "kerb": 139869, "alist_ref": 33, "rel": 0.02,
     },
     "NRJS": {
-        "cut": 37000, "fill": 50000, "import": 36960,
+        # R1c: cut = F13+F15 = 38,850; fill = F23+F25 = 52,500
+        "cut": 38850, "fill": 52500, "import": 36960,
         "road": 10400, "kerb": 5278, "alist_ref": 33, "rel": 0.05,
     },
     "NMAR": {
