@@ -503,6 +503,32 @@ def _pick_cut(ew_items, ew_forms):
     return None
 
 
+def _pick_suitable_fill(ew_items):
+    """R12: F23 suitable-fill item (qty-cell stated) — not I23 total / not +imported."""
+    suitable = [it for it in ew_items
+                if "fill" in it["roles"] and "import" not in it["roles"]
+                and not it.get("error") and _item_stated(it) is not None]
+    if not suitable:
+        return None
+    # Prefer row 23 when present (real BOQ F23)
+    row23 = [it for it in suitable if it.get("row") == 23]
+    best = row23[0] if row23 else max(suitable, key=lambda it: float(_item_stated(it) or 0))
+    v = _item_stated(best)
+    return {
+        "base": float(best["base"]) if best.get("base") is not None else v,
+        "factor": float(best["factor"]) if best.get("factor") is not None else 1.0,
+        "quantity": v,
+        "formula": best.get("formula"),
+        "address": best.get("address"),
+        "sheet": best.get("sheet"),
+        "description": best.get("description") or "suitable fill (F23)",
+        "unit": best.get("unit") or "m3",
+        "code": best.get("code"),
+        "part": best.get("part"),
+        "row": best.get("row"),
+    }
+
+
 def _pick_fill(ew_items, ew_forms):
     """R1d: fill base from same-row helper I23; else suitable + imported (F23+F25)."""
     suitable = [it for it in ew_items
@@ -627,6 +653,7 @@ def summarise(sheets):
 
     cut = _pick_cut(ew_items, ew_forms)
     fill = _pick_fill(ew_items, ew_forms)
+    suitable_fill = _pick_suitable_fill(ew_items)
     disposal = _pick_role(ew_items, "disposal")
     rock = _pick_role(ew_items, "rock")
     imp = _pick_role(ew_items, "import")
@@ -686,6 +713,7 @@ def summarise(sheets):
         "earthworks": {
             "cut": _qty_rec(cut),
             "fill": _qty_rec(fill),
+            "suitable_fill": _qty_rec(suitable_fill),
             "disposal": _qty_rec(disposal),
             "rock": _qty_rec(rock),
             "import": _qty_rec(imp),

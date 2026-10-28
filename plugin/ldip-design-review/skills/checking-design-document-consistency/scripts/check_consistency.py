@@ -58,6 +58,17 @@ def _base_of(rec):
     return None
 
 
+def _stated_of(rec):
+    """Stated quantity (after factor) for same-basis arithmetic (R12)."""
+    if not rec:
+        return None
+    if rec.get("quantity") is not None:
+        return float(rec["quantity"])
+    if rec.get("base") is not None:
+        return float(rec["base"]) * float(rec.get("factor") or 1.0)
+    return None
+
+
 def _unit_of(rec, default="m3"):
     return (rec or {}).get("unit") or default
 
@@ -573,30 +584,35 @@ def run_c5(boq, rows, findings, meta):
                     note="R3: principal quantity matches part items",
                 ))
 
-    # Part arithmetic: suitable fill ≈ excavation − disposal
-    cut = _base_of(_boq_earth(boq, "cut"))
-    fill = _base_of(_boq_earth(boq, "fill"))
-    disposal = _base_of(_boq_earth(boq, "disposal"))
-    if cut is not None and fill is not None and disposal is not None:
-        expected = cut - disposal
-        diff = abs(expected - fill)
-        pd = (diff / abs(cut)) if cut else None
+    # R12: suitable fill F23 = excavation stated − disposal stated (same basis)
+    # Not total fill (I23 / F23+F25) vs cut base − disposal.
+    cut_st = _stated_of(_boq_earth(boq, "cut"))
+    disposal_st = _stated_of(_boq_earth(boq, "disposal"))
+    suitable = _boq_earth(boq, "suitable_fill") or _boq_earth(boq, "fill")
+    suitable_st = _stated_of(suitable)
+    if cut_st is not None and suitable_st is not None and disposal_st is not None:
+        expected = cut_st - disposal_st
+        diff = abs(expected - suitable_st)
+        pd = (diff / abs(cut_st)) if cut_st else None
         result = "flag" if pd is not None and pd > 0.10 else "pass"
         rows.append(comparison_row(
             "C5", "part_arithmetic_fill", ["boq"],
-            {"cut": cut, "disposal": disposal, "fill": fill, "expected_fill": expected},
+            {"excavation_stated": cut_st, "disposal_stated": disposal_st,
+             "suitable_fill_stated": suitable_st, "expected_suitable_fill": expected,
+             "address": (suitable or {}).get("address")},
             "m3", diff, pd, result,
             severity="Minor" if result == "flag" else None,
             status="Probable" if result == "flag" else None,
-            note="suitable fill = excavation − disposal",
+            note="R12: suitable fill F23 = excavation − disposal (stated)",
         ))
         if result == "flag":
             findings.append(finding_stub(
-                "C5", "BOQ part arithmetic: fill ≠ excavation − disposal",
-                f"Fill base {fill:g} differs from excavation {cut:g} − disposal "
-                f"{disposal:g} = {expected:g}.",
+                "C5", "BOQ part arithmetic: suitable fill ≠ excavation − disposal",
+                f"Suitable fill (F23) stated {suitable_st:g} differs from excavation "
+                f"{cut_st:g} − disposal {disposal_st:g} = {expected:g}.",
                 "inconsistency", "Minor", "Probable",
-                [evid("E01", "xlsx_cell", f"cut={cut}; disposal={disposal}; fill={fill}")],
+                [evid("E01", "xlsx_cell",
+                      f"cut={cut_st}; disposal={disposal_st}; suitable_fill={suitable_st}")],
                 meta["site"], meta["sub"], meta["run"],
                 location={"document_no": _doc_no(meta, "boq"), "package_level": True},
             ))

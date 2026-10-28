@@ -64,18 +64,20 @@ def _ew_row(ws, row, bill, code, desc, unit, qty=None, helper=None):
 
 
 def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill_factor=1.05,
-             disposal=800000, imp=120000, ratios=(0.2, 0.8, 0.6),
+             disposal=None, imp=120000, ratios=(0.2, 0.8, 0.6),
              ref_alist=5, road_area=105710, kerb=23900,
-             nrjs=False):
-    """R1d fixture: rows 13/15/19/23/25 verbatim + I13/I23 helpers + A-List SUM formulas.
+             nrjs=False, suitable_f23=None):
+    """R1d/R12 fixture: rows 13/15/19/23/25 verbatim + I13/I23 helpers.
 
     Qty in column F; helpers in column I. Dayworks/Electrical traps must not win roles.
-    NRJS: cut = F13+F15 = 38850; fill = F23+F25 = 52500 (no I helpers).
+    R12 defaults: disposal so F23 stated = excavation stated − disposal stated
+    (QRWN 3,191,167.35 / NRJS 23,310). `suitable_f23` overrides F23 for flag tests.
     """
     if nrjs:
         common_base, rock_base = 7770, 31080
         suitable_base, imp = 15540, 36960
-        disposal = 5000
+        if disposal is None:
+            disposal = 23310  # owner table: 38850 − 15540
         cut_factor = fill_factor = 1.0
         road_area, kerb = 10400, 5278
         cut_base = common_base + rock_base
@@ -84,6 +86,8 @@ def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill
         common_base = cut_base * ratios[0]
         rock_base = cut_base * ratios[1]
         suitable_base = fill_base
+        if disposal is None:
+            disposal = 3191167.35  # owner QRWN: stated cut − F23
 
     wb = openpyxl.Workbook()
 
@@ -97,10 +101,11 @@ def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill
     ws.cell(row=1, column=6, value="Qty")
 
     if nrjs:
+        f23 = suitable_f23 if suitable_f23 is not None else suitable_base
         _ew_row(ws, 13, "4", "EWK-13", DESC_13, "m3", qty=common_base)
         _ew_row(ws, 15, "4", "EWK-15", DESC_15, "m3", qty=rock_base)
         _ew_row(ws, 19, "4", "EWK-19", DESC_19, "m3", qty=disposal)
-        _ew_row(ws, 23, "4", "EWK-23", DESC_23, "m3", qty=suitable_base)
+        _ew_row(ws, 23, "4", "EWK-23", DESC_23, "m3", qty=f23)
         _ew_row(ws, 25, "4", "EWK-25", DESC_25, "m3", qty=imp)
     else:
         # F13 = I13*0.2; F15 = I13*0.8; I13 = cut_base*factor — cut total from helper
@@ -110,9 +115,10 @@ def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill
         _ew_row(ws, 15, "4", "EWK-15", DESC_15, "m3",
                 qty=f"=I13*{ratios[1]}")
         _ew_row(ws, 19, "4", "EWK-19", DESC_19, "m3", qty=disposal)
-        # F23 qty references I13 (ratio trap); I23 = fill_base*factor — fill from same-row helper
+        # F23: owner arithmetic uses stated qty; I23 = fill total helper
+        f23_qty = suitable_f23 if suitable_f23 is not None else "=I13*0.4"
         _ew_row(ws, 23, "4", "EWK-23", DESC_23, "m3",
-                qty=f"=I13*0.4",
+                qty=f23_qty,
                 helper=f"={fill_base}*{fill_factor}")
         _ew_row(ws, 25, "4", "EWK-25", DESC_25, "m3", qty=imp)
         # Extra ratio rows for C2
@@ -566,6 +572,50 @@ def test_c6_information_and_refuses_self(tmp_path):
     assert rc == 0, msg
     assert all(r["result"] == "not_run"
                for r in load(cons2)["comparisons"] if r["check"] == "C6")
+
+
+# ------------------------------------------------------------------ R12 part arithmetic
+@pytest.mark.parametrize("site,kwargs,cut_st,disp_st,suit_st", [
+    ("QRWN", {}, 5065345 * 1.05, 3191167.35, 2127444.90),
+    ("NRJS", {"nrjs": True}, 38850, 23310, 15540),
+    ("NMAR", {"cut_base": 429590, "fill_base": 222820, "disposal": 270641.70,
+              "imp": 53533.20, "suitable_f23": 180427.80},
+     429590 * 1.05, 270641.70, 180427.80),
+])
+def test_r12_suitable_fill_equals_excavation_minus_disposal(
+        tmp_path, site, kwargs, cut_st, disp_st, suit_st):
+    """R12: suitable F23 stated = excavation stated − disposal stated (owner table)."""
+    xlsx = make_boq(tmp_path / f"{site}.xlsx", **kwargs)
+    boq_path = tmp_path / "boq.json"
+    rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
+    assert rc == 0, msg
+    boq = load(boq_path)
+    suit = boq["summary"]["earthworks"]["suitable_fill"]
+    assert suit is not None and suit["quantity"] == pytest.approx(suit_st, rel=1e-6)
+    assert suit_st == pytest.approx(cut_st - disp_st, rel=1e-6)
+
+    cons = tmp_path / "cons.json"
+    rc, msg = run("check_consistency.py", "--boq", boq_path, "--out", cons)
+    assert rc == 0, msg
+    rows = [r for r in load(cons)["comparisons"]
+            if r["check"] == "C5" and r["quantity"] == "part_arithmetic_fill"]
+    assert rows and rows[0]["result"] == "pass", rows
+    assert rows[0]["values"]["suitable_fill_stated"] == pytest.approx(suit_st, rel=1e-6)
+    assert not any("suitable fill ≠" in (f.get("title") or "") for f in load(cons)["findings"])
+
+
+def test_r12_flags_when_f23_changed(tmp_path):
+    """R12: changing F23 away from excavation − disposal → C5 flag."""
+    xlsx = make_boq(tmp_path / "boq.xlsx", suitable_f23=999999.0)
+    boq_path = tmp_path / "boq.json"
+    run("read_boq.py", "--xlsx", xlsx, "--out", boq_path)
+    cons = tmp_path / "cons.json"
+    rc, msg = run("check_consistency.py", "--boq", boq_path, "--out", cons)
+    assert rc == 0, msg
+    rows = [r for r in load(cons)["comparisons"]
+            if r["check"] == "C5" and r["quantity"] == "part_arithmetic_fill"]
+    assert rows and rows[0]["result"] == "flag", rows
+    assert any("suitable fill ≠" in (f.get("title") or "") for f in load(cons)["findings"])
 
 
 # ------------------------------------------------------------------ layout / params
