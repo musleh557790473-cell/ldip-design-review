@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/checking-design-document-consistency/consistency.schema.json",
+  "title": "LDIP design-document consistency (skill 16) — SPC-0006 Rev N §4.16; report only (DN-4)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["consistency_version", "comparisons", "findings", "counts", "meta"],
+  "properties": {
+    "consistency_version": {"const": "1.0"},
+    "comparisons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check", "result"],
+        "properties": {
+          "check": {"enum": ["C1", "C2", "C3", "C4", "C5", "C6"]},
+          "quantity": {"type": ["string", "null"]},
+          "sources": {"type": "array", "items": {"type": "string"}},
+          "values": {"type": "object"},
+          "units": {"type": ["string", "null"]},
+          "difference": {"type": ["number", "null"]},
+          "pct_difference": {"type": ["number", "null"]},
+          "result": {
+            "enum": ["pass", "flag", "observation", "information", "not_run"]
+          },
+          "severity": {
+            "type": ["string", "null"],
+            "enum": ["Critical", "Major", "Minor", "Observation", null]
+          },
+          "proposed_status": {
+            "type": ["string", "null"],
+            "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information", null]
+          },
+          "evidence": {"type": "array"},
+          "note": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "SPC-0003-shaped candidates; report only — reference.rule_id must be null (DN-4).",
+      "items": {
+        "type": "object",
+        "required": ["issue_type", "reference", "report_only"],
+        "properties": {
+          "issue_type": {
+            "enum": ["inconsistency", "missing_information", "design_error", "er_ambiguity", "package_control", "schedule_blocking"]
+          },
+          "reference": {
+            "type": "object",
+            "properties": {
+              "rule_id": {"type": "null", "description": "DN-4: no consistency rule yet"}
+            }
+          },
+          "report_only": {"const": true},
+          "severity": {
+            "enum": ["Critical", "Major", "Minor", "Observation"]
+          },
+          "proposed_status": {
+            "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information"]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["comparisons", "findings"],
+      "additionalProperties": true
+    },
+    "meta": {
+      "type": "object",
+      "required": ["marking"],
+      "additionalProperties": true
+    },
+    "c7": {
+      "type": "object",
+      "properties": {
+        "built": {"const": false}
+      },
+      "additionalProperties": true
+    }
+  }
+}

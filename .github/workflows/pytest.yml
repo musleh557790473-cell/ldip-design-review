@@ -21,7 +21,7 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 610 = 607 + R3 second re-review (rows-above-header, split digits, PDF above+split).
-          python tools/check_suite.py --expect 610 --tests tests
+          # 634 = 630 + S32 R12 suitable-fill arithmetic (3 sites + flag).
+          python tools/check_suite.py --expect 634 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

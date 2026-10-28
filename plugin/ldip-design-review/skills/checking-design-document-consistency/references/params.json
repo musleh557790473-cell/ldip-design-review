@@ -1,0 +1,18 @@
+{
+  "tag": "[PROPOSED — DN-5, confirm on first 60 % package (R-L5)]",
+  "note": "Starting tolerances for skill 16 (SPC-0006 Rev N §4.16 DN-5). NOT rulebook values. DN-4: no consistency rule_id yet (rules_v9 later).",
+  "tolerances": {
+    "quantity_pct": 0.10,
+    "quantity_abs_m3": 1000.0,
+    "c4_pavement_abs_m": 0.05,
+    "tag": "[PROPOSED — DN-5, confirm on first 60 % package (R-L5)]"
+  },
+  "stage": {
+    "c6_finding_from_pct": 60,
+    "c6_at_30_pct": "information"
+  },
+  "scope": {
+    "disciplines": ["roads", "earthworks"],
+    "compare_boq_base_before_factor": true
+  }
+}

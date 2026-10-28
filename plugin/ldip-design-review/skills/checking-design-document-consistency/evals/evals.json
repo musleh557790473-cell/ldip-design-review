@@ -1,0 +1,71 @@
+{
+  "skill": "checking-design-document-consistency",
+  "note": "Data paths only; BOQ workbooks, reports and real packages live under LDIP_Review (never in Git, brief §10.2). Expectations from SPC-0006 Rev N §4.16 (DN-1…DN-8).",
+  "evals": [
+    {
+      "id": "T16-boq-base-factor",
+      "query": "Read the QRWN earthworks BOQ and tell me the excavation base quantity and any uplift factor.",
+      "files": [
+        "submittals/QRWN/<sub>/BOQ.xlsx"
+      ],
+      "expected": [
+        "read_boq.py records base and factor from a base×factor formula (DN-6)",
+        "boq.json summary.earthworks.cut.base is the pre-factor value",
+        "factor recorded as stated, not judged"
+      ]
+    },
+    {
+      "id": "T16-balanced-observation",
+      "query": "The concept report says earthworks are balanced — does the BOQ agree?",
+      "files": [
+        "0.ai_context/QRWN/<sub>/<report>.pdf.json",
+        "0.ai_context/QRWN/<sub>/../evidence/boq.json"
+      ],
+      "expected": [
+        "read_report.py flags the balanced claim with page",
+        "check_consistency.py C3 raises an Observation when disposal or import is present",
+        "consistency.json findings are report_only with rule_id null (DN-4)"
+      ]
+    },
+    {
+      "id": "T16-c1-cut-fill",
+      "query": "Compare BOQ cut and fill with the earthworks model profile and the drawing table.",
+      "files": [
+        "findings/<run>/evidence/intake/boq.json",
+        "findings/<run>/evidence/intake/earthworks_profile.json",
+        "findings/<run>/evidence/intake/cut_fill_table.json"
+      ],
+      "expected": [
+        "C1 compares BOQ base (before factor) to model and drawing table",
+        "flag only when DN-5 tolerance exceeded",
+        "no geometry recomputation (DN-3)"
+      ]
+    },
+    {
+      "id": "T16-c4-pavement-depth",
+      "query": "The report states 550 mm pavement — does the model road-top to ToS agree?",
+      "files": [
+        "findings/<run>/evidence/intake/report_claims.json",
+        "findings/<run>/evidence/intake/earthworks_profile.json"
+      ],
+      "expected": [
+        "C4 uses skill 13 road_top_minus_grading.median (not recomputed)",
+        "flag when |median − stated| > 0.05 m",
+        "issue_type inconsistency, Probable, Minor"
+      ]
+    },
+    {
+      "id": "T16-c6-info-at-30",
+      "query": "At 30 % concept, how do road BOQ area and kerb compare with the model?",
+      "files": [
+        "findings/<run>/evidence/intake/boq.json",
+        "findings/<run>/evidence/intake/road_register.json"
+      ],
+      "expected": [
+        "C6 rows result=information at 30 %",
+        "no C6 findings until stage ≥ 60 %",
+        "consistency.json c7.built is false (DN-7)"
+      ]
+    }
+  ]
+}
