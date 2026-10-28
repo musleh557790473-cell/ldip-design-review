@@ -24,29 +24,35 @@ from cons_common import (  # noqa: E402
     is_cell_error, main_guard, parse_base_factor, path_ok,
 )
 
-# R1c: fill matches embankments / Filling; rock = excavation-in-rock only
-# (not "…than top soil or rock" on imported-fill rows).
+# R1d: rock = "excavation … in rock" (words allowed between); strip "other than…"
+# exclusions so "other than … hard material" / "… rock or …" do not trigger rock.
 ROLE_PATTERNS = [
     ("import", re.compile(r"\b(import(?:ed)?(?:\s+\w+)?|borrow)\b", re.I)),
     ("disposal", re.compile(r"\b(dispos\w+|spoil|waste\s+material|cut\s+to\s+spoil)\b", re.I)),
     ("rock", re.compile(
-        r"\b(?:excav(?:ation|ate|ating)?\s+(?:of\s+|in\s+)?rock|"
-        r"rock\s+excav\w*|hard\s+material)\b", re.I)),
+        r"\bexcav(?:ation|ate|ating)?\b[\w\s,;/-]{0,60}?\bin\s+rock\b"
+        r"|\brock\s+excav\w*"
+        r"|\b(?:artificial\s+)?hard\s+material\b", re.I)),
     ("cut", re.compile(
-        r"\b(cut|excavation|excavate|bulk\s+excav|general\s+excav|common\s+excav|"
-        r"earthworks?\s+excav|site\s+clear)\b", re.I)),
+        r"\b(?:cut(?!\s+and\s+fill|tings)|excavation|excavate|bulk\s+excav|"
+        r"general\s+excav|common\s+excav|earthworks?\s+excav|site\s+clear)\b", re.I)),
     ("fill", re.compile(
-        r"\b(suitable\s+fill|filling|(?<!import(?:ed)\s)\bfills?\b|embankments?)\b", re.I)),
+        r"\b(suitable\s+(?:fill|excavated\s+material)|filling|(?<!import(?:ed)\s)\bfills?\b|"
+        r"embankments?)\b", re.I)),
     ("road_area", re.compile(
         r"\b(road\s+(?:pavement|surfacing|area|layer|layers?)|carriageway|asphalt|"
         r"flexible\s+pavement|pavement\s+area|road\s+layers?)\b", re.I)),
     ("kerb", re.compile(r"\b(kerb|curb)s?\b", re.I)),
 ]
+# Exclusion clauses: "other than top soil, rock or artificial hard material"
+OTHER_THAN_EXCLUSION = re.compile(r"other\s+than\b[^.;]{0,100}", re.I)
 # R11: A-List principal quantity rows for roads/earthworks only (not Electrical).
 ALIST_EW_ROADS_ROW_MIN = 26
 ALIST_EW_ROADS_ROW_MAX = 47
+# R11b: evaluate SUM('4-EARTHWORKS'!F13:F15) against that sheet's rows only
 SUM_RANGE_RE = re.compile(
-    r"SUM\s*\(\s*(?:'[^']+'!)?([A-Z]+)(\d+)\s*:\s*(?:'[^']+'!)?([A-Z]+)(\d+)\s*\)", re.I)
+    r"SUM\s*\(\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*:\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*\)",
+    re.I)
 CODE_RE = re.compile(r"\b([A-Z]{1,3}\d{2,4}(?:\.\d+)?|[A-Z]{2,5}-\d{2,4})\b")
 UNIT_RE = re.compile(r"\b(m3|m³|m2|m²|m|nr|no\.?|sum|item)\b", re.I)
 
@@ -61,6 +67,13 @@ HEADER_RULES = [
 SUM_LINK_RE = re.compile(r"=\s*(SUMIF|SUMIFS|SUM|VLOOKUP)\s*\(", re.I)
 REF_IN_FORMULA = re.compile(r"#REF!", re.I)
 RATIO_FACTOR_RE = re.compile(r"\*\s*(0?\.\d+)\s*$")
+# F13-style `=I13*0.2` — resolve against same-sheet helper / cell value
+CELL_REF_RATIO_RE = re.compile(
+    r"^=\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*\*\s*(0?\.\d+|1(?:\.0+)?)\s*$", re.I)
+CELL_REF_RE = re.compile(
+    r"^=\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*$", re.I)
+CELL_MINUS_RE = re.compile(
+    r"^=\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*-\s*(?:'([^']+)'!)?([A-Z]+)(\d+)\s*$", re.I)
 
 # R1 — sheet kinds (DN-1: roads + earthworks parts only for roles)
 SHEET_EARTHWORKS = re.compile(r"earthworks?", re.I)
@@ -99,11 +112,15 @@ def sheet_kind(name):
 
 
 def classify_role(text):
+    text = text or ""
+    # R1d: scrub "other than …" before rock matching (row 13 false positive)
+    scrubbed = OTHER_THAN_EXCLUSION.sub(" ", text)
     roles = []
     for name, pat in ROLE_PATTERNS:
-        if pat.search(text or ""):
+        probe = scrubbed if name == "rock" else text
+        if pat.search(probe):
             roles.append(name)
-    # Imported fill is import, not fill; "top soil or rock" must not add rock.
+    # Imported fill is import, not fill; import row must not win rock.
     if "import" in roles:
         roles = [r for r in roles if r not in ("fill", "rock")]
     return roles
@@ -286,6 +303,64 @@ def read_sheet(ws_f, ws_v=None):
                 "principal_sheet": kind == "alist",
             })
 
+    # R1d: attach same-row base×factor helpers (I13 / I23) so fill uses I23 not I13×ratio
+    by_row = {}
+    for f in formulas:
+        by_row.setdefault(f.get("row"), []).append(f)
+    for it in items:
+        helpers = [f for f in by_row.get(it.get("row"), [])
+                   if f.get("cell") and f.get("cell") != it.get("cell")]
+        if not helpers:
+            continue
+        best = max(helpers, key=lambda f: float(f["base"]))
+        it["helper_base"] = best["base"]
+        it["helper_factor"] = best["factor"]
+        it["helper_address"] = best["address"]
+        it["helper_formula"] = best["formula"]
+        it["helper_cell"] = best["cell"]
+
+    # Resolve =I13*0.2 / =I23-F23 when openpyxl cache is empty (synthetic / formula pass)
+    cell_stated = {}
+    for f in formulas:
+        cell_stated[f["cell"]] = float(f["base"]) * float(f["factor"])
+    for it in items:
+        if it.get("quantity") is not None and it.get("cell"):
+            cell_stated[it["cell"]] = float(it["quantity"])
+    for it in items:
+        if it.get("quantity") is not None or it.get("error"):
+            continue
+        formula = it.get("formula") or ""
+        m = CELL_REF_RATIO_RE.match(formula)
+        if m:
+            ref = f"{m.group(2).upper()}{m.group(3)}"
+            if ref in cell_stated:
+                stated = cell_stated[ref] * float(m.group(4))
+                it["quantity"] = stated
+                it["base"] = stated
+                it["factor"] = 1.0
+                cell_stated[it["cell"]] = stated
+            continue
+        m = CELL_MINUS_RE.match(formula)
+        if m:
+            a = f"{m.group(2).upper()}{m.group(3)}"
+            b = f"{m.group(5).upper()}{m.group(6)}"
+            if a in cell_stated and b in cell_stated:
+                stated = cell_stated[a] - cell_stated[b]
+                it["quantity"] = stated
+                it["base"] = stated
+                it["factor"] = 1.0
+                cell_stated[it["cell"]] = stated
+            continue
+        m = CELL_REF_RE.match(formula)
+        if m:
+            ref = f"{m.group(2).upper()}{m.group(3)}"
+            if ref in cell_stated:
+                stated = cell_stated[ref]
+                it["quantity"] = stated
+                it["base"] = stated
+                it["factor"] = 1.0
+                cell_stated[it["cell"]] = stated
+
     return {
         "name": ws_f.title,
         "header_row": header_row,
@@ -321,11 +396,51 @@ def _synth_sum(items, description):
     }
 
 
+def _from_helper(it, fallback_desc):
+    """Build a qty record from a same-row I13/I23 helper (R1d)."""
+    if not it or it.get("helper_base") is None:
+        return None
+    base = float(it["helper_base"])
+    factor = float(it.get("helper_factor") or 1.0)
+    return {
+        "base": base,
+        "factor": factor,
+        "quantity": base * factor,
+        "formula": it.get("helper_formula"),
+        "address": it.get("helper_address"),
+        "sheet": it.get("sheet"),
+        "description": it.get("description") or fallback_desc,
+        "unit": it.get("unit") or "m3",
+        "code": it.get("code"),
+        "part": it.get("part"),
+        "row": it.get("row"),
+    }
+
+
+def _item_stated(it):
+    """Qty-cell stated value only (never the same-row I-helper — R11b / R1d)."""
+    if it.get("quantity") is not None:
+        return float(it["quantity"])
+    if it.get("cached_value") is not None:
+        return float(it["cached_value"])
+    if it.get("base") is not None:
+        return float(it["base"]) * float(it.get("factor") or 1.0)
+    return None
+
+
 def _pick_cut(ew_items, ew_forms):
-    """R1/R1c: excavation total — I13-style base×factor, else common + rock (F13+F15)."""
-    cands = [it for it in ew_items
-             if "cut" in it["roles"] and not it.get("error") and not it.get("is_ratio")
-             and it.get("base") is not None]
+    """R1d: excavation total — I13 helper, else common + rock (F13+F15)."""
+    cut_role = [it for it in ew_items
+                if "cut" in it["roles"] and not it.get("error")]
+    # Prefer same-row helper on a cut row (I13), largest base
+    helpers = [_from_helper(it, "excavation total (I13)") for it in cut_role
+               if it.get("helper_base") is not None]
+    helpers = [h for h in helpers if h]
+    if helpers:
+        return max(helpers, key=lambda h: float(h["base"]))
+
+    cands = [it for it in cut_role
+             if not it.get("is_ratio") and it.get("base") is not None]
     totals = [it for it in cands if TOTAL_HINT.search(it.get("description") or "")
               and not PORTION_HINT.search(it.get("description") or "")]
     if totals:
@@ -335,10 +450,15 @@ def _pick_cut(ew_items, ew_forms):
                    and not PORTION_HINT.search(it.get("description") or "")]
     if with_factor:
         return max(with_factor, key=lambda it: float(it["base"]))
-    # Helper cell I13-style on earthworks sheet
+
+    # Sheet-level I13-style helper not tied to a ratio-only read
     if ew_forms:
-        best_f = max(ew_forms, key=lambda f: float(f["base"]))
-        if float(best_f["base"]) >= max((float(it["base"]) for it in cands), default=0):
+        # Prefer helpers whose row is a cut-role row
+        cut_rows = {it.get("row") for it in cut_role}
+        row_forms = [f for f in ew_forms if f.get("row") in cut_rows] or ew_forms
+        best_f = max(row_forms, key=lambda f: float(f["base"]))
+        cand_max = max((float(it["base"]) for it in cands), default=0)
+        if float(best_f["base"]) >= cand_max:
             return {
                 "base": best_f["base"], "factor": best_f["factor"],
                 "quantity": best_f["stated_value"], "formula": best_f["formula"],
@@ -346,35 +466,89 @@ def _pick_cut(ew_items, ew_forms):
                 "description": best_f.get("description") or "excavation total (helper)",
                 "unit": "m3", "code": None, "part": None,
             }
-    # R1c NRJS: cut = common excavation + excavation in rock (F13 + F15)
-    common = [it for it in cands if re.search(r"\bcommon\b", it.get("description") or "", re.I)]
+
+    # R1d NRJS: cut = common (non-rock cut) + rock (F13 + F15)
     rock = [it for it in ew_items
-            if "rock" in it["roles"] and not it.get("error") and it.get("base") is not None
-            and not it.get("is_ratio")]
-    if common or rock:
-        return _synth_sum(common + rock, "common + rock excavation (F13+F15)")
+            if "rock" in it["roles"] and not it.get("error")
+            and _item_stated(it) is not None]
+    common = [it for it in cut_role
+              if "rock" not in it["roles"] and not it.get("error")
+              and _item_stated(it) is not None
+              and not (it.get("is_ratio") and it.get("helper_base") is None)]
+    if rock and common:
+        # Use stated/cached values as bases for the sum
+        parts = []
+        for it in common + rock:
+            v = _item_stated(it)
+            parts.append({
+                **it,
+                "base": v if it.get("helper_base") is None and not (
+                    it.get("factor") and abs(float(it.get("factor") or 1) - 1) > 1e-9)
+                else (it.get("helper_base") or it.get("base") or v),
+                "quantity": v,
+            })
+        # Simpler: sum stated values as bases (NRJS has factor 1)
+        return {
+            "base": sum(_item_stated(it) for it in common + rock),
+            "factor": 1.0,
+            "quantity": sum(_item_stated(it) for it in common + rock),
+            "formula": None,
+            "address": "+".join(it.get("address") or "" for it in common + rock),
+            "sheet": (common + rock)[0].get("sheet"),
+            "description": "common + rock excavation (F13+F15)",
+            "unit": "m3", "code": None, "part": None,
+        }
     if cands:
         return max(cands, key=lambda it: float(it["base"]))
     return None
 
 
 def _pick_fill(ew_items, ew_forms):
-    """R1/R1c: suitable fill total (I23), else suitable + imported (F23+F25)."""
+    """R1d: fill base from same-row helper I23; else suitable + imported (F23+F25)."""
     suitable = [it for it in ew_items
                 if "fill" in it["roles"] and "import" not in it["roles"]
-                and not it.get("error") and it.get("base") is not None and not it.get("is_ratio")]
+                and not it.get("error")]
     imported = [it for it in ew_items
-                if "import" in it["roles"] and not it.get("error") and it.get("base") is not None
-                and not it.get("is_ratio")]
-    if suitable:
-        with_factor = [it for it in suitable
+                if "import" in it["roles"] and not it.get("error")
+                and _item_stated(it) is not None]
+
+    # Prefer same-row I23 helper on the suitable-fill row
+    for it in suitable:
+        rec = _from_helper(it, "suitable fill (I23)")
+        if rec is not None:
+            return rec
+
+    suitable_qty = [it for it in suitable
+                    if not it.get("is_ratio") and it.get("base") is not None]
+    if suitable_qty:
+        with_factor = [it for it in suitable_qty
                        if it.get("factor") and abs(float(it["factor"]) - 1.0) > 1e-9]
         if with_factor:
             return max(with_factor, key=lambda it: float(it["base"]))
-        # Single suitable row with no import → that total; else sum suitable+imported (NRJS)
         if imported:
-            return _synth_sum(suitable + imported, "suitable + imported fill (F23+F25)")
-        return max(suitable, key=lambda it: float(it["base"]))
+            return {
+                "base": sum(_item_stated(it) for it in suitable_qty + imported),
+                "factor": 1.0,
+                "quantity": sum(_item_stated(it) for it in suitable_qty + imported),
+                "formula": None,
+                "address": "+".join(it.get("address") or "" for it in suitable_qty + imported),
+                "sheet": suitable_qty[0].get("sheet"),
+                "description": "suitable + imported fill (F23+F25)",
+                "unit": "m3", "code": None, "part": None,
+            }
+        return max(suitable_qty, key=lambda it: float(it["base"]))
+    # Ratio-only suitable rows still count toward NRJS sum with import
+    if suitable and imported:
+        return {
+            "base": sum(_item_stated(it) for it in suitable + imported if _item_stated(it) is not None),
+            "factor": 1.0,
+            "quantity": sum(_item_stated(it) for it in suitable + imported if _item_stated(it) is not None),
+            "formula": None,
+            "address": None,
+            "sheet": suitable[0].get("sheet"),
+            "description": "suitable + imported fill (F23+F25)",
+            "unit": "m3", "code": None, "part": None,
+        }
     return None
 
 
@@ -384,52 +558,48 @@ def _pick_role(items, role):
              and not it.get("is_ratio")]
     if not cands:
         cands = [it for it in items
-                 if role in it["roles"] and not it.get("error") and it.get("quantity") is not None]
+                 if role in it["roles"] and not it.get("error") and _item_stated(it) is not None]
     if not cands:
         return None
-    return max(cands, key=lambda it: float(it.get("base") or it.get("quantity") or 0))
+    # Prefer true rock excavation over any leftover false positives
+    if role == "rock":
+        in_rock = [it for it in cands
+                   if re.search(r"\bin\s+rock\b", it.get("description") or "", re.I)]
+        if in_rock:
+            cands = in_rock
+    return max(cands, key=lambda it: float(it.get("base") or _item_stated(it) or 0))
 
 
 def _sum_formula_range(formula, part_items):
-    """Sum part-sheet item bases whose qty cell falls in SUM(F13:F15)-style range."""
+    """R11b: sum only the sheet/rows the A-List SUM formula references."""
     m = SUM_RANGE_RE.search(formula or "")
     if not m:
         return None
-    col1, r1, col2, r2 = m.group(1).upper(), int(m.group(2)), m.group(3).upper(), int(m.group(4))
+    sheet1, col1, r1, sheet2, col2, r2 = (
+        m.group(1), m.group(2).upper(), int(m.group(3)),
+        m.group(4), m.group(5).upper(), int(m.group(6)),
+    )
+    sheet = sheet1 or sheet2
     if col1 != col2:
         return None
     lo, hi = min(r1, r2), max(r1, r2)
     total = 0.0
     n = 0
     for it in part_items:
-        cell = it.get("cell") or ""
-        if not cell:
+        if sheet and it.get("sheet") != sheet:
             continue
-        col = "".join(ch for ch in cell if ch.isalpha()).upper()
-        row_s = "".join(ch for ch in cell if ch.isdigit())
-        if not row_s or col != col1:
+        row = it.get("row")
+        if row is None:
             continue
-        row = int(row_s)
-        if lo <= row <= hi and it.get("base") is not None:
-            total += float(it["base"]) * float(it.get("factor") or 1.0)
-            n += 1
+        if not (lo <= int(row) <= hi):
+            continue
+        # Prefer stated qty (F-column value); else base×factor / helper
+        v = _item_stated(it)
+        if v is None:
+            continue
+        total += v
+        n += 1
     return total if n else None
-
-
-def _principal_targets(cut, fill, disposal, rock, imp, road, kerb):
-    """Candidate totals a principal SUM/SUMIF may equal."""
-    out = []
-    for it in (cut, fill, disposal, rock, imp, road, kerb):
-        if not it:
-            continue
-        for key in ("quantity", "base"):
-            v = it.get(key)
-            if v is not None:
-                out.append(float(v))
-        b, f = it.get("base"), it.get("factor")
-        if b is not None and f is not None:
-            out.append(float(b) * float(f))
-    return out
 
 
 def summarise(sheets):
@@ -463,44 +633,39 @@ def summarise(sheets):
     road = _pick_role(rd_items, "road_area")
     kerb = _pick_role(rd_items, "kerb")
 
-    # R3/R11: A-List principal SUMIF/SUM vs parts — roads/earthworks rows E26–E47 only
+    # R3/R11b: A-List principal SUM vs formula references only (E26–E47; no kerb bleed)
     principal_checks = []
     part_items = [it for it in all_items
                   if it.get("sheet_kind") in ("earthworks", "roads") and not it.get("error")]
-    targets = _principal_targets(cut, fill, disposal, rock, imp, road, kerb)
     for link in all_sum_links:
         kind = link.get("sheet_kind")
-        if kind == "trap" or kind not in ("alist", "earthworks", "roads"):
+        if kind != "alist":
             continue
         # R11: skip Electrical / out-of-scope A-List rows (keep E26–E47)
-        if kind == "alist":
-            row = link.get("row")
-            if row is not None and not (ALIST_EW_ROADS_ROW_MIN <= int(row) <= ALIST_EW_ROADS_ROW_MAX):
-                continue
+        row = link.get("row")
+        if row is not None and not (ALIST_EW_ROADS_ROW_MIN <= int(row) <= ALIST_EW_ROADS_ROW_MAX):
+            continue
         cached = link.get("cached_value")
-        range_sum = _sum_formula_range(link.get("formula"), part_items)
-        part_sum = range_sum
-        if part_sum is None and targets:
-            # Match against role totals (cut stated, fill stated, …)
-            best = min(targets, key=lambda t: abs(float(cached or 0) - t)) if cached is not None else None
-            part_sum = best
-        if part_sum is None:
-            part_sum = sum(float(it["base"]) for it in part_items if it.get("base") is not None)
+        # R11b: part_sum = evaluate the A-List formula's own sheet/row references
+        part_sum = _sum_formula_range(link.get("formula"), part_items)
         if cached is None:
             principal_checks.append({
                 **link, "part_sum": part_sum, "result": "not_run",
                 "note": "no cached value",
             })
             continue
-        if kind == "alist" and part_sum is not None:
-            diff = abs(float(cached) - float(part_sum))
-            pd = diff / max(abs(float(cached)), abs(float(part_sum)), 1e-12)
+        if part_sum is None:
             principal_checks.append({
-                **link, "part_sum": part_sum, "difference": diff, "pct_difference": pd,
-                "result": "flag" if pd > 0.10 and diff > 1.0 else "pass",
+                **link, "part_sum": None, "result": "not_run",
+                "note": "could not resolve SUM range on earthworks/roads parts",
             })
-        else:
-            principal_checks.append({**link, "part_sum": part_sum, "result": "information"})
+            continue
+        diff = abs(float(cached) - float(part_sum))
+        pd = diff / max(abs(float(cached)), abs(float(part_sum)), 1e-12)
+        principal_checks.append({
+            **link, "part_sum": part_sum, "difference": diff, "pct_difference": pd,
+            "result": "flag" if pd > 0.10 and diff > 1.0 else "pass",
+        })
 
     seen = set()
     uniq_errors = []

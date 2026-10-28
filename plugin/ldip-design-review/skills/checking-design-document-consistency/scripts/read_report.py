@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Locate earthworks / pavement / geotech claims in skill-2 PDF text (skill 16; DN-2).
 
-R4c: TOC = early consecutive contents run after the cover (dot leaders only);
-     sections start at numbered headings (e.g. `9.3.2 Earthworks Assessment`).
+R4d: TOC = early consecutive contents run after the cover (p2–p9); body sections
+     start at numbered headings after the last TOC page (`9.3.2 Earthworks Assessment`).
 R5: rebuild page text by bbox **lines** (cluster by y, then left→right).
 R9: `balanced` only in earthworks section; drop ICT / non-earthworks context.
 
@@ -40,11 +40,15 @@ SECTION_TITLE = {
 }
 
 TOC_HINT = re.compile(r"\b(contents|table\s+of\s+contents|\btoc\b)\b", re.I)
-TOC_DOT_LEADERS = re.compile(r"\.{3,}\s*\d+\s*$", re.M)
+# Dot leaders may arrive as "...." or spaced ". . . ." after bbox rebuild
+TOC_DOT_LEADERS = re.compile(
+    r"(?:\.{3,}|(?:\.\s*){3,})\s*\d{1,3}\s*$", re.M)
+TOC_DOTS_ONLY = re.compile(r"(?:\.{3,}|(?:\.\s*){3,})")
 # Page-number-at-end lines (TOC style without requiring dots)
-TOC_PAGE_NUM_LINE = re.compile(r"^.{4,100}?\s+(\d{1,3})\s*$", re.M)
+TOC_PAGE_NUM_LINE = re.compile(r"^.{4,120}?\s+(\d{1,3})\s*$", re.M)
 TOC_LEADER_MIN = 3
-TOC_EARLY_MAX_PAGE = 20  # R4c: TOC only at document start (after cover)
+TOC_CONTINUE_MIN = 1  # R4d: once TOC started, keep consecutive weak-leader pages
+TOC_EARLY_MAX_PAGE = 20  # TOC only at document start (after cover)
 LINE_Y_TOL = 3.0  # R5: spans within this many pt share a line
 
 # R9: ICT / telecom / etc. close earthworks; balanced needs earthworks context
@@ -122,14 +126,19 @@ def _toc_score(text):
     leaders = TOC_DOT_LEADERS.findall(text)
     if leaders:
         return len(leaders)
+    # Spaced/broken leaders still count via any multi-dot runs + page nums
+    dots = TOC_DOTS_ONLY.findall(text)
     page_lines = TOC_PAGE_NUM_LINE.findall(text)
+    if dots and page_lines:
+        return max(len(dots), len(page_lines) // 2)
     return len(page_lines) // 2
 
 
 def mark_toc_pages(pages):
-    """R4c: TOC = early consecutive contents run after the cover only.
+    """R4d: TOC = early consecutive run after cover (QRWN p2–p9).
 
-    Mid-document tables with page-number columns must NOT be marked TOC.
+    Mid-document tables must NOT be marked TOC. Continuation after the first
+    TOC page uses a lower leader threshold so sparse OCR pages stay in the run.
     """
     ordered = sorted(pages, key=lambda p: p["page"])
     for p in ordered:
@@ -137,32 +146,51 @@ def mark_toc_pages(pages):
     if not ordered:
         return pages
 
-    # Cover = first page; TOC starts on the first early page with Contents / leaders.
-    start_i = None
-    for i, p in enumerate(ordered):
-        if p["page"] > TOC_EARLY_MAX_PAGE:
-            break
+    cover_page = ordered[0]["page"]
+
+    def strong_toc(p):
+        if p["page"] == cover_page or p["page"] > TOC_EARLY_MAX_PAGE:
+            return False
         text = p.get("text") or ""
-        score = _toc_score(text)
-        hinted = bool(TOC_HINT.search(text[:800]))
-        # Page 1 with no Contents hint is cover even if it has a few leaders
-        if p["page"] == ordered[0]["page"] and not hinted and score < TOC_LEADER_MIN + 2:
-            continue
-        if hinted or score >= TOC_LEADER_MIN:
-            start_i = i
-            break
+        return bool(TOC_HINT.search(text[:800])) or _toc_score(text) >= TOC_LEADER_MIN
+
+    def weak_toc(p):
+        if p["page"] == cover_page or p["page"] > TOC_EARLY_MAX_PAGE:
+            return False
+        text = p.get("text") or ""
+        if TOC_HINT.search(text[:800]):
+            return True
+        if _toc_score(text) >= TOC_CONTINUE_MIN:
+            return True
+        if len(TOC_PAGE_NUM_LINE.findall(text)) >= 3:
+            return True
+        return False
+
+    start_i = next((i for i, p in enumerate(ordered) if strong_toc(p)), None)
+    if start_i is None:
+        # Fallback: first weak early page after cover
+        start_i = next((i for i, p in enumerate(ordered) if weak_toc(p)), None)
     if start_i is None:
         return pages
+
+    # Also include consecutive weak pages immediately before the strong hit (e.g. p2 before p3)
+    while start_i > 0:
+        prev = ordered[start_i - 1]
+        if prev["page"] == cover_page:
+            break
+        if prev["page"] + 1 != ordered[start_i]["page"]:
+            break
+        if weak_toc(prev):
+            start_i -= 1
+        else:
+            break
 
     prev_page = None
     for j in range(start_i, len(ordered)):
         p = ordered[j]
-        text = p.get("text") or ""
-        score = _toc_score(text)
-        hinted = bool(TOC_HINT.search(text[:800]))
         if prev_page is not None and p["page"] != prev_page + 1:
             break
-        if j == start_i or score >= TOC_LEADER_MIN or hinted:
+        if j == start_i or weak_toc(p):
             p["is_toc"] = True
             prev_page = p["page"]
         else:
@@ -206,14 +234,24 @@ def load_pages(path):
 
 
 def _heading_events(pages):
-    """R4c: only numbered headings open/close sections (scorecards ignored)."""
+    """R4d: numbered body headings only (skip TOC pages and TOC-entry lines)."""
+    last_toc = max((p["page"] for p in pages if p.get("is_toc")), default=0)
     events = []
     for p in pages:
         if p.get("is_toc"):
             continue
+        # R4d: body sections only after the last TOC page
+        if last_toc and p["page"] <= last_toc:
+            continue
         text = p["text"] or ""
         for m in NUMBERED_HEADING.finditer(text):
             num, title = m.group(1), m.group(2).strip()
+            # Skip TOC-style lines that leaked onto a non-marked page
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line_end = text.find("\n", m.end())
+            line = text[line_start: line_end if line_end >= 0 else len(text)]
+            if TOC_DOTS_ONLY.search(line) and re.search(r"\d+\s*$", line):
+                continue
             tracked = None
             for name, pat in SECTION_TITLE.items():
                 if pat.search(title):
@@ -238,7 +276,7 @@ def _heading_events(pages):
 
 
 def locate_sections(pages):
-    """R4c: first body page with a numbered section heading."""
+    """R4d: first body page (after TOC) with a numbered section heading."""
     events = _heading_events(pages)
     seen = {}
     for e in events:

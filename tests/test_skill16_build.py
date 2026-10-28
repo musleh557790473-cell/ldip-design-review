@@ -1,4 +1,4 @@
-"""Skill 16 0.1.0 — synthetic T16-1…T16-4 + S32 rereview2 R1c/R4c/R9/R10/R11.
+"""Skill 16 0.1.0 — synthetic T16-1…T16-4 + S32 rereview3 R1d/R4d/R11b.
 
 SPC-0006 Rev N §4.16. No real project data.
 """
@@ -20,13 +20,14 @@ REF = PLUGIN / "skills/checking-design-document-consistency/references"
 TPL = PLUGIN / "skills/checking-design-document-consistency/templates"
 PY = sys.executable
 
-# R1c — verbatim-style descriptions from real BOQ phrasing
-DESC_BULK = "Bulk excavation total"
-DESC_COMMON = "Common excavation"
-DESC_ROCK = "Excavation in rock"
-DESC_FILL = "Filling of embankments"
-DESC_DISPOSAL = "Disposal of excavated material off site"
-DESC_IMPORT = "Imported filling other than top soil or rock"
+# R1d — verbatim descriptions from real BOQ rows 13 / 15 / 19 / 23 / 25
+DESC_13 = (
+    "Excavation for cuttings; material other than top soil, rock or artificial hard material"
+)
+DESC_15 = "Excavation for cuttings in rock; depth as per site condition"
+DESC_19 = "Disposal of surplus excavated material"
+DESC_23 = "Filling to embankments; suitable excavated material from cuttings"
+DESC_25 = "Filling to embankments; imported material than top soil or rock"
 
 
 def run(script, *args):
@@ -50,51 +51,73 @@ def load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _ew_row(ws, row, bill, code, desc, unit, qty=None, helper=None):
+    """Write earthworks row with qty in column F and optional I-column helper."""
+    ws.cell(row=row, column=1, value=bill)
+    ws.cell(row=row, column=2, value=code)
+    ws.cell(row=row, column=3, value=desc)
+    ws.cell(row=row, column=4, value=unit)
+    if qty is not None:
+        ws.cell(row=row, column=6, value=qty)  # F
+    if helper is not None:
+        ws.cell(row=row, column=9, value=helper)  # I
+
+
 def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill_factor=1.05,
              disposal=800000, imp=120000, ratios=(0.2, 0.8, 0.6),
              ref_alist=5, road_area=105710, kerb=23900,
              nrjs=False):
-    """R1/R1c fixture: part sheets + A-List + Dayworks/Electrical traps.
+    """R1d fixture: rows 13/15/19/23/25 verbatim + I13/I23 helpers + A-List SUM formulas.
 
-    Verbatim descriptions: embankments / Filling / excavation in rock /
-    imported filling other than top soil or rock.
-    NRJS: cut = common + rock (38850); fill = suitable + imported (52500).
+    Qty in column F; helpers in column I. Dayworks/Electrical traps must not win roles.
+    NRJS: cut = F13+F15 = 38850; fill = F23+F25 = 52500 (no I helpers).
     """
     if nrjs:
-        # F13 + F15 = 38850; F23 + F25 = 52500
         common_base, rock_base = 7770, 31080
         suitable_base, imp = 15540, 36960
         disposal = 5000
         cut_factor = fill_factor = 1.0
         road_area, kerb = 10400, 5278
-        cut_base = common_base + rock_base  # expected total
+        cut_base = common_base + rock_base
         fill_base = suitable_base + imp
+    else:
+        common_base = cut_base * ratios[0]
+        rock_base = cut_base * ratios[1]
+        suitable_base = fill_base
 
     wb = openpyxl.Workbook()
 
-    # --- 4-EARTHWORKS (role source) ---
+    # --- 4-EARTHWORKS (role source) — real row numbers ---
     ws = wb.active
     ws.title = "4-EARTHWORKS"
-    ws.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
+    ws.cell(row=1, column=1, value="Bill No.")
+    ws.cell(row=1, column=2, value="Item No.")
+    ws.cell(row=1, column=3, value="Item Description")
+    ws.cell(row=1, column=4, value="Unit of Measure")
+    ws.cell(row=1, column=6, value="Qty")
+
     if nrjs:
-        # No I13 helper — cut = F13 common + F15 rock; fill = F23 suitable + F25 import
-        ws.append(["4", "EWK-COM", DESC_COMMON, "m3", common_base])
-        ws.append(["4", "EWK-ROCK", DESC_ROCK, "m3", rock_base])
-        ws.append(["4", "EWK-02", DESC_FILL, "m3", suitable_base])
-        ws.append(["4", "EWK-03", DESC_DISPOSAL, "m3", disposal])
-        ws.append(["4", "EWK-04", DESC_IMPORT, "m3", imp])
+        _ew_row(ws, 13, "4", "EWK-13", DESC_13, "m3", qty=common_base)
+        _ew_row(ws, 15, "4", "EWK-15", DESC_15, "m3", qty=rock_base)
+        _ew_row(ws, 19, "4", "EWK-19", DESC_19, "m3", qty=disposal)
+        _ew_row(ws, 23, "4", "EWK-23", DESC_23, "m3", qty=suitable_base)
+        _ew_row(ws, 25, "4", "EWK-25", DESC_25, "m3", qty=imp)
     else:
-        # Helper total I13-style base×factor; F13 common 20 % is a trap portion
-        ws.append(["4", "EWK-TOT", DESC_BULK, "m3", f"={cut_base}*{cut_factor}"])
-        ws.append(["4", "EWK-COM", f"{DESC_COMMON} 20 %", "m3", f"=E2*{ratios[0]}"])
-        # F15-style rock quantity = 0.8 × cut base (verbatim excavation-in-rock)
-        ws.append(["4", "EWK-ROCK", DESC_ROCK, "m3", cut_base * ratios[1]])
-        ws.append(["4", "EWK-02", DESC_FILL, "m3",
-                   f"={fill_base}*{fill_factor}" if fill_factor != 1.0 else fill_base])
-        ws.append(["4", "EWK-03", DESC_DISPOSAL, "m3", disposal])
-        ws.append(["4", "EWK-04", DESC_IMPORT, "m3", imp])
-        ws.append(["4", "EWK-07", "Suitable portion (ratio)", "m3", f"=E2*{ratios[1]}"])
-        ws.append(["4", "EWK-08", "Disposal portion (ratio)", "m3", f"=E2*{ratios[2]}"])
+        # F13 = I13*0.2; F15 = I13*0.8; I13 = cut_base*factor — cut total from helper
+        _ew_row(ws, 13, "4", "EWK-13", DESC_13, "m3",
+                qty=f"=I13*{ratios[0]}",
+                helper=f"={cut_base}*{cut_factor}")
+        _ew_row(ws, 15, "4", "EWK-15", DESC_15, "m3",
+                qty=f"=I13*{ratios[1]}")
+        _ew_row(ws, 19, "4", "EWK-19", DESC_19, "m3", qty=disposal)
+        # F23 qty references I13 (ratio trap); I23 = fill_base*factor — fill from same-row helper
+        _ew_row(ws, 23, "4", "EWK-23", DESC_23, "m3",
+                qty=f"=I13*0.4",
+                helper=f"={fill_base}*{fill_factor}")
+        _ew_row(ws, 25, "4", "EWK-25", DESC_25, "m3", qty=imp)
+        # Extra ratio rows for C2
+        _ew_row(ws, 31, "4", "EWK-31", "Disposal portion (ratio)", "m3",
+                qty=f"=I13*{ratios[2]}")
 
     # --- 6- Roads and Pavings ---
     ws2 = wb.create_sheet("6- Roads and Pavings")
@@ -104,17 +127,23 @@ def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill
     ws2.append(["6", "ROD-02", "Kerb length", "m",
                 f"={kerb}*1.05" if not nrjs else kerb])
 
-    # --- A-List (principal) — R11: E26–E47 roads/earthworks; E126/E128 Electrical out of scope ---
+    # --- A-List — R11b formulas reference earthworks F-range only ---
     ws3 = wb.create_sheet("A-List")
     ws3.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
     for r in range(2, 26):
         ws3.cell(row=r, column=1, value="")
-    # E27 principal excavation SUM (roads/earthworks band)
+    cut_stated = cut_base * cut_factor
+    fill_stated = fill_base * fill_factor
     ws3.cell(row=27, column=1, value="PQ")
     ws3.cell(row=27, column=2, value="PQ-CUT")
     ws3.cell(row=27, column=3, value="Principal excavation")
     ws3.cell(row=27, column=4, value="m3")
-    ws3.cell(row=27, column=5, value="=SUM(F13:F15)")
+    ws3.cell(row=27, column=5, value="=SUM('4-EARTHWORKS'!F13:F15)")
+    ws3.cell(row=29, column=1, value="PQ")
+    ws3.cell(row=29, column=2, value="PQ-FILL")
+    ws3.cell(row=29, column=3, value="Principal fill")
+    ws3.cell(row=29, column=4, value="m3")
+    ws3.cell(row=29, column=5, value="=SUM('4-EARTHWORKS'!F23:F25)")
     # Electrical principals — must NOT enter principal_checks (R11)
     ws3.cell(row=126, column=1, value="EL")
     ws3.cell(row=126, column=2, value="PQ-EL")
@@ -135,14 +164,14 @@ def make_boq(path, *, cut_base=5065345, cut_factor=1.05, fill_base=3748575, fill
         ws3.cell(row=row, column=4, value="m3")
         ws3.cell(row=row, column=5, value="=#REF!")
 
-    # --- C- Dayworks (TRAP — must not win import/kerb/road) ---
+    # --- C- Dayworks (TRAP) ---
     ws4 = wb.create_sheet("C- Dayworks")
     ws4.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
     ws4.append(["C", "DW-01", "Imported sabkha", "m3", 50])
     ws4.append(["C", "DW-02", "Kerb temporary", "m", 50])
     ws4.append(["C", "DW-03", "Road pavement patch", "m2", 5])
 
-    # --- 11- Electrical Works (TRAP — must not win fill) ---
+    # --- 11- Electrical Works (TRAP) ---
     ws5 = wb.create_sheet("11- Electrical Works")
     ws5.append(["Bill No.", "Item No.", "Item Description", "Unit of Measure", "Qty"])
     ws5.append(["11", "EL-70", "Earthing fill around electrode", "m3", 1563 if not nrjs else 80])
@@ -242,21 +271,27 @@ def test_r1_nrjs_hard_values(tmp_path):
     assert boq["summary"]["earthworks"]["rock"]["base"] != pytest.approx(36960)
 
 
-def test_r1c_fill_embankments_and_rock_not_import(tmp_path):
-    """R1c: Filling of embankments → fill; excavation in rock → rock; import trap ignored."""
+def test_r1d_verbatim_roles_and_i23_helper(tmp_path):
+    """R1d: row13 not rock; row15 rock; fill base from I23; not I13×ratio."""
     xlsx = make_boq(tmp_path / "boq.xlsx")
     out = tmp_path / "boq.json"
     rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out)
     assert rc == 0, msg
     boq = load(out)
+    items = [it for sh in boq["sheets"] if sh["name"] == "4-EARTHWORKS" for it in sh["items"]]
+    by_row = {it["row"]: it for it in items}
+    assert "rock" not in by_row[13]["roles"]
+    assert "cut" in by_row[13]["roles"]
+    assert "rock" in by_row[15]["roles"] and "cut" in by_row[15]["roles"]
     fill = boq["summary"]["earthworks"]["fill"]
     rock = boq["summary"]["earthworks"]["rock"]
     imp = boq["summary"]["earthworks"]["import"]
     assert fill is not None and fill["base"] == pytest.approx(3748575)
-    assert "embankment" in (fill.get("description") or "").lower() or "filling" in (
-        fill.get("description") or "").lower()
-    assert rock is not None and rock["base"] == pytest.approx(5065345 * 0.8)
-    assert "excavation in rock" in (rock.get("description") or "").lower()
+    assert fill.get("address") and "I23" in fill["address"]
+    assert rock is not None
+    # F15 = I13*0.8 → stated 5065345*1.05*0.8; base for role is stated when resolved
+    assert rock["quantity"] == pytest.approx(5065345 * 1.05 * 0.8)
+    assert "in rock" in (rock.get("description") or "").lower()
     assert imp["base"] == pytest.approx(120000)
     assert "top soil or rock" in (imp.get("description") or "").lower()
 
@@ -343,22 +378,27 @@ def test_r9_ict_balanced_dropped(tmp_path):
     assert not any(c["family"] == "balanced" for c in claims["claims"])
 
 
-def test_r4c_toc_early_consecutive_numbered_headings(tmp_path):
-    """R4c: TOC = early consecutive only; mid-doc tables ignored; numbered headings."""
+def test_r4d_toc_p2_p9_body_after_last_toc(tmp_path):
+    """R4d: consecutive TOC p2–p9 (sparse leaders OK); body headings after last TOC."""
     pages = [(1, "Cover\nConcept Design Report")]
-    for p in range(2, 10):
-        pages.append((p, "Contents\n" + "\n".join([
-            f"Section {i} Earthworks " + "." * 20 + f" {100 + i}" for i in range(5)
+    # p3 has strong Contents+leaders; p2/p4–p9 are weaker (QRWN-style) but consecutive
+    pages.append((2, "\n".join([f"Chapter {i} " + "." * 8 + f" {10 + i}" for i in range(4)])))
+    pages.append((3, "Contents\n" + "\n".join([
+        f"Section {i} Earthworks " + "." * 20 + f" {100 + i}" for i in range(5)
+    ])))
+    for p in range(4, 10):
+        pages.append((p, "\n".join([
+            f"9.3.2 Earthworks Assessment " + "." * 6 + f" 137",
+            f"9.10 Pavement Design " + "." * 10 + f" 144",
+            f"Item {p} " + "." * 5 + f" {p}",
         ])))
-    # Mid-document table with page-number-looking columns — must NOT be TOC
+    # Mid-document table — must NOT be TOC
     pages.append((41, "\n".join([
         f"Mostadam score Earthworks " + "." * 12 + f" {i}" for i in range(8)
     ])))
-    pages.append((56, "\n".join([f"Table row {i} value " + "." * 10 + f" {i}" for i in range(6)])))
-    # Bare "Earthworks" scorecard must not open the section
     pages.append((26, "Mostadam scorecard\nEarthworks credit credits summarised."))
     pages.append((137, "9.3.2 Earthworks Assessment\nMass haul and cut fill volumes are balanced."))
-    pages.append((144, "9.10 Pavement design\nTotal pavement thickness 550 mm from wearing surface to ToS."))
+    pages.append((144, "9.10 Pavement Design\nTotal pavement thickness 550 mm from wearing surface to ToS."))
     pdf = make_report_pdf_json(tmp_path / "toc.pdf.json", pages)
     out = tmp_path / "claims.json"
     rc, msg = run("read_report.py", "--text", pdf, "--out", out)
@@ -366,10 +406,10 @@ def test_r4c_toc_early_consecutive_numbered_headings(tmp_path):
     claims = load(out)
     toc = claims["toc_pages"]
     assert all(p in toc for p in range(2, 10)), toc
-    assert 41 not in toc and 56 not in toc and 26 not in toc, toc
+    assert 41 not in toc and 26 not in toc, toc
     sec = {s["section"]: s["page"] for s in claims["sections"]}
-    assert sec.get("earthworks") == 137
-    assert sec.get("pavement") == 144
+    assert sec.get("earthworks") == 137, sec
+    assert sec.get("pavement") == 144, sec
     bal = [c for c in claims["claims"] if c["family"] == "balanced"]
     assert bal and bal[0]["page"] == 137
 
@@ -465,8 +505,8 @@ def test_r10_pavement_depth_prefers_550_not_stormwater_500(tmp_path):
     assert c4[0]["result"] == "pass"
 
 
-def test_r11_principal_alist_roads_earthworks_only(tmp_path):
-    """R11: principal_checks cover A-List E26–E47 only — not Electrical E126/E128."""
+def test_r11b_principal_sum_earthworks_formula_only(tmp_path):
+    """R11b: A-List SUM('4-EARTHWORKS'!F13:F15) — no kerb; Electrical rows excluded."""
     xlsx = make_boq(tmp_path / "boq.xlsx", ref_alist=3)
     out = tmp_path / "boq.json"
     rc, msg = run("read_boq.py", "--xlsx", xlsx, "--out", out)
@@ -475,9 +515,11 @@ def test_r11_principal_alist_roads_earthworks_only(tmp_path):
     pcs = boq["summary"]["principal_checks"]
     rows = {pc.get("row") for pc in pcs}
     assert 126 not in rows and 128 not in rows, pcs
-    # In-band SUM at row 27 is retained (cached may be not_run without Excel)
-    assert any(pc.get("row") == 27 for pc in pcs) or any(
-        "E27" in (pc.get("cell") or "") or "E27" in (pc.get("address") or "") for pc in pcs), pcs
+    cut_pc = next(pc for pc in pcs if pc.get("row") == 27)
+    fill_pc = next(pc for pc in pcs if pc.get("row") == 29)
+    # F13+F15 = I13 stated; must not include roads kerb
+    assert cut_pc["part_sum"] == pytest.approx(5065345 * 1.05)
+    assert fill_pc["part_sum"] == pytest.approx(5065345 * 1.05 * 0.4 + 120000)
 
 
 # ------------------------------------------------------------------ R7 / C6
