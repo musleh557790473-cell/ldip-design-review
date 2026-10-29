@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/coordinating-utility-corridors/corridors.schema.json",
+  "title": "LDIP utility corridors (skill 14) — SPC-0006 Rev O §4.17; report only (DO-4)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["corridors_version", "rows", "comparisons", "findings", "counts", "meta"],
+  "properties": {
+    "corridors_version": {"const": "1.0"},
+    "rows": {
+      "type": "array",
+      "description": "One row per section × utility (band edges, centre, offset, side, source handle / page).",
+      "items": {
+        "type": "object",
+        "required": ["section", "utility"],
+        "additionalProperties": true
+      }
+    },
+    "spacing_table": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": true}
+    },
+    "comparisons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check", "result"],
+        "properties": {
+          "check": {"enum": ["C1", "C2", "C3", "C4", "C5", "C6"]},
+          "result": {
+            "enum": ["pass", "flag", "observation", "information", "not_run"]
+          },
+          "severity": {
+            "type": ["string", "null"],
+            "enum": ["Critical", "Major", "Minor", "Observation", null]
+          },
+          "proposed_status": {
+            "type": ["string", "null"],
+            "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information", null]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "SPC-0003-shaped candidates; report only — reference.rule_id must be null (DO-4).",
+      "items": {
+        "type": "object",
+        "required": ["issue_type", "reference", "report_only"],
+        "properties": {
+          "issue_type": {
+            "enum": ["inconsistency", "missing_information", "design_error", "er_ambiguity", "package_control", "schedule_blocking"]
+          },
+          "reference": {
+            "type": "object",
+            "properties": {
+              "rule_id": {"type": "null", "description": "DO-4: COR states change in rules_v9 after T14-R"}
+            }
+          },
+          "report_only": {"const": true},
+          "agent": {"const": "COO"},
+          "severity": {
+            "enum": ["Critical", "Major", "Minor", "Observation"]
+          },
+          "proposed_status": {
+            "enum": ["Confirmed", "Probable", "Not auto-verifiable", "Missing information"]
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["sections", "findings"],
+      "additionalProperties": true
+    },
+    "meta": {
+      "type": "object",
+      "required": ["marking"],
+      "additionalProperties": true
+    }
+  }
+}

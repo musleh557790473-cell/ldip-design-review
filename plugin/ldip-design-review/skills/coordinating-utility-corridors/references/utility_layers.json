@@ -1,0 +1,103 @@
+{
+  "tag": "[PROPOSED — DO-3; per-site code list moves to rules_v9 later]",
+  "note": "Layer name / legend label → utility, class (wet|dry|power). Matches NMAR / QRWN / NRJS 30 % corridor sheets (probe). Short name after last '$' is also matched.",
+  "default_site": "NMAR",
+  "sites": {
+    "NMAR": {
+      "layers": {
+        "PWT-WATER": {"utility": "water", "class": "wet"},
+        "PWT-POTABLE": {"utility": "water", "class": "wet"},
+        "WATER": {"utility": "water", "class": "wet"},
+        "STO-STORM": {"utility": "storm", "class": "wet"},
+        "STO-DRAIN": {"utility": "storm", "class": "wet"},
+        "STORM": {"utility": "storm", "class": "wet"},
+        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
+        "SWN-FOUL": {"utility": "sewer", "class": "wet"},
+        "SEWER": {"utility": "sewer", "class": "wet"},
+        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
+        "MV": {"utility": "mv", "class": "dry", "power": true},
+        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
+        "LV": {"utility": "lv", "class": "dry", "power": true},
+        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
+        "TEL": {"utility": "telecom", "class": "dry"},
+        "TELECOM": {"utility": "telecom", "class": "dry"},
+        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
+        "SL": {"utility": "street_lighting", "class": "dry"},
+        "STREET LIGHTING": {"utility": "street_lighting", "class": "dry"},
+        "HOUSE CONNECTION": {"utility": "house_connection", "class": "dry"}
+      },
+      "legend_colours": {
+        "water": [0, 0, 255],
+        "storm": [0, 128, 255],
+        "sewer": [128, 0, 128],
+        "irrigation": [0, 128, 0],
+        "mv": [255, 0, 0],
+        "lv": [255, 128, 0],
+        "telecom": [128, 128, 128],
+        "street_lighting": [255, 255, 0]
+      }
+    },
+    "QRWN": {
+      "layers": {
+        "PWT-WATER": {"utility": "water", "class": "wet"},
+        "WATER": {"utility": "water", "class": "wet"},
+        "STO-STORM": {"utility": "storm", "class": "wet"},
+        "STORM": {"utility": "storm", "class": "wet"},
+        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
+        "SEWER": {"utility": "sewer", "class": "wet"},
+        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
+        "MV": {"utility": "mv", "class": "dry", "power": true},
+        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
+        "LV": {"utility": "lv", "class": "dry", "power": true},
+        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
+        "TEL": {"utility": "telecom", "class": "dry"},
+        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
+        "SL": {"utility": "street_lighting", "class": "dry"}
+      },
+      "legend_colours": {
+        "water": [0, 0, 255],
+        "storm": [0, 128, 255],
+        "sewer": [128, 0, 128],
+        "irrigation": [0, 128, 0],
+        "mv": [255, 0, 0],
+        "lv": [255, 128, 0],
+        "telecom": [128, 128, 128],
+        "street_lighting": [255, 255, 0]
+      }
+    },
+    "NRJS": {
+      "layers": {
+        "PWT-WATER": {"utility": "water", "class": "wet"},
+        "WATER": {"utility": "water", "class": "wet"},
+        "STO-STORM": {"utility": "storm", "class": "wet"},
+        "STORM": {"utility": "storm", "class": "wet"},
+        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
+        "SEWER": {"utility": "sewer", "class": "wet"},
+        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
+        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
+        "MV": {"utility": "mv", "class": "dry", "power": true},
+        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
+        "LV": {"utility": "lv", "class": "dry", "power": true},
+        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
+        "TEL": {"utility": "telecom", "class": "dry"},
+        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
+        "SL": {"utility": "street_lighting", "class": "dry"}
+      },
+      "legend_colours": {
+        "water": [0, 0, 255],
+        "storm": [0, 128, 255],
+        "sewer": [128, 0, 128],
+        "irrigation": [0, 128, 0],
+        "mv": [255, 0, 0],
+        "lv": [255, 128, 0],
+        "telecom": [128, 128, 128],
+        "street_lighting": [255, 255, 0]
+      }
+    }
+  }
+}

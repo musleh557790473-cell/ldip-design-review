@@ -1,0 +1,46 @@
+{
+  "corridors_version": "1.0",
+  "rows": [
+    {
+      "section": "A1",
+      "utility": "water",
+      "x_min": 4.575,
+      "x_max": 5.425,
+      "centre": 5.0,
+      "width": 0.85,
+      "offset_to_curb": 1.5,
+      "side": "right",
+      "class": "wet",
+      "power": false,
+      "layer": "PWT-WATER",
+      "handle": null,
+      "page": null,
+      "cl_x": 0.0,
+      "curb_left": -3.5,
+      "curb_right": 3.5
+    }
+  ],
+  "spacing_table": [],
+  "comparisons": [],
+  "findings": [],
+  "counts": {
+    "sections": 1,
+    "rows": 1,
+    "comparisons": 0,
+    "findings": 0,
+    "c3_flags": 0,
+    "c1_missing": 0
+  },
+  "meta": {
+    "marking": "report only (DO-4); C2 information until R-O5 (DO-5); C4 Not auto-verifiable at PD (DO-6)",
+    "site": null,
+    "sub": null,
+    "run": null,
+    "stage": null,
+    "route": null,
+    "status_cap": null,
+    "generated_at": null,
+    "checker": "check_corridors/0.1.0",
+    "source": null
+  }
+}
