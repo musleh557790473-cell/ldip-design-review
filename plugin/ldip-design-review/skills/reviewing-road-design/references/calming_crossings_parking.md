@@ -45,6 +45,7 @@ Spec: AICC-BIM-SPC-0006 Rev J §4.13G (owner authorized session 27 build; DJ-5 [
 - ROD-047 chicane: curb lateral-shift measurement is primary; `chicane_shift_m` is fallback when no curb samples
 - ROD-047 stays inactive in the rulebook until first 60 % chicane confirm (R-J1); built and tested on synthetic data. C3 rules remain inactive when C3+D code ships (DJ-9); activation ≠ packaging (DK-5)
 - Parking schedule format unknown (R-J2) → plan counts only
+- **G-1 parking layers:** plan bays are read only from per-site `parking_layers` in `road_class_params.json` (R-I3 style, like `curb_layers`). Empty or absent → `not_run` with `[GAP: parking_layers]`; no guess from parcel / marking layers. Stall size gate: `c3.bay_width_m` / `bay_length_m` (and `bay_area_m2`). Layer names for NMAR / QRWN / NRJS are not yet populated (owner must supply from drawings).
 - Bridge clearance for humps not run (R-J4)
 - C1/C2 scripts are not in this repository checkout; C3 accepts C2 corner returns as a JSON input
 - Detail *box* bands (when sheets use boxed details) are not yet separate from the column-above-title band
