@@ -276,7 +276,7 @@ def test_nested_insert_raw_not_todxf(tmp_path):
         d.layers[name] = {"color_index": color}
 
     _make_band_block(d, "BAND")
-    curb = 3.5
+    curb = 3.50  # within params.curb.lane_width_m [3.0, 3.65]
     xref = d.blocks.new("XREF_SECTION")
     # Keep consecutive band edges < 3 m apart so R3 x-gap split does not bisect
     # the section (real sheets fill L verge → carriageway → R verge continuously).
@@ -317,6 +317,7 @@ def test_nested_insert_raw_not_todxf(tmp_path):
     assert sec_doc["source"]["band_insert_count"] >= 8
     assert len(sec_doc["sections"]) == 1
     assert sec_doc["sections"][0]["label"] == "A1"
+    assert sec_doc["sections"][0]["curb_method"] == "lane_chain"
     utils = {b["utility"] for b in sec_doc["sections"][0]["bands"]}
     assert "water" in utils
     water = next(b for b in sec_doc["sections"][0]["bands"] if b["utility"] == "water")
@@ -338,9 +339,6 @@ def test_nested_parent_nonzero_x_scale(tmp_path):
         d.layers[name] = {"color_index": color}
     _make_band_block(d, "BAND")
     xref = d.blocks.new("XREF_SECTION")
-    # Local water insert: x=5.425, sx=0.85 → after parent (10, scale 2):
-    # world x = 10 + 5.425*2 = 20.85; world sx = 0.85*2 = 1.7; centre ≈ 20.0
-    # Place other bands so world-space consecutive edges stay within 3 m.
     # Tight local packing: after parent scale 2, consecutive world gaps stay < 3 m.
     for util, x, sx in [
         ("water", 2.5, 0.5), ("irrigation", 1.9, 0.3), ("storm", 1.3, 0.4),
@@ -353,8 +351,11 @@ def test_nested_parent_nonzero_x_scale(tmp_path):
     # Parent (10, scale 2) → water world x=10+2.5*2=15.0, sx=1.0, centre=14.5
     parent_x, parent_s = 10.0, 2.0
     water_world_centre = parent_x + (2.5 - 0.5 / 2.0) * parent_s  # 14.5
-    cl = water_world_centre - 1.5  # so water offset ≈ +1.5 after curb at cl+1.5
-    curb = 1.5
+    # Lane-chain curb at ±3.30 from CL (params.curb.lane_width_m)
+    curb = 3.30
+    cl = water_world_centre - 1.5  # water offset ≈ +1.5 after curb at cl+curb… adjust
+    # Place CL so water centre is curb + 1.5
+    cl = water_world_centre - (curb + 1.5)
     msp.add_lwpolyline([(cl, -2), (cl, 2)], layer="Center line")
     msp.add_lwpolyline([(cl + curb, -2), (cl + curb, 2)], layer="LIMIT OF WORK")
     msp.add_lwpolyline([(cl - curb, -2), (cl - curb, 2)], layer="LIMIT OF WORK")
@@ -369,9 +370,13 @@ def test_nested_parent_nonzero_x_scale(tmp_path):
     assert rc == 0, msg
     sec_doc = load(out)
     assert sec_doc["source"]["band_insert_count"] >= 8
+    assert len(sec_doc["sections"]) == 1, sec_doc.get("warnings")
     water = next(b for b in sec_doc["sections"][0]["bands"] if b["utility"] == "water")
     assert abs(water["centre"] - water_world_centre) < 0.15, water
     assert abs(water["width"] - 1.0) < 0.05, water  # 0.5 * scale 2
+    sec0 = sec_doc["sections"][0]
+    assert sec0["curb_method"] == "lane_chain"
+    assert abs(sec0["curb_right"] - (cl + curb)) < 0.05
 
 
 
@@ -484,3 +489,141 @@ def test_parse_section_label_strict():
     assert p("Dahiyat Nemar") is None
     assert p("-") is None
     assert p("SECTION A1") == "A1"
+
+
+def _full_utilities_on_xref(xref, band_name="BAND"):
+    for util, x, sx in [
+        ("water", 5.425, 0.85), ("irrigation", 4.4, 0.4), ("storm", 2.5, 0.5),
+        ("sewer", 1.05, 0.5), ("street_lighting", -0.35, 0.3),
+        ("telecom", -1.5, 0.3), ("mv", -2.7, 0.5), ("lv", -3.7, 0.4),
+    ]:
+        xref.add_blockref(band_name, insert=(x, 0.0, 0.0), scale=(sx, 1.0, 1.0),
+                          layer=LAYER[util])
+
+
+def test_anonymous_star_u_band_block(tmp_path):
+    """N2a / F1: anonymous *U band block with width-1 marker is accepted."""
+    ezdwg = pytest.importorskip("ezdwg")
+    d = ezdwg.new()
+    for name, color in [("0", 7), (LAYER["water"], 5), (LAYER["storm"], 4),
+                        (LAYER["sewer"], 6), (LAYER["irrigation"], 3),
+                        (LAYER["mv"], 1), (LAYER["lv"], 2),
+                        (LAYER["telecom"], 7), (LAYER["street_lighting"], 8),
+                        ("LIMIT OF WORK", 9), ("Center line", 10), ("DWG_TITLE", 11)]:
+        d.layers[name] = {"color_index": color}
+    _make_band_block(d, "*U16")
+    xref = d.blocks.new("XREF_SECTION")
+    _full_utilities_on_xref(xref, "*U16")
+    msp = d.modelspace()
+    curb = 3.30
+    msp.add_lwpolyline([(0, -2), (0, 2)], layer="Center line")
+    msp.add_lwpolyline([(curb, -2), (curb, 2)], layer="LIMIT OF WORK")
+    msp.add_lwpolyline([(-curb, -2), (-curb, 2)], layer="LIMIT OF WORK")
+    msp.add_text("A1", insert=(0, 3, 0), height=0.3, layer="DWG_TITLE")
+    msp.add_blockref("XREF_SECTION", insert=(0, 0, 0), scale=(1, 1, 1), layer="0")
+    dwg = tmp_path / "star_u.dwg"
+    d.save(str(dwg))
+    out = tmp_path / "sections.json"
+    rc, msg = run("read_corridor_sections.py", "--dwg", dwg, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    sec_doc = load(out)
+    assert sec_doc["source"]["band_block_count"] >= 1
+    assert sec_doc["source"]["band_insert_count"] >= 8
+    assert len(sec_doc["sections"]) == 1
+    assert sec_doc["sections"][0]["label"] == "A1"
+    assert any(b.get("block") == "*U16" for b in sec_doc["sections"][0]["bands"])
+
+
+def test_same_name_different_content_handle_keyed():
+    """N2b / F2: two headers sharing a name — only the marker handle is a band."""
+    sys.path.insert(0, str(SK))
+    from read_corridor_sections import _band_block_handles
+
+    # Header 100 (*U1) has the width-1 marker; header 200 (*U1) has other content.
+    lw_rows = [
+        (1, 0, [(-0.5, 0.0), (-0.5, 1.0)], [], [], 1.0),
+        (2, 0, [(0.0, 0.0), (1.0, 0.0)], [], [], 0.0),
+    ]
+    lw_owners = [(1, 100), (2, 200)]
+    block_headers = [(100, "*U1"), (200, "*U1"), (101, "*U1"), (201, "*U1")]
+    params = {"band": {"marker_local_x": -0.5, "marker_width": 1.0}}
+    handles = _band_block_handles(lw_rows, lw_owners, block_headers, params)
+    assert handles == {100}
+    assert 200 not in handles
+
+
+def test_two_sections_same_y_different_curbs(tmp_path):
+    """N2c / F3: two sections at the same y keep distinct lane-chain curbs."""
+    ezdwg = pytest.importorskip("ezdwg")
+    d = ezdwg.new()
+    for name, color in [("0", 7), (LAYER["water"], 5), (LAYER["storm"], 4),
+                        (LAYER["sewer"], 6), (LAYER["irrigation"], 3),
+                        (LAYER["mv"], 1), (LAYER["lv"], 2),
+                        (LAYER["telecom"], 7), (LAYER["street_lighting"], 8),
+                        ("LIMIT OF WORK", 9), ("Center line", 10), ("DWG_TITLE", 11)]:
+        d.layers[name] = {"color_index": color}
+    _make_band_block(d, "BAND")
+    msp = d.modelspace()
+
+    def add_bands(xref, origin_x, positions):
+        """positions: list of (util, local_x, sx) packed so consecutive edges gap < 3 m."""
+        for util, x, sx in positions:
+            xref.add_blockref("BAND", insert=(origin_x + x, 0.0, 0.0),
+                              scale=(sx, 1.0, 1.0), layer=LAYER[util])
+
+    # A1 packed bands; curb ±3.30
+    packed_a1 = [
+        ("water", 5.425, 0.85), ("irrigation", 4.4, 0.4), ("storm", 2.5, 0.5),
+        ("sewer", 1.05, 0.5), ("street_lighting", -0.35, 0.3),
+        ("telecom", -1.5, 0.3), ("mv", -2.7, 0.5), ("lv", -3.7, 0.4),
+    ]
+    # A3 wider: bands span past ±6.60 curb; consecutive edges < 3 m
+    packed_a3 = [
+        ("lv", -8.5, 0.4), ("mv", -6.8, 0.5), ("telecom", -5.0, 0.3),
+        ("street_lighting", -3.2, 0.3), ("sewer", -1.4, 0.5),
+        ("storm", 1.4, 0.5), ("irrigation", 3.5, 0.4), ("water", 7.0, 0.85),
+    ]
+
+    # A1 at x=0: single lane-width curb ±3.30 from CL
+    xref_a1 = d.blocks.new("XREF_A1")
+    add_bands(xref_a1, 0.0, packed_a1)
+    msp.add_lwpolyline([(0, -2), (0, 2)], layer="Center line")
+    msp.add_lwpolyline([(3.30, -2), (3.30, 2)], layer="LIMIT OF WORK")
+    msp.add_lwpolyline([(-3.30, -2), (-3.30, 2)], layer="LIMIT OF WORK")
+    msp.add_lwpolyline([(7.50, -2), (7.50, 2)], layer="LIMIT OF WORK")  # ROW, gap 4.2
+    msp.add_lwpolyline([(-7.50, -2), (-7.50, 2)], layer="LIMIT OF WORK")
+    msp.add_text("A1", insert=(0, 3, 0), height=0.3, layer="DWG_TITLE")
+    msp.add_blockref("XREF_A1", insert=(0, 0, 0), scale=(1, 1, 1), layer="0")
+
+    # A3 at x=40, same y: chain 3.30 → 6.60 (distinct from A1)
+    ox = 40.0
+    xref_a3 = d.blocks.new("XREF_A3")
+    add_bands(xref_a3, ox, packed_a3)
+    msp.add_lwpolyline([(ox, -2), (ox, 2)], layer="Center line")
+    for dx in (3.30, 6.60):  # two-lane chain from CL (no median)
+        msp.add_lwpolyline([(ox + dx, -2), (ox + dx, 2)], layer="LIMIT OF WORK")
+        msp.add_lwpolyline([(ox - dx, -2), (ox - dx, 2)], layer="LIMIT OF WORK")
+    msp.add_text("A3", insert=(ox, 3, 0), height=0.3, layer="DWG_TITLE")
+    msp.add_blockref("XREF_A3", insert=(0, 0, 0), scale=(1, 1, 1), layer="0")
+
+    dwg = tmp_path / "same_y_curbs.dwg"
+    d.save(str(dwg))
+    out = tmp_path / "sections.json"
+    rc, msg = run("read_corridor_sections.py", "--dwg", dwg, "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    sec_doc = load(out)
+    by_lab = {s["label"]: s for s in sec_doc["sections"]}
+    assert set(by_lab) >= {"A1", "A3"}, (sec_doc["sections"], sec_doc.get("warnings"))
+    a1, a3 = by_lab["A1"], by_lab["A3"]
+    assert a1["curb_method"] == "lane_chain", a1
+    assert a3["curb_method"] == "lane_chain", a3
+    assert abs(a1["curb_right"] - 3.30) < 0.05, a1
+    assert abs(a1["curb_left"] + 3.30) < 0.05, a1
+    assert abs(a3["curb_right"] - (ox + 6.60)) < 0.05, a3
+    assert abs(a3["curb_left"] - (ox - 6.60)) < 0.05, a3
+    # Must not pick the neighbouring section's curb
+    assert abs(a1["curb_right"] - a3["curb_right"]) > 1.0
+    assert a1.get("curb_chain_right") == pytest.approx([3.30], abs=0.05)
+    assert a3.get("curb_chain_right") == pytest.approx(
+        [ox + 3.30, ox + 6.60], abs=0.05
+    )

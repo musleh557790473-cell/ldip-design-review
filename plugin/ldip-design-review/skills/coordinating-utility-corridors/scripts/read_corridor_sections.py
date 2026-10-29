@@ -78,23 +78,42 @@ def _combine_parent_transform(local_x, local_y, parents):
     return x, y
 
 
-def _build_owner_index(inserts, owners, block_headers):
-    """Map insert handle → parent insert chain (for nested block refs)."""
+def _header_name_map(block_headers):
+    """Map every block-header handle → name (names may repeat across handles)."""
+    return {h: n for h, n in block_headers}
+
+
+def _insert_target_map(path):
+    """INSERT handle → target block-header handle (F2).
+
+    Prefer `decode_insert_write_properties` (extrusion, block_header_handle, …).
+    """
+    from ezdwg.raw import decode_insert_write_properties
+    targets = {}
+    for row in decode_insert_write_properties(path):
+        # (insert_handle, extrusion, block_header_handle, attribs)
+        if len(row) >= 3:
+            targets[row[0]] = row[2]
+    return targets
+
+
+def _build_owner_index(inserts, owners, block_headers, insert_targets):
+    """Map insert handle → parent insert chain keyed by target header handle (F2)."""
     owner_of = {h: o for h, o in owners}
-    header_name = {}
-    for h, n in block_headers:
-        header_name.setdefault(h, n)
-    by_name = defaultdict(list)
+    header_name = _header_name_map(block_headers)
     insert_by_h = {}
+    # header handle → inserts that target it
+    targeting = defaultdict(list)
     for row in inserts:
         h, x, y, z, sx, sy, sz, rot, name = row
+        tgt = insert_targets.get(h)
         insert_by_h[h] = {
             "handle": h, "x": x, "y": y, "z": z,
             "sx": sx, "sy": sy, "sz": sz, "rot": rot, "name": name,
-            "owner": owner_of.get(h),
+            "owner": owner_of.get(h), "target": tgt,
         }
-        if name:
-            by_name[name].append(h)
+        if tgt is not None:
+            targeting[tgt].append(h)
 
     def parent_chain(handle):
         chain = []
@@ -103,19 +122,21 @@ def _build_owner_index(inserts, owners, block_headers):
         warnings = []
         while owner is not None and owner not in seen:
             seen.add(owner)
-            bname = header_name.get(owner)
-            if not bname:
-                break
-            parents = [insert_by_h[ph] for ph in by_name.get(bname, []) if ph in insert_by_h]
+            parent_hs = targeting.get(owner) or []
+            parents = [insert_by_h[ph] for ph in parent_hs if ph in insert_by_h]
             if not parents:
                 break
-            # R6: warn only when this *parent container* block is inserted more than once
+            bname = header_name.get(owner)
+            # R6: warn when this parent header is inserted more than once
             if len(parents) > 1:
                 warnings.append({
                     "code": "MULTI_INSERT_PARENT",
-                    "detail": f"block '{bname}' inserted {len(parents)} times; "
-                              f"using handle {parents[0]['handle']}",
+                    "detail": (
+                        f"block header {owner} ('{bname}') inserted "
+                        f"{len(parents)} times; using handle {parents[0]['handle']}"
+                    ),
                     "block": bname,
+                    "block_handle": owner,
                     "count": len(parents),
                 })
             parent = parents[0]
@@ -123,6 +144,7 @@ def _build_owner_index(inserts, owners, block_headers):
                 "x": parent["x"], "y": parent["y"],
                 "sx": parent["sx"], "sy": parent["sy"], "rot": parent["rot"],
                 "handle": parent["handle"], "name": parent["name"],
+                "target": parent.get("target"),
             })
             owner = owner_of.get(parent["handle"])
         return chain, warnings
@@ -158,30 +180,30 @@ def _is_band_marker_lw(row, marker_x=-0.5, marker_w=1.0, tol=0.05):
     return all(abs(x - marker_x) <= tol for x in xs)
 
 
-def _band_block_names(lw_rows, lw_owners, block_headers, params):
-    """Block names whose definition has one LWPOLYLINE width 1 at x=−0.5 (R5)."""
+def _band_block_handles(lw_rows, lw_owners, block_headers, params):
+    """Block-header handles with exactly one width-1 marker LWPOLYLINE at x=−0.5.
+
+    F1: anonymous `*U*` blocks are included. F2: keyed by handle, not name.
+    """
     band_cfg = params.get("band") or {}
     marker_x = float(band_cfg.get("marker_local_x", -0.5))
     marker_w = float(band_cfg.get("marker_width", 1.0))
-    header_name = {}
-    for h, n in block_headers:
-        header_name.setdefault(h, n)
     owner_of = {h: o for h, o in lw_owners}
-    markers_by_block = defaultdict(list)
+    markers_by_header = defaultdict(list)
     for row in lw_rows:
         if not _is_band_marker_lw(row, marker_x, marker_w):
             continue
         owner = owner_of.get(row[0])
-        bname = header_name.get(owner)
-        if bname and not str(bname).startswith("*"):
-            markers_by_block[bname].append(row[0])
-    # Require exactly one marker LWPOLYLINE in the block
-    return {n for n, hs in markers_by_block.items() if len(hs) == 1}
+        if owner is None:
+            continue
+        # Accept any header including anonymous *U* (F1) — no startswith("*") skip
+        markers_by_header[owner].append(row[0])
+    return {h for h, hs in markers_by_header.items() if len(hs) == 1}
 
 
-def _near_vertical_xs(lw_rows, layer_names, ent_layers, substrings):
-    """Collect x midpoints of near-vertical LWPOLYLINES on matching layers."""
-    xs = []
+def _near_vertical_segs(lw_rows, layer_names, ent_layers, substrings):
+    """Near-vertical LWPOLYLINE segments → {x, y_mid, y_min, y_max, handle}."""
+    segs = []
     for row in lw_rows:
         h, flags, points, bulges, widths, cw = row
         lname = layer_names.get(ent_layers.get(h), "")
@@ -193,20 +215,31 @@ def _near_vertical_xs(lw_rows, layer_names, ent_layers, substrings):
         ys_p = [float(p[1]) for p in points]
         if abs(max(xs_p) - min(xs_p)) > abs(max(ys_p) - min(ys_p)):
             continue  # horizontal-ish
-        xs.append(sum(xs_p) / len(xs_p))
-    return xs
+        segs.append({
+            "x": sum(xs_p) / len(xs_p),
+            "y_mid": sum(ys_p) / len(ys_p),
+            "y_min": min(ys_p), "y_max": max(ys_p),
+            "handle": h,
+        })
+    return segs
 
 
-def _near_vertical_line_xs(lines, layer_names, ent_layers, substrings):
-    xs = []
+def _near_vertical_line_segs(lines, layer_names, ent_layers, substrings):
+    segs = []
     for h, x1, y1, z1, x2, y2, z2 in lines:
         lname = layer_names.get(ent_layers.get(h), "")
         if not _layer_match(lname, substrings):
             continue
         if abs(x2 - x1) > abs(y2 - y1):
             continue
-        xs.append((x1 + x2) / 2.0)
-    return xs
+        ys = (float(y1), float(y2))
+        segs.append({
+            "x": (float(x1) + float(x2)) / 2.0,
+            "y_mid": (ys[0] + ys[1]) / 2.0,
+            "y_min": min(ys), "y_max": max(ys),
+            "handle": h,
+        })
+    return segs
 
 
 def _collect_lane_dim_edges(path, layer_names, params):
@@ -256,8 +289,10 @@ def read_dwg_raw(dwg_path, layers_map, params):
     owners = list(decode_insert_owner_handles(path))
     layer_names = dict(decode_layer_names(path))
     block_headers = list(decode_block_header_names(path))
+    header_name = _header_name_map(block_headers)
+    insert_targets = _insert_target_map(path)
     insert_by_h, parent_chain = _build_owner_index(
-        inserts, owners, block_headers
+        inserts, owners, block_headers, insert_targets
     )
 
     lw_rows = list(decode_lwpolyline_entities(path))
@@ -265,7 +300,8 @@ def read_dwg_raw(dwg_path, layers_map, params):
     lw_handles = [r[0] for r in lw_rows]
     lw_layers = dict(decode_object_entity_layer_handles(path, lw_handles)) if lw_handles else {}
 
-    band_blocks = _band_block_names(lw_rows, lw_owners, block_headers, params)
+    band_handles = _band_block_handles(lw_rows, lw_owners, block_headers, params)
+    band_names = {header_name[h] for h in band_handles if h in header_name}
 
     handles = [r[0] for r in inserts]
     ent_layers = dict(decode_object_entity_layer_handles(path, handles)) if handles else {}
@@ -276,13 +312,12 @@ def read_dwg_raw(dwg_path, layers_map, params):
 
     curb_subs = (params.get("curb") or {}).get("limit_of_work_layer_substrings") or ["LIMIT OF WORK"]
     cl_subs = (params.get("curb") or {}).get("center_line_layer_substrings") or ["Center line"]
-    title_subs = (params.get("section_label") or {}).get("layer_substrings") or ["DWG_TITLE"]
 
-    # R2: LWPOLYLINE primary; LINE as supplemental
-    curb_xs = _near_vertical_xs(lw_rows, layer_names, lw_layers, curb_subs)
-    curb_xs += _near_vertical_line_xs(lines, layer_names, line_layers, curb_subs)
-    cl_xs = _near_vertical_xs(lw_rows, layer_names, lw_layers, cl_subs)
-    cl_xs += _near_vertical_line_xs(lines, layer_names, line_layers, cl_subs)
+    # R2: LWPOLYLINE primary; LINE as supplemental — keep y for per-section filter (F3)
+    curb_segs = _near_vertical_segs(lw_rows, layer_names, lw_layers, curb_subs)
+    curb_segs += _near_vertical_line_segs(lines, layer_names, line_layers, curb_subs)
+    cl_segs = _near_vertical_segs(lw_rows, layer_names, lw_layers, cl_subs)
+    cl_segs += _near_vertical_line_segs(lines, layer_names, line_layers, cl_subs)
 
     lane_edges = _collect_lane_dim_edges(path, layer_names, params)
 
@@ -300,8 +335,6 @@ def read_dwg_raw(dwg_path, layers_map, params):
         insert = row[4] if len(row) > 4 else (0.0, 0.0, 0.0)
         texts.append((h, text, float(insert[0]), float(insert[1])))
 
-    text_handles = [t[0] for t in texts]
-    text_layers = dict(decode_object_entity_layer_handles(path, text_handles)) if text_handles else {}
     labels = []
     for h, text, tx, ty in texts:
         lab = parse_section_label(text, strict=True)
@@ -315,31 +348,54 @@ def read_dwg_raw(dwg_path, layers_map, params):
             "code": "ENGINE_VERSION_UNPINNED",
             "detail": f"ezdwg {ver} installed; pinned {EZDWG_PINNED}",
         })
-    # Band inserts: utility/tree layer AND band-block content (R5)
+    # Band inserts: utility/tree layer AND band-block content by handle (R5 / F1 / F2)
     bands = []
     seen_chain_warn = set()
     for h, x, y, z, sx, sy, sz, rot, name in inserts:
-        if name not in band_blocks:
+        target = insert_targets.get(h)
+        unresolved = target is None
+        if unresolved:
+            # Probe fallback: target not resolvable by handle — coords already world
+            # when parent is (0,0) scale 1. Accept by name membership among band handles.
+            if name not in band_names:
+                continue
+        elif target not in band_handles:
             continue
         lh = ent_layers.get(h)
         lname = layer_names.get(lh, "")
         meta = resolve_utility(lname, layers_map)
         if not meta:
             continue
-        chain, chain_warns = parent_chain(h)
-        for w in chain_warns:
-            key = (w.get("code"), w.get("block"))
-            if key not in seen_chain_warn:
-                warnings.append(w)
-                seen_chain_warn.add(key)
-        wx, wy = _combine_parent_transform(x, y, chain)
-        wsx = float(sx)
-        for p in reversed(chain):
-            wsx *= float(p.get("sx", 1.0))
+        if unresolved:
+            wkey = ("INSERT_TARGET_UNRESOLVED", name)
+            if wkey not in seen_chain_warn:
+                warnings.append({
+                    "code": "INSERT_TARGET_UNRESOLVED",
+                    "detail": (
+                        f"INSERT {h} ('{name}') has no block-header target; "
+                        "using world coords with parents (0,0) scale 1"
+                    ),
+                    "block": name,
+                })
+                seen_chain_warn.add(wkey)
+            chain, chain_warns = [], []
+            wx, wy, wsx = float(x), float(y), float(sx)
+        else:
+            chain, chain_warns = parent_chain(h)
+            for w in chain_warns:
+                key = (w.get("code"), w.get("block_handle"), w.get("block"))
+                if key not in seen_chain_warn:
+                    warnings.append(w)
+                    seen_chain_warn.add(key)
+            wx, wy = _combine_parent_transform(x, y, chain)
+            wsx = float(sx)
+            for p in reversed(chain):
+                wsx *= float(p.get("sx", 1.0))
         x_min, x_max, centre, width = band_from_insert(wx, wsx)
         bands.append({
             "handle": format(h, "X"),
             "block": name,
+            "block_handle": target,
             "layer": lname,
             "layer_short": layer_short(lname),
             "utility": meta["utility"],
@@ -355,9 +411,11 @@ def read_dwg_raw(dwg_path, layers_map, params):
             "raw_x": x, "raw_sx": sx,
         })
 
+    section_warnings = []
     sections = _group_sections(
-        bands, labels, curb_xs, cl_xs, lane_edges, params
+        bands, labels, curb_segs, cl_segs, lane_edges, params, section_warnings
     )
+    warnings.extend(section_warnings)
 
     return {
         "sections_version": "1.0",
@@ -365,7 +423,7 @@ def read_dwg_raw(dwg_path, layers_map, params):
         "source": {
             "path": path, "ezdwg": ver, "insert_count": len(inserts),
             "band_insert_count": len(bands),
-            "band_block_count": len(band_blocks),
+            "band_block_count": len(band_handles),
         },
         "status_cap": None,
         "sections": sections,
@@ -402,56 +460,167 @@ def _split_x_gaps(band_list, gap_m):
     return groups
 
 
-def _pick_curbs(cl_x, row_left, row_right, curb_xs, lane_edges, sec_y, y_tol=25.0):
-    """LIMIT OF WORK at outer edge of driving lanes (R2)."""
+def _dedupe_xs(xs, tol=0.05):
+    if not xs:
+        return []
+    out = []
+    for x in sorted(xs):
+        if not out or abs(x - out[-1]) > tol:
+            out.append(x)
+    return out
+
+
+def _filter_segs_to_section(segs, sec_y, row_left, row_right, y_tol, x_pad=1.0):
+    """Restrict LIMIT OF WORK / CL segs to section y-band and x-span (F3)."""
+    out = []
+    for s in segs or []:
+        if abs(s["y_mid"] - sec_y) > y_tol:
+            # Also accept if the vertical seg overlaps the section y
+            if not (s["y_min"] - y_tol <= sec_y <= s["y_max"] + y_tol):
+                continue
+        x = s["x"]
+        if row_left is not None and x < row_left - x_pad:
+            continue
+        if row_right is not None and x > row_right + x_pad:
+            continue
+        out.append(s)
+    return out
+
+
+def _lane_chain_side(start, pool, direction, lane_lo, lane_hi):
+    """Walk outward from start through xs spaced lane_lo…lane_hi metres."""
+    chain = [start]
+    cur = start
+    remaining = list(pool)
+    while True:
+        best = None
+        for x in remaining:
+            gap = (x - cur) * direction
+            if lane_lo - 1e-6 <= gap <= lane_hi + 1e-6:
+                if best is None or abs(x - cur) < abs(best - cur):
+                    best = x
+        if best is None:
+            break
+        chain.append(best)
+        remaining = [x for x in remaining if x != best]
+        cur = best
+    return chain
+
+
+def _pick_curbs(cl_x, row_left, row_right, curb_segs, lane_edges, sec_y, params):
+    """Lane-chain curb faces per section (F3 / N1).
+
+    Returns (curb_left, curb_right, curb_method, chain_left, chain_right).
+    """
     if cl_x is None:
-        return None, None
-    # Lane-dimension outer edges near this section
+        return None, None, "none", [], []
+    curb_cfg = params.get("curb") or {}
+    lane_range = curb_cfg.get("lane_width_m") or [3.0, 3.65]
+    lane_lo, lane_hi = float(lane_range[0]), float(lane_range[1])
+    y_tol = float(curb_cfg.get("y_band_tol_m", 25.0))
+    median_max = float(curb_cfg.get("median_max_from_cl_m", 3.0))
+    coord_tol = float(params.get("coord_abs_m") or 0.05)
+
+    segs = _filter_segs_to_section(curb_segs, sec_y, row_left, row_right, y_tol)
+    xs = _dedupe_xs([s["x"] for s in segs], tol=coord_tol)
+
+    left = sorted([x for x in xs if x < cl_x - coord_tol], reverse=True)
+    right = sorted([x for x in xs if x > cl_x + coord_tol])
+
+    has_median = (
+        bool(left) and bool(right)
+        and (cl_x - left[0]) <= median_max + 1e-6
+        and (right[0] - cl_x) <= median_max + 1e-6
+    )
+
+    if has_median:
+        start_l, start_r = left[0], right[0]
+        chain_l = _lane_chain_side(
+            start_l, [x for x in left if x < start_l - coord_tol], -1, lane_lo, lane_hi
+        )
+        chain_r = _lane_chain_side(
+            start_r, [x for x in right if x > start_r + coord_tol], +1, lane_lo, lane_hi
+        )
+        curb_left = chain_l[-1] if chain_l else None
+        curb_right = chain_r[-1] if chain_r else None
+        method = "lane_chain" if (curb_left is not None and curb_right is not None) else "none"
+        if method == "lane_chain":
+            return curb_left, curb_right, method, chain_l, chain_r
+    else:
+        # Start at CL; first LOW must sit one lane-width out
+        chain_l = _lane_chain_side(cl_x, left, -1, lane_lo, lane_hi)
+        chain_r = _lane_chain_side(cl_x, right, +1, lane_lo, lane_hi)
+        # Drop the CL seed from reported chain xs
+        report_l = chain_l[1:] if len(chain_l) > 1 else []
+        report_r = chain_r[1:] if len(chain_r) > 1 else []
+        curb_left = report_l[-1] if report_l else None
+        curb_right = report_r[-1] if report_r else None
+        if curb_left is not None and curb_right is not None:
+            return curb_left, curb_right, "lane_chain", report_l, report_r
+
+    # Fallback: lane-dimension outer edges inside this section's span (N1 lane_dims)
     lane_left = lane_right = None
     for x1, y1, x2, y2, meas, text in lane_edges or []:
         ym = (y1 + y2) / 2.0
         if abs(ym - sec_y) > y_tol and abs(y1 - sec_y) > y_tol and abs(y2 - sec_y) > y_tol:
             continue
         for xv in (x1, x2):
+            if row_left is not None and xv < row_left - 1.0:
+                continue
+            if row_right is not None and xv > row_right + 1.0:
+                continue
             if xv < cl_x:
                 lane_left = xv if lane_left is None else min(lane_left, xv)
             elif xv > cl_x:
                 lane_right = xv if lane_right is None else max(lane_right, xv)
-    # Candidate LIMIT OF WORK xs inside / near ROW
-    cands = []
-    for x in curb_xs or []:
-        if row_left is not None and row_right is not None:
-            if x < row_left - 1.0 or x > row_right + 1.0:
-                continue
-        cands.append(x)
-    if not cands:
-        cands = list(curb_xs or [])
 
-    def nearest(target, side):
-        pool = [x for x in cands if (x < cl_x if side == "L" else x > cl_x)]
-        if not pool:
+    def nearest_low(target, pool):
+        if target is None or not pool:
             return None
-        if target is not None:
-            return min(pool, key=lambda x: abs(x - target))
-        # Outer edge of driving lanes ≈ innermost LOW on that side of CL
-        # (closest to CL from the verge side of the carriageway)
-        if side == "L":
-            below = [x for x in pool if x < cl_x]
-            return max(below) if below else None
-        above = [x for x in pool if x > cl_x]
-        return min(above) if above else None
+        return min(pool, key=lambda x: abs(x - target))
 
-    curb_left = nearest(lane_left, "L")
-    curb_right = nearest(lane_right, "R")
-    return curb_left, curb_right
+    fb_l = nearest_low(lane_left, left) if lane_left is not None else None
+    fb_r = nearest_low(lane_right, right) if lane_right is not None else None
+    if fb_l is not None and fb_r is not None:
+        return fb_l, fb_r, "lane_dims", [fb_l], [fb_r]
+    return None, None, "none", [], []
 
 
-def _group_sections(bands, labels, curb_xs, cl_xs, lane_edges, params):
+def _cl_in_band_span(row_left, row_right, cl_segs, sec_y, y_tol, pad=1.0):
+    """F2: band span must contain a Center line within ±1 m; else skip section."""
+    cl_near = _filter_segs_to_section(
+        cl_segs, sec_y, row_left - pad, row_right + pad, y_tol, x_pad=pad
+    )
+    if not cl_near:
+        # Also try without x filter — CL might sit just inside
+        cl_near = [
+            s for s in (cl_segs or [])
+            if abs(s["y_mid"] - sec_y) <= y_tol
+            or (s["y_min"] - y_tol <= sec_y <= s["y_max"] + y_tol)
+        ]
+    if not cl_near:
+        return False, None, "no Center line in section y-band"
+    mid = (row_left + row_right) / 2.0
+    cl_x = min((s["x"] for s in cl_near), key=lambda x: abs(x - mid))
+    if not (row_left - pad <= cl_x <= row_right + pad):
+        return False, cl_x, (
+            f"Center line x={cl_x:.3f} outside band span "
+            f"[{row_left:.3f},{row_right:.3f}] ±{pad} m"
+        )
+    return True, cl_x, None
+
+
+def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
+                    section_warnings=None):
     """Group by insert y + x-gaps > 3 m; attach ^[AB]\\d+(-\\d+)?$ labels (R3/R4)."""
+    if section_warnings is None:
+        section_warnings = []
     band_cfg = params.get("band") or {}
+    curb_cfg = params.get("curb") or {}
     y_tol = float(band_cfg.get("y_cluster_tol_m", 1.0))
     gap_m = float(band_cfg.get("x_gap_split_m", 3.0))
     coord_tol = float(params.get("coord_abs_m") or 0.05)
+    curb_y_tol = float(curb_cfg.get("y_band_tol_m", 25.0))
 
     # Deduplicate labels by value, keep first
     by_label = {}
@@ -474,18 +643,41 @@ def _group_sections(bands, labels, curb_xs, cl_xs, lane_edges, params):
         row_right = max(b["x_max"] for b in group)
         mid_row = (row_left + row_right) / 2.0
 
+        # F2: band span must lie within ±1 m of Center line (CL inside span)
+        ok, cl_near, span_detail = _cl_in_band_span(
+            row_left, row_right, cl_segs, gy, curb_y_tol, pad=1.0
+        )
+        if not ok:
+            section_warnings.append({
+                "code": "SECTION_SPAN_MISMATCH",
+                "detail": span_detail or "band span vs Center line mismatch",
+                "row_left": row_left, "row_right": row_right,
+                "y": gy, "band_count": len(group),
+            })
+            continue
+
         # CL = mid-ROW, cross-checked with Center line inside span (R2)
         cl_x = mid_row
-        in_span = [x for x in cl_xs if row_left - 0.5 <= x <= row_right + 0.5]
+        in_span = [
+            s["x"] for s in _filter_segs_to_section(
+                cl_segs, gy, row_left, row_right, curb_y_tol, x_pad=0.5
+            )
+        ]
+        if not in_span and cl_near is not None:
+            in_span = [cl_near]
+        cl_line = None
         if in_span:
-            nearest_cl = min(in_span, key=lambda x: abs(x - mid_row))
-            if abs(nearest_cl - mid_row) <= coord_tol:
-                cl_x = nearest_cl
+            cl_line = min(in_span, key=lambda x: abs(x - mid_row))
+            if abs(cl_line - mid_row) <= coord_tol:
+                cl_x = cl_line
             else:
-                cl_x = mid_row  # prefer mid-ROW; still record nearest for debug
+                cl_x = mid_row
 
-        curb_left, curb_right = _pick_curbs(
-            cl_x, row_left, row_right, curb_xs, lane_edges, gy
+        # F3 lane chain starts at the Center line entity when present (not mid-ROW
+        # when they disagree on asymmetric synthetic / probe sheets).
+        chain_origin = cl_line if cl_line is not None else cl_x
+        curb_left, curb_right, curb_method, chain_l, chain_r = _pick_curbs(
+            chain_origin, row_left, row_right, curb_segs, lane_edges, gy, params
         )
 
         # Nearest unused label (or allow reuse if two sections share geometry labels)
@@ -526,6 +718,8 @@ def _group_sections(bands, labels, curb_xs, cl_xs, lane_edges, params):
                 "centre": b["centre"], "width": b["width"],
                 "offset_to_curb": off,
                 "layer": b["layer"], "handle": b["handle"],
+                "block": b.get("block"),
+                "block_handle": b.get("block_handle"),
                 "class": b["class"], "power": b["power"],
                 "c1_as": b.get("c1_as") or [],
                 "exclude_c3_c4": bool(b.get("exclude_c3_c4")),
@@ -549,6 +743,9 @@ def _group_sections(bands, labels, curb_xs, cl_xs, lane_edges, params):
             "cl_x": cl_x,
             "curb_left": curb_left,
             "curb_right": curb_right,
+            "curb_method": curb_method,
+            "curb_chain_left": list(chain_l),
+            "curb_chain_right": list(chain_r),
             "row_left": row_left,
             "row_right": row_right,
             "row_width": round(row_right - row_left, 6),
