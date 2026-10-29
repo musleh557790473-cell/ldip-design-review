@@ -4,20 +4,22 @@
     {
       "section": "A1",
       "utility": "water",
+      "side": "right",
+      "index": 0,
       "x_min": 4.575,
       "x_max": 5.425,
       "centre": 5.0,
       "width": 0.85,
       "offset_to_curb": 1.5,
-      "side": "right",
       "class": "wet",
       "power": false,
-      "layer": "PWT-WATER",
+      "layer": "-05- Potable Water",
       "handle": null,
       "page": null,
       "cl_x": 0.0,
       "curb_left": -3.5,
-      "curb_right": 3.5
+      "curb_right": 3.5,
+      "exclude_c3_c4": false
     }
   ],
   "spacing_table": [],

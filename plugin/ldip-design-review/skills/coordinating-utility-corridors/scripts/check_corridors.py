@@ -8,7 +8,8 @@ DO-7: C5 tolerance = band half-width + 0.5 m.
 
 Usage:
   python check_corridors.py --sections <sections.json> --out <corridors.json>
-      [--plan <plan_linework.json>] [--params <params.json>]
+      [--plan <plan_linework.json>] [--plan-dwg <UTL-10000.dwg>]
+      [--params <params.json>]
       [--site QRWN] [--sub <sub-id>] [--run <run-id>] [--stage "30% Concept Design"]
 
 Exit: 0 done · 2 input · 4 schema. No network, no shell.
@@ -24,7 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corridor_common import (  # noqa: E402
     EXIT_OK, EXIT_SCHEMA, PARAMS_PATH, SCHEMA_PATH, atomic_write_json, emit, fail,
-    load_params, main_guard, path_ok, read_json, side_of_cl,
+    c1_presence, iter_section_bands, load_params, main_guard, parse_section_label,
+    path_ok, read_json, side_of_cl,
 )
 
 
@@ -62,7 +64,6 @@ def finding_stub(check, title, statement, issue_type, severity, status, evidence
     agent = "COO"
     fid_run = run_id or f"{site or 'QRWN'}-SYN-19700101T0000"
     n = abs(hash(f"{check}:{title}:{site}:{sub}")) % 1000
-    # PDF route caps every finding status at Probable (DO-2 / T14-5)
     if status_cap == "Probable" and status in (
             "Confirmed", "Missing information", "Not auto-verifiable"):
         status = "Probable"
@@ -97,11 +98,11 @@ def finding_stub(check, title, statement, issue_type, severity, status, evidence
 
 
 def run_c1(sections, params, rows, findings, meta, status_cap):
-    """COR-101 presence — each required utility in each section."""
+    """COR-101 presence — each required utility in each section (aliases / tree c1_as)."""
     required = params["required"]
     for sec in sections:
         label = sec.get("label") or "?"
-        present = set((sec.get("utilities") or {}).keys())
+        present = c1_presence(iter_section_bands(sec))
         for util in required:
             if util in present:
                 rows.append(comparison_row(
@@ -134,35 +135,51 @@ def run_c1(sections, params, rows, findings, meta, status_cap):
 
 
 def run_c2(sections, params, rows, findings, meta, status_cap):
-    """COR-001 offsets — information only until R-O5 (DO-5). No value findings."""
+    """COR-001 offsets — information only until R-O5 (DO-5). not_run if curb missing (R2)."""
     for sec in sections:
         label = sec.get("label") or "?"
-        for util, rec in (sec.get("utilities") or {}).items():
+        curb_ok = sec.get("curb_found")
+        if curb_ok is None:
+            curb_ok = sec.get("curb_left") is not None and sec.get("curb_right") is not None
+        if not curb_ok:
+            rows.append(comparison_row(
+                "C2", f"offset:{label}", ["section"],
+                {"section": label, "curb_left": sec.get("curb_left"),
+                 "curb_right": sec.get("curb_right")},
+                "m", None, None, "not_run",
+                note="R2: curb not found — C2 not_run (offset_to_curb null)",
+            ))
+            continue
+        for rec in iter_section_bands(sec):
+            util = rec.get("utility")
             off = rec.get("offset_to_curb")
             rows.append(comparison_row(
-                "C2", f"offset:{label}:{util}", ["section"],
+                "C2", f"offset:{label}:{util}:{rec.get('side')}:{rec.get('index', 0)}",
+                ["section"],
                 {
                     "section": label, "utility": util,
-                    "offset_to_curb_m": off, "side": rec.get("side"),
+                    "side": rec.get("side"), "index": rec.get("index", 0),
+                    "offset_to_curb_m": off,
                     "centre": rec.get("centre"),
                     "curb_left": sec.get("curb_left"), "curb_right": sec.get("curb_right"),
                 },
                 "m", None, None, "information",
                 note="DO-5: C2 value judgement waits for R-O5 (ER §7.10(e) wording)",
             ))
-    # Explicitly no findings from C2
-    return
 
 
 def run_c3(sections, params, rows, findings, meta, status_cap):
-    """COR-001 side rule — dry not on the same side of CL as wet."""
+    """COR-001 side rule — dry not on the same side of CL as wet (excludes tree bands)."""
     wet_set, dry_set = params["wet"], params["dry"]
     for sec in sections:
         label = sec.get("label") or "?"
         cl = sec.get("cl_x") or 0.0
         wet_sides, dry_sides = set(), set()
         wet_on, dry_on = defaultdict(list), defaultdict(list)
-        for util, rec in (sec.get("utilities") or {}).items():
+        for rec in iter_section_bands(sec):
+            if rec.get("exclude_c3_c4"):
+                continue
+            util = rec.get("utility")
             side = rec.get("side") or side_of_cl(rec.get("centre"), cl)
             if side in (None, "on_cl"):
                 continue
@@ -206,10 +223,7 @@ def run_c3(sections, params, rows, findings, meta, status_cap):
 
 
 def _edge_spacing(a, b):
-    """Min and max horizontal spacing between two bands (edge-to-edge / far-edge)."""
-    # centre-to-centre
     cc = abs(float(a["centre"]) - float(b["centre"]))
-    # gap between near edges (0 if overlapping/touching)
     if a["x_max"] < b["x_min"]:
         near = b["x_min"] - a["x_max"]
         far = b["x_max"] - a["x_min"]
@@ -217,37 +231,45 @@ def _edge_spacing(a, b):
         near = a["x_min"] - b["x_max"]
         far = a["x_max"] - b["x_min"]
     else:
-        # overlapping or touching
         near = 0.0
         far = max(a["x_max"], b["x_max"]) - min(a["x_min"], b["x_min"])
     return cc, near, far
 
 
 def run_c4(sections, params, rows, findings, meta, status_cap):
-    """COR-002 horizontal — spacing table; < 1.0 m → Not auto-verifiable (DO-6)."""
+    """COR-002 horizontal — per-band pairs; tree bands excluded (R4)."""
     power = params["power"]
     min_m = params["c4_min_m"]
     for sec in sections:
         label = sec.get("label") or "?"
-        utils = sec.get("utilities") or {}
-        power_utils = {u: r for u, r in utils.items() if u in power or r.get("power")}
-        if not power_utils:
+        bands = [b for b in iter_section_bands(sec) if not b.get("exclude_c3_c4")]
+        power_bands = [b for b in bands if b.get("utility") in power or b.get("power")]
+        if not power_bands:
             rows.append(comparison_row(
                 "C4", f"spacing:{label}", ["section"],
                 {"section": label}, None, None, None, "not_run",
-                note="no power (MV/LV) band in section",
+                note="no power (MV/LV/HV) band in section",
             ))
             continue
-        for pu, prec in power_utils.items():
-            for ou, orec in utils.items():
-                if ou == pu:
+        for prec in power_bands:
+            pu = prec.get("utility")
+            for orec in bands:
+                if orec is prec:
+                    continue
+                ou = orec.get("utility")
+                if ou == pu and orec.get("side") == prec.get("side") and \
+                        orec.get("index") == prec.get("index"):
                     continue
                 cc, near, far = _edge_spacing(prec, orec)
                 nav = cc < min_m
                 rows.append(comparison_row(
-                    "C4", f"spacing:{label}:{pu}:{ou}", ["section"],
+                    "C4",
+                    f"spacing:{label}:{pu}:{prec.get('side')}:{prec.get('index', 0)}"
+                    f":{ou}:{orec.get('side')}:{orec.get('index', 0)}",
+                    ["section"],
                     {
                         "section": label, "power": pu, "other": ou,
+                        "power_side": prec.get("side"), "other_side": orec.get("side"),
                         "centre_to_centre_m": round(cc, 6),
                         "near_edge_m": round(near, 6),
                         "max_edge_m": round(far, 6),
@@ -284,12 +306,8 @@ def run_c5(sections, plan, params, rows, findings, meta, status_cap):
             note="no --plan linework; C5 skipped",
         ))
         return
-    # plan schema: {networks: [{utility, points: [[x,y],...] or offset_m, section?}]}
-    # or {samples: [{utility, section, offset_from_band_m, band_half_width_m}]}
     samples = list(plan.get("samples") or [])
     if not samples and plan.get("networks"):
-        # Derive samples: for each network point near a section cut, compare to band centre
-        # Minimal support: networks carry precomputed offset_from_band_m
         for net in plan["networks"]:
             if net.get("offset_from_band_m") is None:
                 continue
@@ -312,7 +330,8 @@ def run_c5(sections, plan, params, rows, findings, meta, status_cap):
         util = sample.get("utility")
         label = sample.get("section")
         sec = sec_index.get(label) or {}
-        band = (sec.get("utilities") or {}).get(util) if sec else None
+        bands = [b for b in iter_section_bands(sec) if b.get("utility") == util]
+        band = bands[0] if bands else None
         half = sample.get("band_half_width_m")
         if half is None and band:
             half = float(band.get("width") or 0) / 2.0
@@ -346,10 +365,36 @@ def run_c5(sections, plan, params, rows, findings, meta, status_cap):
             ))
 
 
+def read_plan_cut_labels_raw(dwg_path):
+    """M3: section cut labels from raw TEXT / MTEXT / ATTRIB (not DXF)."""
+    from ezdwg.raw import (
+        decode_text_entities, decode_mtext_entities, decode_attrib_entities,
+    )
+    path = str(Path(dwg_path).resolve())
+    labels = []
+    counts = defaultdict(int)
+    for row in decode_text_entities(path):
+        lab = parse_section_label(row[1], strict=True)
+        if lab:
+            labels.append(lab)
+            counts[lab] += 1
+    for row in decode_mtext_entities(path):
+        lab = parse_section_label(row[1], strict=True)
+        if lab:
+            labels.append(lab)
+            counts[lab] += 1
+    for row in decode_attrib_entities(path):
+        lab = parse_section_label(row[1], strict=True)
+        if lab:
+            labels.append(lab)
+            counts[lab] += 1
+    return {"section_cuts": sorted(set(labels)), "cut_counts": dict(counts),
+            "source": "raw_text_mtext_attrib", "path": path}
+
+
 def run_c6(sections, plan, params, rows, findings, meta, status_cap):
     """Section vs plan — every section type cut on plan; every road covered; duplicates."""
     sec_labels = [s.get("label") for s in sections if s.get("label")]
-    # Duplicates among section sheets
     seen = {}
     dupes = []
     for lab in sec_labels:
@@ -360,9 +405,9 @@ def run_c6(sections, plan, params, rows, findings, meta, status_cap):
 
     plan_cuts = list((plan or {}).get("section_cuts") or (plan or {}).get("cuts") or [])
     plan_roads = list((plan or {}).get("roads") or [])
+    cut_counts = (plan or {}).get("cut_counts") or {}
     covered = set(plan_cuts)
     missing_on_plan = [lab for lab in seen if lab not in covered] if plan_cuts else []
-    # Roads without a section: plan may list road ids with required section type
     uncovered_roads = []
     for road in plan_roads:
         need = road.get("section") or road.get("section_type")
@@ -399,8 +444,10 @@ def run_c6(sections, plan, params, rows, findings, meta, status_cap):
     rows.append(comparison_row(
         "C6", "section_vs_plan", ["section", "plan"],
         {"section_types": sorted(seen), "plan_cuts": plan_cuts,
+         "cut_counts": cut_counts,
          "missing_on_plan": missing_on_plan, "uncovered_roads": uncovered_roads,
-         "duplicates": dupes},
+         "duplicates": dupes,
+         "plan_source": (plan or {}).get("source")},
         None, None, None, result,
         severity="Observation" if note_parts else None,
         status="Probable" if note_parts else None,
@@ -419,20 +466,21 @@ def run_c6(sections, plan, params, rows, findings, meta, status_cap):
 
 
 def _rows_for_corridors(sections):
-    """One corridors.json row per section × utility."""
+    """One corridors.json row per section × band (R4)."""
     out = []
     for sec in sections:
         label = sec.get("label")
-        for util, rec in (sec.get("utilities") or {}).items():
+        for rec in iter_section_bands(sec):
             out.append({
                 "section": label,
-                "utility": util,
+                "utility": rec.get("utility"),
+                "side": rec.get("side"),
+                "index": rec.get("index", 0),
                 "x_min": rec.get("x_min"),
                 "x_max": rec.get("x_max"),
                 "centre": rec.get("centre"),
                 "width": rec.get("width"),
                 "offset_to_curb": rec.get("offset_to_curb"),
-                "side": rec.get("side"),
                 "class": rec.get("class"),
                 "power": rec.get("power"),
                 "layer": rec.get("layer"),
@@ -441,6 +489,7 @@ def _rows_for_corridors(sections):
                 "cl_x": sec.get("cl_x"),
                 "curb_left": sec.get("curb_left"),
                 "curb_right": sec.get("curb_right"),
+                "exclude_c3_c4": bool(rec.get("exclude_c3_c4")),
             })
     return out
 
@@ -449,17 +498,18 @@ def build_spacing_table(sections, params):
     power = params["power"]
     table = []
     for sec in sections:
-        utils = sec.get("utilities") or {}
-        for pu, prec in utils.items():
-            if pu not in power and not prec.get("power"):
+        bands = [b for b in iter_section_bands(sec) if not b.get("exclude_c3_c4")]
+        for prec in bands:
+            if prec.get("utility") not in power and not prec.get("power"):
                 continue
-            for ou, orec in utils.items():
-                if ou == pu:
+            for orec in bands:
+                if orec is prec:
                     continue
                 cc, near, far = _edge_spacing(prec, orec)
                 table.append({
                     "section": sec.get("label"),
-                    "power": pu, "other": ou,
+                    "power": prec.get("utility"), "other": orec.get("utility"),
+                    "power_side": prec.get("side"), "other_side": orec.get("side"),
                     "centre_to_centre_m": round(cc, 6),
                     "near_edge_m": round(near, 6),
                     "max_edge_m": round(far, 6),
@@ -471,7 +521,7 @@ def validate_schema(doc):
     try:
         from jsonschema import Draft202012Validator
     except ImportError:
-        return  # optional in local runs; CI has jsonschema
+        return
     schema = read_json(SCHEMA_PATH)
     Draft202012Validator(schema).validate(doc)
 
@@ -480,7 +530,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="C1–C6 corridor checks (skill 14)")
     ap.add_argument("--sections", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--plan", default=None)
+    ap.add_argument("--plan", default=None, help="Plan JSON (section_cuts / samples)")
+    ap.add_argument("--plan-dwg", default=None,
+                    help="Corridor plan DWG — C6 cuts from raw TEXT/MTEXT/ATTRIB (M3)")
     ap.add_argument("--params", default=str(PARAMS_PATH))
     ap.add_argument("--site", default="QRWN")
     ap.add_argument("--sub", default="SYN")
@@ -498,6 +550,20 @@ def main(argv=None):
             raise ValueError("sections.json has no sections")
         params = load_params(a.params)
         plan = read_json(a.plan) if a.plan else None
+        if a.plan_dwg:
+            if not Path(a.plan_dwg).is_file():
+                raise ValueError(f"plan DWG not found: {a.plan_dwg}")
+            raw_cuts = read_plan_cut_labels_raw(a.plan_dwg)
+            if plan is None:
+                plan = {}
+            # Merge: raw cuts win for section_cuts when provided
+            plan = {
+                **plan,
+                "section_cuts": raw_cuts["section_cuts"],
+                "cut_counts": raw_cuts["cut_counts"],
+                "source": raw_cuts["source"],
+                "plan_dwg": raw_cuts["path"],
+            }
         status_cap = sections_doc.get("status_cap")
         meta = {
             "site": a.site, "sub": a.sub,
@@ -512,7 +578,6 @@ def main(argv=None):
         run_c5(sections, plan, params, rows, findings, meta, status_cap)
         run_c6(sections, plan, params, rows, findings, meta, status_cap)
 
-        # Cap all statuses at Probable when PDF route (DO-2 / T14-5)
         if status_cap == "Probable":
             for f in findings:
                 if f.get("proposed_status") in (
@@ -527,7 +592,7 @@ def main(argv=None):
             "findings": findings,
             "counts": {
                 "sections": len(sections),
-                "rows": len(sections),  # filled below
+                "rows": 0,
                 "comparisons": len(rows),
                 "findings": len(findings),
                 "c3_flags": sum(1 for r in rows if r["check"] == "C3" and r["result"] == "flag"),

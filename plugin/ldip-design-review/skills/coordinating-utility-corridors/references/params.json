@@ -1,5 +1,5 @@
 {
-  "tag": "[PROPOSED — DO-7, confirm C5 tolerance on first run]",
+  "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run",
   "note": "Skill 14 detection thresholds (SPC-0006 Rev O §4.17). NOT deposited rulebook values. DO-4: findings report-only until COR states change in rules_v9.",
   "required_utilities": [
     "water",
@@ -11,21 +11,30 @@
     "telecom",
     "street_lighting"
   ],
-  "wet": ["water", "sewer", "storm", "irrigation"],
-  "dry": ["mv", "lv", "telecom", "street_lighting", "house_connection"],
-  "power": ["mv", "lv"],
+  "wet": ["water", "sewer", "storm", "storm_cb", "irrigation", "irrigation_secondary", "sewer_fm"],
+  "dry": ["mv", "lv", "hv", "telecom", "street_lighting", "house_connection"],
+  "power": ["mv", "lv", "hv"],
   "tolerances": {
     "c5_extra_m": 0.5,
     "c4_power_horizontal_min_m": 1.0,
     "coord_abs_m": 0.05,
-    "tag": "[PROPOSED — DO-7]"
+    "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run"
   },
   "curb": {
     "lane_dimension_pair_m": 0.30,
     "limit_of_work_layer_substrings": ["LIMIT OF WORK", "LIMIT_OF_WORK"],
-    "center_line_layer_substrings": ["Center line", "CENTER LINE", "CL"]
+    "center_line_layer_substrings": ["Center line", "CENTER LINE"],
+    "lane_dim_layer_substrings": ["SC-RD-DIM", "DRIVING LANE", "DRIVING_LANE"],
+    "lane_dim_text_substrings": ["DRIVING LANE", "DRIVING", "LANE"]
   },
   "section_label": {
-    "layer_substrings": ["DWG_TITLE"]
+    "layer_substrings": ["DWG_TITLE"],
+    "pattern": "^[AB]\\d+(-\\d+)?$"
+  },
+  "band": {
+    "marker_local_x": -0.5,
+    "marker_width": 1.0,
+    "x_gap_split_m": 3.0,
+    "y_cluster_tol_m": 1.0
   }
 }

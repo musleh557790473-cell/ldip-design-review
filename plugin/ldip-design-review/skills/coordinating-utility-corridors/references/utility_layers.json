@@ -1,103 +1,42 @@
 {
   "tag": "[PROPOSED — DO-3; per-site code list moves to rules_v9 later]",
-  "note": "Layer name / legend label → utility, class (wet|dry|power). Matches NMAR / QRWN / NRJS 30 % corridor sheets (probe). Short name after last '$' is also matched.",
+  "note": "Real corridor-sheet layers (probe / S33 PR #21 R1). Same on NMAR / QRWN / NRJS; raw names without xref prefix. Short name after last '$' is also matched. PDF legend colours are read from the sheet at run time — not stored here. storm_cb counts as storm for C1; tree bands count toward C1 for street_lighting / irrigation_secondary only and are excluded from C3 / C4.",
   "default_site": "NMAR",
-  "sites": {
-    "NMAR": {
-      "layers": {
-        "PWT-WATER": {"utility": "water", "class": "wet"},
-        "PWT-POTABLE": {"utility": "water", "class": "wet"},
-        "WATER": {"utility": "water", "class": "wet"},
-        "STO-STORM": {"utility": "storm", "class": "wet"},
-        "STO-DRAIN": {"utility": "storm", "class": "wet"},
-        "STORM": {"utility": "storm", "class": "wet"},
-        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
-        "SWN-FOUL": {"utility": "sewer", "class": "wet"},
-        "SEWER": {"utility": "sewer", "class": "wet"},
-        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
-        "MV": {"utility": "mv", "class": "dry", "power": true},
-        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
-        "LV": {"utility": "lv", "class": "dry", "power": true},
-        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
-        "TEL": {"utility": "telecom", "class": "dry"},
-        "TELECOM": {"utility": "telecom", "class": "dry"},
-        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
-        "SL": {"utility": "street_lighting", "class": "dry"},
-        "STREET LIGHTING": {"utility": "street_lighting", "class": "dry"},
-        "HOUSE CONNECTION": {"utility": "house_connection", "class": "dry"}
-      },
-      "legend_colours": {
-        "water": [0, 0, 255],
-        "storm": [0, 128, 255],
-        "sewer": [128, 0, 128],
-        "irrigation": [0, 128, 0],
-        "mv": [255, 0, 0],
-        "lv": [255, 128, 0],
-        "telecom": [128, 128, 128],
-        "street_lighting": [255, 255, 0]
-      }
+  "shared_layers": {
+    "-01- Storm Water": {"utility": "storm", "class": "wet"},
+    "-01- Storm CB": {"utility": "storm_cb", "class": "wet", "c1_as": ["storm"]},
+    "-02- Sewerage": {"utility": "sewer", "class": "wet"},
+    "-02-Sewer FM": {"utility": "sewer_fm", "class": "wet"},
+    "-04- Irrigation": {"utility": "irrigation", "class": "wet"},
+    "-04-Irrigation Secondary": {"utility": "irrigation_secondary", "class": "wet"},
+    "-05- Potable Water": {"utility": "water", "class": "wet"},
+    "-06- Street Lighting": {"utility": "street_lighting", "class": "dry"},
+    "-06- Pedestrian light": {"utility": "street_lighting", "class": "dry"},
+    "07- Telecom": {"utility": "telecom", "class": "dry"},
+    "-08- Electrical HV": {"utility": "hv", "class": "dry", "power": true},
+    "-09- Electrical MV": {"utility": "mv", "class": "dry", "power": true},
+    "-10- Electrical LV": {"utility": "lv", "class": "dry", "power": true},
+    "-15- House Connection": {"utility": "house_connection", "class": "dry"},
+    "-00-Tree_IRS_SL": {
+      "utility": "tree", "class": "combined", "combined": true,
+      "c1_as": ["street_lighting", "irrigation_secondary"], "exclude_c3_c4": true
     },
-    "QRWN": {
-      "layers": {
-        "PWT-WATER": {"utility": "water", "class": "wet"},
-        "WATER": {"utility": "water", "class": "wet"},
-        "STO-STORM": {"utility": "storm", "class": "wet"},
-        "STORM": {"utility": "storm", "class": "wet"},
-        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
-        "SEWER": {"utility": "sewer", "class": "wet"},
-        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
-        "MV": {"utility": "mv", "class": "dry", "power": true},
-        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
-        "LV": {"utility": "lv", "class": "dry", "power": true},
-        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
-        "TEL": {"utility": "telecom", "class": "dry"},
-        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
-        "SL": {"utility": "street_lighting", "class": "dry"}
-      },
-      "legend_colours": {
-        "water": [0, 0, 255],
-        "storm": [0, 128, 255],
-        "sewer": [128, 0, 128],
-        "irrigation": [0, 128, 0],
-        "mv": [255, 0, 0],
-        "lv": [255, 128, 0],
-        "telecom": [128, 128, 128],
-        "street_lighting": [255, 255, 0]
-      }
+    "-00-Tree_SL": {
+      "utility": "tree", "class": "combined", "combined": true,
+      "c1_as": ["street_lighting"], "exclude_c3_c4": true
     },
-    "NRJS": {
-      "layers": {
-        "PWT-WATER": {"utility": "water", "class": "wet"},
-        "WATER": {"utility": "water", "class": "wet"},
-        "STO-STORM": {"utility": "storm", "class": "wet"},
-        "STORM": {"utility": "storm", "class": "wet"},
-        "SWN-SEWER": {"utility": "sewer", "class": "wet"},
-        "SEWER": {"utility": "sewer", "class": "wet"},
-        "IRR-IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "IRRIGATION": {"utility": "irrigation", "class": "wet"},
-        "EMV-MV": {"utility": "mv", "class": "dry", "power": true},
-        "MV": {"utility": "mv", "class": "dry", "power": true},
-        "ELV-LV": {"utility": "lv", "class": "dry", "power": true},
-        "LV": {"utility": "lv", "class": "dry", "power": true},
-        "TEL-TELECOM": {"utility": "telecom", "class": "dry"},
-        "TEL": {"utility": "telecom", "class": "dry"},
-        "SL-LIGHTING": {"utility": "street_lighting", "class": "dry"},
-        "SL": {"utility": "street_lighting", "class": "dry"}
-      },
-      "legend_colours": {
-        "water": [0, 0, 255],
-        "storm": [0, 128, 255],
-        "sewer": [128, 0, 128],
-        "irrigation": [0, 128, 0],
-        "mv": [255, 0, 0],
-        "lv": [255, 128, 0],
-        "telecom": [128, 128, 128],
-        "street_lighting": [255, 255, 0]
-      }
+    "-00-Tree_IRS": {
+      "utility": "tree", "class": "combined", "combined": true,
+      "c1_as": ["irrigation_secondary"], "exclude_c3_c4": true
+    },
+    "-00-Tree": {
+      "utility": "tree", "class": "combined", "combined": true,
+      "c1_as": [], "exclude_c3_c4": true
     }
+  },
+  "sites": {
+    "NMAR": {"layers": "shared"},
+    "QRWN": {"layers": "shared"},
+    "NRJS": {"layers": "shared"}
   }
 }

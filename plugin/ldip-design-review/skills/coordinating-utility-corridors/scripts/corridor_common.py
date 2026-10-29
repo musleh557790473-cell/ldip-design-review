@@ -51,6 +51,7 @@ def read_json(path):
 def load_params(path=None):
     doc = read_json(path or PARAMS_PATH)
     tol = doc.get("tolerances") or {}
+    band = doc.get("band") or {}
     return {
         "required": list(doc.get("required_utilities") or []),
         "wet": set(doc.get("wet") or []),
@@ -61,6 +62,7 @@ def load_params(path=None):
         "coord_abs_m": float(tol.get("coord_abs_m", 0.05)),
         "curb": doc.get("curb") or {},
         "section_label": doc.get("section_label") or {},
+        "band": band,
         "raw": doc,
     }
 
@@ -70,8 +72,16 @@ def load_utility_layers(path=None, site=None):
     site_key = (site or doc.get("default_site") or "NMAR").upper()
     sites = doc.get("sites") or {}
     site_doc = sites.get(site_key) or sites.get(doc.get("default_site")) or {}
+    shared = doc.get("shared_layers") or {}
+    raw_layers = site_doc.get("layers")
+    if raw_layers == "shared" or raw_layers is None:
+        layer_src = shared
+    elif isinstance(raw_layers, dict) and raw_layers:
+        layer_src = raw_layers
+    else:
+        layer_src = shared
     layers = {}
-    for name, meta in (site_doc.get("layers") or {}).items():
+    for name, meta in layer_src.items():
         layers[name.casefold()] = dict(meta)
         layers[name] = dict(meta)
     return {
@@ -128,7 +138,7 @@ def offset_to_curb(centre, curb_left, curb_right, cl_x=0.0):
 
     Right of CL uses curb_right; left of CL uses curb_left. When the band centre
     sits outside the curb (verge) the offset is positive; inside the carriageway
-    it is negative.
+    it is negative. Returns (None, None) when curb is missing (R2).
     """
     if centre is None or curb_left is None or curb_right is None:
         return None, None
@@ -168,13 +178,59 @@ def main_guard(fn):
         return fail(EXIT_INPUT, str(exc))
 
 
-_SECTION_LABEL_RE = re.compile(
-    r"\b([AB]\d(?:-\d+)?)\b", re.I
-)
+# R3: labels must match ^[AB]\d+(-\d+)?$ only
+_SECTION_LABEL_RE = re.compile(r"^([AB]\d+(?:-\d+)?)$", re.I)
+_SECTION_LABEL_SEARCH_RE = re.compile(r"\b([AB]\d+(?:-\d+)?)\b", re.I)
 
 
-def parse_section_label(text):
+def parse_section_label(text, strict=True):
+    """Return section label or None. strict=True requires whole-string match (R3)."""
     if not text:
         return None
-    m = _SECTION_LABEL_RE.search(str(text))
-    return m.group(1).upper().replace("A", "A").replace("B", "B") if m else None
+    s = str(text).strip()
+    # Strip common mtext wrappers
+    s_plain = re.sub(r"[{}\\].*$", "", s).strip() or s
+    if strict:
+        m = _SECTION_LABEL_RE.match(s_plain)
+        if m:
+            return m.group(1).upper()
+        # Allow "SECTION A1" style: search then verify exact token
+        m2 = _SECTION_LABEL_SEARCH_RE.search(s_plain)
+        if m2 and _SECTION_LABEL_RE.match(m2.group(1)):
+            # Only accept if the non-label remainder is filler words
+            rest = _SECTION_LABEL_SEARCH_RE.sub("", s_plain).strip(" :-_")
+            if rest.upper() in ("", "SECTION", "SEC", "TYPICAL", "TYP"):
+                return m2.group(1).upper()
+        return None
+    m = _SECTION_LABEL_SEARCH_RE.search(s_plain)
+    return m.group(1).upper() if m else None
+
+
+def iter_section_bands(sec):
+    """Yield band dicts for a section (prefers bands[]; falls back to utilities{})."""
+    bands = sec.get("bands")
+    if isinstance(bands, list) and bands:
+        return list(bands)
+    out = []
+    for util, rec in (sec.get("utilities") or {}).items():
+        row = dict(rec)
+        row.setdefault("utility", util)
+        row.setdefault("index", 0)
+        row.setdefault("exclude_c3_c4", False)
+        out.append(row)
+    return out
+
+
+def c1_presence(bands):
+    """Set of utilities counted present for C1 (aliases + tree c1_as)."""
+    present = set()
+    for b in bands:
+        for alias in b.get("c1_as") or []:
+            present.add(alias)
+        u = b.get("utility")
+        if not u or u == "tree":
+            continue
+        present.add(u)
+        for alias in b.get("c1_as") or []:
+            present.add(alias)
+    return present
