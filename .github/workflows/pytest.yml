@@ -21,8 +21,8 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 654 = 634 + skill 14 0.1.0 (16 synthetic + 3 real skips + 1 D11 SKILL.md).
-          # Prior Claude head 9e80732 baseline: 651 collected, 610 passed / 41 skipped / 0 failed.
-          python tools/check_suite.py --expect 654 --tests tests
+          # 657 = 634 + skill 14 0.1.0 (19 synthetic + 3 real skips + 1 D11 SKILL.md).
+          # Prior Claude @ 964af19: 654 collected, 613 passed / 41 skipped / 0 failed.
+          python tools/check_suite.py --expect 657 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

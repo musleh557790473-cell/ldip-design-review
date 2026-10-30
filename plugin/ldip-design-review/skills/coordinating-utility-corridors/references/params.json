@@ -24,6 +24,7 @@
     "lane_dimension_pair_m": 0.30,
     "lane_width_m": [3.0, 3.65],
     "median_max_from_cl_m": 3.0,
+    "median_face_pair_m": 0.40,
     "y_band_tol_m": 25.0,
     "limit_of_work_layer_substrings": ["LIMIT OF WORK", "LIMIT_OF_WORK"],
     "center_line_layer_substrings": ["Center line", "CENTER LINE"],
@@ -32,7 +33,10 @@
   },
   "section_label": {
     "layer_substrings": ["DWG_TITLE"],
-    "pattern": "^[AB]\\d+(-\\d+)?$"
+    "pattern": "^[AB]\\d+(-\\d+)?$",
+    "x_span_pad_m": 2.0,
+    "below_min_m": 0.0,
+    "below_max_m": 8.0
   },
   "band": {
     "marker_local_x": -0.5,

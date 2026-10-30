@@ -116,17 +116,40 @@ def _build_owner_index(inserts, owners, block_headers, insert_targets):
             targeting[tgt].append(h)
 
     def parent_chain(handle):
+        """Walk INSERT owner → parent INSERT targeting that header (G1).
+
+        On a repeated owner header, truncate to parents kept at the first visit
+        and warn OWNER_CYCLE (ezdwg can report a false owner that loops).
+        Stop at *Model_Space / *Paper_Space or a non-header owner.
+        """
         chain = []
-        seen = set()
+        # owner header → chain length after its parent was appended
+        seen_at = {}
         owner = owner_of.get(handle)
         warnings = []
-        while owner is not None and owner not in seen:
-            seen.add(owner)
+        while owner is not None:
+            if owner in seen_at:
+                chain = chain[: seen_at[owner]]
+                warnings.append({
+                    "code": "OWNER_CYCLE",
+                    "detail": (
+                        f"owner chain cycle at header {owner} "
+                        f"('{header_name.get(owner)}'); dropped parents after "
+                        "first visit"
+                    ),
+                    "block": header_name.get(owner),
+                    "block_handle": owner,
+                })
+                break
+            bname = header_name.get(owner)
+            if bname is None:
+                break  # owner is not a block header
+            if bname.casefold() in ("*model_space", "*paper_space"):
+                break
             parent_hs = targeting.get(owner) or []
             parents = [insert_by_h[ph] for ph in parent_hs if ph in insert_by_h]
             if not parents:
                 break
-            bname = header_name.get(owner)
             # R6: warn when this parent header is inserted more than once
             if len(parents) > 1:
                 warnings.append({
@@ -146,6 +169,7 @@ def _build_owner_index(inserts, owners, block_headers, insert_targets):
                 "handle": parent["handle"], "name": parent["name"],
                 "target": parent.get("target"),
             })
+            seen_at[owner] = len(chain)
             owner = owner_of.get(parent["handle"])
         return chain, warnings
 
@@ -519,7 +543,10 @@ def _pick_curbs(cl_x, row_left, row_right, curb_segs, lane_edges, sec_y, params)
     lane_lo, lane_hi = float(lane_range[0]), float(lane_range[1])
     y_tol = float(curb_cfg.get("y_band_tol_m", 25.0))
     median_max = float(curb_cfg.get("median_max_from_cl_m", 3.0))
+    # G3: 0.40 m median curb face pair — start at carriageway-facing edge
+    median_pair = float(curb_cfg.get("median_face_pair_m", 0.40))
     coord_tol = float(params.get("coord_abs_m") or 0.05)
+    pair_tol = max(coord_tol, 0.05)
 
     segs = _filter_segs_to_section(curb_segs, sec_y, row_left, row_right, y_tol)
     xs = _dedupe_xs([s["x"] for s in segs], tol=coord_tol)
@@ -534,7 +561,21 @@ def _pick_curbs(cl_x, row_left, row_right, curb_segs, lane_edges, sec_y, params)
     )
 
     if has_median:
-        start_l, start_r = left[0], right[0]
+        # Carriageway-facing edge of the ~0.40 m median pair (outer of the two)
+        start_l = left[0]
+        if (
+            len(left) >= 2
+            and abs((left[0] - left[1]) - median_pair) <= pair_tol
+            and (cl_x - left[1]) <= median_max + 1e-6
+        ):
+            start_l = left[1]
+        start_r = right[0]
+        if (
+            len(right) >= 2
+            and abs((right[1] - right[0]) - median_pair) <= pair_tol
+            and (right[1] - cl_x) <= median_max + 1e-6
+        ):
+            start_r = right[1]
         chain_l = _lane_chain_side(
             start_l, [x for x in left if x < start_l - coord_tol], -1, lane_lo, lane_hi
         )
@@ -610,9 +651,47 @@ def _cl_in_band_span(row_left, row_right, cl_segs, sec_y, y_tol, pad=1.0):
     return True, cl_x, None
 
 
+def _label_fits_section(lab, row_left, row_right, sec_bottom, x_pad, below_min, below_max):
+    """G2: label x in section span ±pad; label 0–8 m below section bottom."""
+    if not (row_left - x_pad - 1e-9 <= lab["x"] <= row_right + x_pad + 1e-9):
+        return False
+    below = sec_bottom - lab["y"]
+    return below_min - 1e-9 <= below <= below_max + 1e-9
+
+
+def _assign_labels_global(pending, label_list, params):
+    """G2: global closest-first section↔label pairs (x-span + below filter)."""
+    lab_cfg = params.get("section_label") or {}
+    x_pad = float(lab_cfg.get("x_span_pad_m", 2.0))
+    below_min = float(lab_cfg.get("below_min_m", 0.0))
+    below_max = float(lab_cfg.get("below_max_m", 8.0))
+
+    pairs = []
+    for si, pend in enumerate(pending):
+        for li, lab in enumerate(label_list):
+            if not _label_fits_section(
+                lab, pend["row_left"], pend["row_right"], pend["gy"],
+                x_pad, below_min, below_max,
+            ):
+                continue
+            dist = math.hypot(lab["x"] - pend["gcx"], lab["y"] - pend["gy"])
+            pairs.append((dist, abs(lab["y"] - pend["gy"]), abs(lab["x"] - pend["gcx"]),
+                          si, li))
+    pairs.sort()
+    used_sec, used_lab = set(), set()
+    assigned = {}
+    for _dist, _dy, _dx, si, li in pairs:
+        if si in used_sec or li in used_lab:
+            continue
+        used_sec.add(si)
+        used_lab.add(li)
+        assigned[si] = label_list[li]
+    return assigned
+
+
 def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
                     section_warnings=None):
-    """Group by insert y + x-gaps > 3 m; attach ^[AB]\\d+(-\\d+)?$ labels (R3/R4)."""
+    """Group by insert y + x-gaps > 3 m; attach ^[AB]\\d+(-\\d+)?$ labels (R3/R4/G2)."""
     if section_warnings is None:
         section_warnings = []
     band_cfg = params.get("band") or {}
@@ -632,8 +711,7 @@ def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
     for y_group in _cluster_by_y(bands, y_tol):
         clusters.extend(_split_x_gaps(y_group, gap_m))
 
-    used_labels = set()
-    sections = []
+    pending = []
     for group in clusters:
         if not group:
             continue
@@ -680,26 +758,6 @@ def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
             chain_origin, row_left, row_right, curb_segs, lane_edges, gy, params
         )
 
-        # Nearest unused label (or allow reuse if two sections share geometry labels)
-        lab = None
-        if label_list:
-            candidates = sorted(
-                label_list,
-                key=lambda L: (abs(L["y"] - gy), abs(L["x"] - gcx)),
-            )
-            for c in candidates:
-                # Prefer unused; allow same label only if identical text already taken
-                if c["label"] not in used_labels:
-                    lab = c
-                    break
-            if lab is None:
-                lab = candidates[0]
-            used_labels.add(lab["label"])
-            label = lab["label"]
-        else:
-            label = f"UNLABELED-{len(sections)+1}"
-            lab = {"label": label, "x": gcx, "y": gy, "handle": None, "text": label}
-
         # R4: each band its own row — no same-utility merge
         band_rows = []
         side_index = defaultdict(int)
@@ -738,23 +796,49 @@ def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
                 )
             })
 
+        pending.append({
+            "gy": gy, "gcx": gcx,
+            "cl_x": cl_x,
+            "curb_left": curb_left, "curb_right": curb_right,
+            "curb_method": curb_method,
+            "curb_chain_left": list(chain_l), "curb_chain_right": list(chain_r),
+            "row_left": row_left, "row_right": row_right,
+            "band_rows": band_rows, "utilities": utilities,
+        })
+
+    # G2: global closest-first label assignment (x-span ±2 m, 0–8 m below)
+    assigned = _assign_labels_global(pending, label_list, params)
+
+    sections = []
+    for si, pend in enumerate(pending):
+        lab = assigned.get(si)
+        if lab is None:
+            label = f"UNLABELED-{si + 1}"
+            lab = {
+                "label": label, "x": pend["gcx"], "y": pend["gy"],
+                "handle": None, "text": label,
+            }
+        else:
+            label = lab["label"]
         sections.append({
             "label": label,
-            "cl_x": cl_x,
-            "curb_left": curb_left,
-            "curb_right": curb_right,
-            "curb_method": curb_method,
-            "curb_chain_left": list(chain_l),
-            "curb_chain_right": list(chain_r),
-            "row_left": row_left,
-            "row_right": row_right,
-            "row_width": round(row_right - row_left, 6),
-            "bands": band_rows,
-            "utilities": utilities,
-            "band_count": len(band_rows),
+            "cl_x": pend["cl_x"],
+            "curb_left": pend["curb_left"],
+            "curb_right": pend["curb_right"],
+            "curb_method": pend["curb_method"],
+            "curb_chain_left": pend["curb_chain_left"],
+            "curb_chain_right": pend["curb_chain_right"],
+            "row_left": pend["row_left"],
+            "row_right": pend["row_right"],
+            "row_width": round(pend["row_right"] - pend["row_left"], 6),
+            "bands": pend["band_rows"],
+            "utilities": pend["utilities"],
+            "band_count": len(pend["band_rows"]),
             "label_handle": lab.get("handle"),
             "label_text": lab.get("text"),
-            "curb_found": curb_left is not None and curb_right is not None,
+            "curb_found": (
+                pend["curb_left"] is not None and pend["curb_right"] is not None
+            ),
         })
 
     # Stable order by label then y
