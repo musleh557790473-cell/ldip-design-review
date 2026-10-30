@@ -1,0 +1,66 @@
+{
+  "skill": "coordinating-utility-corridors",
+  "note": "Data paths only; UTL-30000 / UTL-10000 drawings live under LDIP_Review scratch (never in Git, brief §10.2). Expectations from SPC-0006 Rev O §4.17 (DO-1…DO-8).",
+  "evals": [
+    {
+      "id": "T14-wet-dry-sides",
+      "query": "On the synthetic corridor section, are dry utilities on the opposite side of the CL from wet, and is water at +1.5 m from the curb?",
+      "files": [
+        "findings/<run>/evidence/intake/sections.json"
+      ],
+      "expected": [
+        "check_corridors.py C3 passes",
+        "C2 water offset_to_curb row is +1.5",
+        "corridors.json findings are report_only with rule_id null (DO-4)"
+      ]
+    },
+    {
+      "id": "T14-missing-storm",
+      "query": "This section has no storm band — what does COR-101 raise?",
+      "files": [
+        "findings/<run>/evidence/intake/sections.json"
+      ],
+      "expected": [
+        "C1 missing_information for storm (Minor)",
+        "one finding per section × missing utility",
+        "no rule_id on the finding (DO-4)"
+      ]
+    },
+    {
+      "id": "T14-power-spacing-nav",
+      "query": "LV 0.6 m band touches a water 0.85 m band — is COR-002 auto-verifiable?",
+      "files": [
+        "findings/<run>/evidence/intake/sections.json"
+      ],
+      "expected": [
+        "C4 spacing table centre-to-centre ≈ 0.725 m and max edge ≈ 1.45 m",
+        "proposed_status Not auto-verifiable (DO-6)",
+        "no Confirmed design_error from C4 at PD"
+      ]
+    },
+    {
+      "id": "T14-pdf-probable",
+      "query": "Only the PDF section sheet is readable — what status do findings carry?",
+      "files": [
+        "submittals/<SITE>/<sub>/UTL-30000.pdf"
+      ],
+      "expected": [
+        "read_corridor_sections.py uses the PDF legend-colour route",
+        "sections.json status_cap is Probable",
+        "every finding proposed_status is Probable (DO-2)"
+      ]
+    },
+    {
+      "id": "T14-raw-nested-insert",
+      "query": "Band INSERTs live inside a bound-xref block — does the raw reader still see them?",
+      "files": [
+        "scratch/<SITE>/UTL-30000-001.dwg"
+      ],
+      "expected": [
+        "ezdwg.raw.decode_insert_entities returns nested band inserts (G-O1)",
+        "to_dxf does not retain those nested INSERTs for band geometry",
+        "read_corridor_sections.py --dwg recovers bands via the raw route only"
+      ]
+    }
+  ]
+}

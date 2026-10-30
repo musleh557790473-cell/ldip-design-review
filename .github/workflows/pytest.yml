@@ -21,7 +21,9 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 634 = 630 + S32 R12 suitable-fill arithmetic (3 sites + flag).
-          python tools/check_suite.py --expect 634 --tests tests
+          # 659 = 634 + skill 14 0.1.0 (21 synthetic + 3 real skips + 1 D11 SKILL.md).
+          # +2 synthetic in 54d7d81: kerb lines per section; consecutive lane chain.
+          # Claude @ 54d7d81: 659 collected, 618 passed / 41 skipped / 0 failed.
+          python tools/check_suite.py --expect 659 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
