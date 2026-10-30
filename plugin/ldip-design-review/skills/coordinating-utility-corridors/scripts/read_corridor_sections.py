@@ -511,23 +511,33 @@ def _filter_segs_to_section(segs, sec_y, row_left, row_right, y_tol, x_pad=1.0):
     return out
 
 
+def _assign_segs_to_sections(segs, clusters, x_pad=0.5):
+    """Section index → its own segs: x inside the band span (±x_pad), nearest band row in y."""
+    spans = [(min(b["x_min"] for b in g), max(b["x_max"] for b in g),
+              sum(b["y"] for b in g) / len(g)) for g in clusters]
+    out = defaultdict(list)
+    for s in segs or []:
+        cands = [i for i, (lo, hi, _y) in enumerate(spans) if lo - x_pad <= s["x"] <= hi + x_pad]
+        if cands:
+            out[min(cands, key=lambda i: abs(spans[i][2] - s["y_mid"]))].append(s)
+    return out
+
+
 def _lane_chain_side(start, pool, direction, lane_lo, lane_hi):
-    """Walk outward from start through xs spaced lane_lo…lane_hi metres."""
+    """Walk outward from start, line by line: the very next line must be one lane away
+    (lane_lo…lane_hi m). A line inside a lane (e.g. the 0.30 m back-of-kerb line) ends the
+    chain, so the chain never jumps over it to a line further out."""
     chain = [start]
     cur = start
-    remaining = list(pool)
-    while True:
-        best = None
-        for x in remaining:
-            gap = (x - cur) * direction
-            if lane_lo - 1e-6 <= gap <= lane_hi + 1e-6:
-                if best is None or abs(x - cur) < abs(best - cur):
-                    best = x
-        if best is None:
+    ahead = sorted((x for x in pool if (x - start) * direction > 1e-6), key=lambda x: (x - start) * direction)
+    for x in ahead:
+        gap = (x - cur) * direction
+        if gap <= 1e-6:
+            continue
+        if not (lane_lo - 1e-6 <= gap <= lane_hi + 1e-6):
             break
-        chain.append(best)
-        remaining = [x for x in remaining if x != best]
-        cur = best
+        chain.append(x)
+        cur = x
     return chain
 
 
@@ -709,10 +719,15 @@ def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
 
     clusters = []
     for y_group in _cluster_by_y(bands, y_tol):
-        clusters.extend(_split_x_gaps(y_group, gap_m))
+        clusters.extend(g for g in _split_x_gaps(y_group, gap_m) if g)
+
+    # Each LIMIT OF WORK line belongs to one section only: x inside its ROW, nearest in y.
+    # Sections sit ~25 m apart on the sheet, so the ±25 m y-band alone let a section take
+    # its neighbour's lines (QRWN A2 kerb −8.45 / +5.05, B2 −2.00 / +1.76).
+    curb_segs_of = _assign_segs_to_sections(curb_segs, clusters)
 
     pending = []
-    for group in clusters:
+    for si, group in enumerate(clusters):
         if not group:
             continue
         gy = sum(b["y"] for b in group) / len(group)
@@ -755,7 +770,7 @@ def _group_sections(bands, labels, curb_segs, cl_segs, lane_edges, params,
         # when they disagree on asymmetric synthetic / probe sheets).
         chain_origin = cl_line if cl_line is not None else cl_x
         curb_left, curb_right, curb_method, chain_l, chain_r = _pick_curbs(
-            chain_origin, row_left, row_right, curb_segs, lane_edges, gy, params
+            chain_origin, row_left, row_right, curb_segs_of.get(si, []), lane_edges, gy, params
         )
 
         # R4: each band its own row — no same-utility merge

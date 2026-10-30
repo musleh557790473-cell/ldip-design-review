@@ -771,3 +771,31 @@ def test_median_carriageway_facing_start(tmp_path):
     # Chain starts at carriageway-facing ±2.4, not inner ±2.0
     assert sec["curb_chain_right"] == pytest.approx([2.4, 5.7, 9.0], abs=0.05), sec
     assert sec["curb_chain_left"] == pytest.approx([-2.4, -5.7, -9.0], abs=0.05), sec
+
+
+def _reader():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rcs_unit", SK / "read_corridor_sections.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SK))
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_lane_chain_stops_at_line_inside_lane():
+    """QRWN A2 left: 3.30 lane, then the 0.30 back-of-kerb line — kerb stays at −3.30,
+    the chain must not jump over −3.60 / −5.70 to −6.54."""
+    rcs = _reader()
+    chain = rcs._lane_chain_side(0.0, [-3.3, -3.6, -5.7, -6.54, -9.0], -1, 3.0, 3.65)
+    assert chain == [0.0, -3.3]
+
+
+def test_lines_assigned_to_own_section_only():
+    """QRWN A2 / B2: LIMIT OF WORK lines of the section ~25 m above or below stay there."""
+    rcs = _reader()
+    a = [{"x_min": -9.0, "x_max": 9.0, "y": 0.0}]
+    below = [{"x_min": -15.0, "x_max": 15.0, "y": -25.0}]
+    segs = [{"x": 3.3, "y_mid": 3.5}, {"x": 5.05, "y_mid": -22.9}, {"x": -8.45, "y_mid": -22.9}]
+    got = rcs._assign_segs_to_sections(segs, [a, below])
+    assert [s["x"] for s in got[0]] == [3.3]
+    assert sorted(s["x"] for s in got[1]) == [-8.45, 5.05]

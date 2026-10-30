@@ -33,7 +33,9 @@ EXPECT = {
     "QRWN": {
         "sections": ["A1", "A2", "A4", "B1", "B2", "B3"],
         "band_inserts": 110,
-        "c1_missing": 0,
+        # B1 has no street-lighting band: its trees are "-00-Tree_IRS" (A1's are "Tree_IRS_SL")
+        # and no lighting band sits in the B1 ROW. Seen once bands were keyed by handle (F2).
+        "c1_missing": 1,
         "c3_flags": 6,
         "row_widths": {"A1": 15.0, "A2": 18.0, "A4": 20.0, "B1": 25.0, "B2": 30.0, "B3": 36.0},
         "c2_samples": [
