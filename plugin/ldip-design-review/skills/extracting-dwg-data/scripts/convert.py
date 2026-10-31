@@ -159,7 +159,9 @@ def run_oda(dwg, out_tmp, log, exe, timeout):
     # ODAFileConverter <in dir> <out dir> <version> <type> <recurse> <audit> [filter]
     exe = find_exe(exe, "LDIP_ODA_EXE", "ODA File Converter")
     log["exe"] = str(exe)
-    log["engine_version"] = ODA_DOCUMENTED  # Amendment O-a: record approved 27.9.0
+    # Amendment O-a: approved 27.9.0; mark source so the log does not claim a probed install.
+    log["engine_version"] = ODA_DOCUMENTED
+    log["engine_version_source"] = "documented"
     with tempfile.TemporaryDirectory(dir=out_tmp.parent) as td:
         run_external([str(exe), str(dwg.parent), td, "ACAD2018", "DXF", "0", "1", dwg.name], timeout, log)
         produced = Path(td) / (dwg.stem + ".dxf")
@@ -248,7 +250,9 @@ def _apply_nested_check(dwg, out_tmp, sub, step_entry):
     step_entry["nested_content"] = dict(sub["nested_content"])
     if diff.get("warning"):
         sub["warnings"].append(diff["warning"])
-        step_entry["result"] = "nested_content_loss"
+        # NESTED_CHECK_NOT_RUN: keep the DXF (ok stays true); only loss triggers fallback.
+        if diff["warning"].get("code") == "NESTED_CONTENT_LOSS":
+            step_entry["result"] = "nested_content_loss"
     return diff
 
 
@@ -262,10 +266,13 @@ def _commit_candidate(log, eng, sub, errors, keep_loss_warning=False):
     if errors:
         log["fallback_from"] = errors[0]
         if not any(w["code"] == "ENGINE_FALLBACK" for w in log["warnings"]):
-            log["warnings"].append({
-                "code": "ENGINE_FALLBACK",
-                "detail": f"converted by {eng} after: " + "; ".join(errors),
-            })
+            # J6: when every engine lost content and we keep the smallest-loss DXF, say "kept …"
+            # rather than "converted by … after: …" (misleading when the first engine is kept).
+            if keep_loss_warning:
+                detail = f"kept {eng} (smallest loss) after: " + "; ".join(errors)
+            else:
+                detail = f"converted by {eng} after: " + "; ".join(errors)
+            log["warnings"].append({"code": "ENGINE_FALLBACK", "detail": detail})
     if keep_loss_warning and not any(w["code"] == "NESTED_CONTENT_LOSS" for w in log["warnings"]):
         nc = sub.get("nested_content") or {}
         log["warnings"].append({
@@ -411,6 +418,7 @@ def main(argv=None):
                 "ok": diff.get("ok", True),
                 "layers_with_loss": diff.get("layers_with_loss", 0),
                 "entities_lost": diff.get("entities_lost", 0),
+                **({"reason": diff["reason"]} if diff.get("reason") else {}),
             }
             if diff.get("warning"):
                 log["warnings"].append(diff["warning"])
@@ -419,7 +427,17 @@ def main(argv=None):
         log["output"] = {"path": out.as_posix(), "sha256": sha256_file(out), "bytes": out.stat().st_size,
                          "dxf_version": "R2018"}
         if a.cross_check:
-            log["cross_check"] = cross_check_inserts(dwg, libredwg_exe=a.libredwg_exe, timeout=a.timeout)
+            # J1/J2/J3: resolved LibreDWG path (env), temp JSON beside output, never fail convert.
+            resolved = libredwg_exe(a.libredwg_exe)
+            try:
+                log["cross_check"] = cross_check_inserts(
+                    dwg,
+                    libredwg_exe=str(resolved) if resolved else a.libredwg_exe,
+                    timeout=a.timeout,
+                    temp_dir=str(out.parent),
+                )
+            except Exception as exc:  # belt-and-braces: cross_check_inserts already catches
+                log["cross_check"] = {"checked": False, "reason": f"{type(exc).__name__}: {exc}"}
         log["status"] = "ok"
         atomic_write_json(logp, log)
         emit({"status": "ok", "engine": log["engine"], "engine_version": log["engine_version"],

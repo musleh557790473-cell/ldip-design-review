@@ -14,7 +14,7 @@
 |---|---|---|
 | `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`). **Pinned to 0.16.0** (D13, owner 5 Oct 2026; D13-2, owner 16 Oct 2026 — 0.12.9 dropped setting-out table cells): results from another version are not comparable; `convert.py` then warns `ENGINE_VERSION_UNPINNED` |
 | `libredwg` | GNU LibreDWG `dwg2dxf` 0.14.8679 | `--libredwg-exe` or `LDIP_LIBREDWG_EXE`. Version from `dwgread --version`. DXF accepted only when ezdxf loads it (QRWN LibreDWG DXF can fail with "Invalid sort handle code 331" → next step) |
-| `oda` | ODA File Converter 27.9.0 | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `27.9.0` |
+| `oda` | ODA File Converter 27.9.0 | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `27.9.0` with `engine_version_source: "documented"` (not probed from the install) |
 | `accoreconsole` | AutoCAD Core Console, Windows only | `--exe` or env `LDIP_ACCORE_EXE`. Script `DXFOUT … Version 2018, 16 decimals`. Prompt sequence to verify on the review workstation [GAP] |
 | `chain` | Reader order O-a.2 | ezdwg → libredwg → oda → `next: local_autocad`. Missing programs logged as `skipped` |
 
@@ -61,7 +61,8 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
   `text_differs` is true if it differs from the measurement by more than 0.05 %.
 - **Warnings:** `UNITS_NOT_METRES`, `CRS_NOT_DECLARED`, `CRS_NOT_32638`, `EXTENTS_NOT_SET`,
   `DXF_RECOVERED`, `TITLE_BLOCK_HEURISTIC`, `TITLE_BLOCK_NOT_FOUND`, `AECC_DETECTION_LIMITED`, and the
-  converter's `ENGINE_SKIPPED_ENTITIES`, `ENGINE_FALLBACK`, `NESTED_CONTENT_LOSS` (O-a.3.1) and
+  converter's `ENGINE_SKIPPED_ENTITIES`, `ENGINE_FALLBACK`, `NESTED_CONTENT_LOSS` (O-a.3.1),
+  `NESTED_CHECK_NOT_RUN` (check raised; DXF kept), and
   `TITLE_BLOCK_ATTRIBS_UNDECODED` (K5-2: the DWG holds block
   attributes ezdwg cannot decode, or a known Parsons title-block insert ("Ladun - Qairwan ATT", K5 profile)
   without readable attributes; the convert log `attributes` gives the counts and the blocks.

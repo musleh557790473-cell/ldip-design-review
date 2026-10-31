@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -157,14 +158,19 @@ def check_nested_content(dwg_path, dxf_path):
         raw = count_raw_content_by_layer(dwg_path)
         dxf = count_dxf_content_by_layer(dxf_path)
         diff = nested_content_diff(raw, dxf)
-    except Exception as exc:  # informative: conversion still usable
+    except Exception as exc:  # informative: keep DXF; warn that the check did not run
+        reason = f"{type(exc).__name__}: {str(exc)[:200]}"
         return {
             "ok": True,
             "layers_with_loss": 0,
             "entities_lost": 0,
             "by_layer": {},
             "checked": False,
-            "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+            "reason": reason,
+            "warning": {
+                "code": "NESTED_CHECK_NOT_RUN",
+                "detail": f"nested-content check could not run: {reason}",
+            },
         }
     diff["checked"] = True
     if not diff["ok"]:
@@ -344,32 +350,58 @@ def _ezdwg_insert_map(dwg_path):
     return out
 
 
+def _dwgread_entity_name(obj):
+    """LibreDWG 0.14.8679 JSON: name in ``entity`` (e.g. INSERT); ``type`` is often an int."""
+    for key in ("entity", "object", "dxftype", "type"):
+        v = obj.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.upper()
+    return ""
+
+
+def _dwgread_handle(obj):
+    """Handle may be int, hex string, or a list (use the last item — LibreDWG 0.14.8679)."""
+    handle = obj.get("handle") or obj.get("Handle") or obj.get("object_handle")
+    if isinstance(handle, (list, tuple)):
+        handle = handle[-1] if handle else None
+    if handle is None:
+        return None
+    try:
+        return int(handle) if isinstance(handle, int) else int(str(handle), 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _walk_dwgread_inserts(obj, found):
-    """Collect INSERT-like objects from dwgread -O JSON (structure varies by version)."""
+    """Collect INSERT-like objects from dwgread -O JSON (LibreDWG 0.14.8679 + older shapes)."""
     if isinstance(obj, dict):
-        typ = (obj.get("type") or obj.get("object") or obj.get("dxftype") or "").upper()
-        handle = obj.get("handle") or obj.get("Handle") or obj.get("object_handle")
-        if typ == "INSERT" and handle is not None:
-            try:
-                h = int(str(handle), 0) if not isinstance(handle, int) else handle
-            except ValueError:
-                h = None
-            if h is not None:
-                ins = obj.get("insert") or obj.get("INS_PT") or obj.get("point") or {}
-                if isinstance(ins, (list, tuple)):
-                    x, y, z = (float(ins[0]), float(ins[1]), float(ins[2] if len(ins) > 2 else 0))
-                elif isinstance(ins, dict):
-                    x = float(ins.get("x", ins.get("X", 0)) or 0)
-                    y = float(ins.get("y", ins.get("Y", 0)) or 0)
-                    z = float(ins.get("z", ins.get("Z", 0)) or 0)
-                else:
-                    x = float(obj.get("x", obj.get("X", 0)) or 0)
-                    y = float(obj.get("y", obj.get("Y", 0)) or 0)
-                    z = float(obj.get("z", obj.get("Z", 0)) or 0)
+        typ = _dwgread_entity_name(obj)
+        h = _dwgread_handle(obj)
+        if typ == "INSERT" and h is not None:
+            ins = (obj.get("ins_pt") or obj.get("insert") or obj.get("INS_PT")
+                   or obj.get("point") or {})
+            if isinstance(ins, (list, tuple)):
+                x = float(ins[0]) if len(ins) > 0 else 0.0
+                y = float(ins[1]) if len(ins) > 1 else 0.0
+                z = float(ins[2]) if len(ins) > 2 else 0.0
+            elif isinstance(ins, dict):
+                x = float(ins.get("x", ins.get("X", 0)) or 0)
+                y = float(ins.get("y", ins.get("Y", 0)) or 0)
+                z = float(ins.get("z", ins.get("Z", 0)) or 0)
+            else:
+                x = float(obj.get("x", obj.get("X", 0)) or 0)
+                y = float(obj.get("y", obj.get("Y", 0)) or 0)
+                z = float(obj.get("z", obj.get("Z", 0)) or 0)
+            scale = obj.get("scale")
+            if isinstance(scale, (list, tuple)) and len(scale) >= 2:
+                sx = float(scale[0])
+                sy = float(scale[1])
+                sz = float(scale[2]) if len(scale) > 2 else 1.0
+            else:
                 sx = float(obj.get("scale_x", obj.get("xscale", obj.get("SX", 1))) or 1)
                 sy = float(obj.get("scale_y", obj.get("yscale", obj.get("SY", 1))) or 1)
                 sz = float(obj.get("scale_z", obj.get("zscale", obj.get("SZ", 1))) or 1)
-                found[h] = {"x": x, "y": y, "z": z, "sx": sx, "sy": sy, "sz": sz}
+            found[h] = {"x": x, "y": y, "z": z, "sx": sx, "sy": sy, "sz": sz}
         for v in obj.values():
             _walk_dwgread_inserts(v, found)
     elif isinstance(obj, list):
@@ -377,54 +409,59 @@ def _walk_dwgread_inserts(obj, found):
             _walk_dwgread_inserts(v, found)
 
 
-def cross_check_inserts(dwg_path, libredwg_exe=None, tol_m=CROSS_CHECK_TOL_M, timeout=600):
+def cross_check_inserts(dwg_path, libredwg_exe=None, tol_m=CROSS_CHECK_TOL_M, timeout=600,
+                        temp_dir=None):
     """Compare INSERT pos/scale by handle: ``dwgread -O JSON`` vs ezdwg (tol 0.001 m).
 
-    Returns a report dict with matched / mismatched / missing counts.
+    Writes JSON under a TemporaryDirectory (beside ``temp_dir`` / the output folder when given),
+    never next to the source DWG. Never raises — failures return ``checked: false`` + reason.
     """
-    dwgread = find_dwgread(libredwg_exe)
-    if dwgread is None:
-        return {"checked": False, "reason": "dwgread not found (set LDIP_DWGREAD_EXE or PATH)"}
-    ezdwg_map = _ezdwg_insert_map(dwg_path)
-    td_json = Path(dwg_path).with_suffix(".dwgread.json.tmp")
     try:
-        p = subprocess.run(
-            [str(dwgread), "-O", "JSON", "-o", str(td_json), str(dwg_path)],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if not td_json.is_file():
-            return {"checked": False, "reason": f"dwgread produced no JSON (exit {p.returncode})",
-                    "stderr_tail": (p.stderr or "")[-500:]}
-        data = json.loads(td_json.read_text(encoding="utf-8", errors="replace"))
+        dwgread = find_dwgread(libredwg_exe)
+        if dwgread is None:
+            return {"checked": False, "reason": "dwgread not found (set LDIP_DWGREAD_EXE or PATH)"}
+        ezdwg_map = _ezdwg_insert_map(dwg_path)
+        parent = Path(temp_dir) if temp_dir else None
+        td_kw = {"dir": str(parent)} if parent is not None and parent.is_dir() else {}
+        with tempfile.TemporaryDirectory(**td_kw) as td:
+            td_json = Path(td) / "dwgread.json"
+            p = subprocess.run(
+                [str(dwgread), "-O", "JSON", "-o", str(td_json), str(dwg_path)],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if not td_json.is_file():
+                return {"checked": False, "reason": f"dwgread produced no JSON (exit {p.returncode})",
+                        "stderr_tail": (p.stderr or "")[-500:]}
+            data = json.loads(td_json.read_text(encoding="utf-8", errors="replace"))
+            libre_map = {}
+            _walk_dwgread_inserts(data, libre_map)
+        mismatches = []
+        matched = 0
+        for h, a in ezdwg_map.items():
+            b = libre_map.get(h)
+            if b is None:
+                mismatches.append({"handle": h, "kind": "missing_in_dwgread"})
+                continue
+            for key in ("x", "y", "z", "sx", "sy", "sz"):
+                if abs(a[key] - b[key]) > tol_m:
+                    mismatches.append({"handle": h, "kind": "value", "field": key,
+                                       "ezdwg": a[key], "dwgread": b[key]})
+                    break
+            else:
+                matched += 1
+        for h in set(libre_map) - set(ezdwg_map):
+            mismatches.append({"handle": h, "kind": "missing_in_ezdwg"})
+        return {
+            "checked": True,
+            "tol_m": tol_m,
+            "ezdwg_inserts": len(ezdwg_map),
+            "dwgread_inserts": len(libre_map),
+            "matched": matched,
+            "mismatches": len(mismatches),
+            "missing_in_dwgread": sum(1 for m in mismatches if m["kind"] == "missing_in_dwgread"),
+            "missing_in_ezdwg": sum(1 for m in mismatches if m["kind"] == "missing_in_ezdwg"),
+            "value_mismatches": sum(1 for m in mismatches if m["kind"] == "value"),
+            "mismatch_samples": mismatches[:20],
+        }
     except Exception as exc:
         return {"checked": False, "reason": f"{type(exc).__name__}: {exc}"}
-    finally:
-        td_json.unlink(missing_ok=True)
-
-    libre_map = {}
-    _walk_dwgread_inserts(data, libre_map)
-    mismatches = []
-    matched = 0
-    for h, a in ezdwg_map.items():
-        b = libre_map.get(h)
-        if b is None:
-            mismatches.append({"handle": h, "kind": "missing_in_dwgread"})
-            continue
-        for key in ("x", "y", "z", "sx", "sy", "sz"):
-            if abs(a[key] - b[key]) > tol_m:
-                mismatches.append({"handle": h, "kind": "value", "field": key,
-                                   "ezdwg": a[key], "dwgread": b[key]})
-                break
-        else:
-            matched += 1
-    for h in set(libre_map) - set(ezdwg_map):
-        mismatches.append({"handle": h, "kind": "missing_in_ezdwg"})
-    return {
-        "checked": True,
-        "tol_m": tol_m,
-        "ezdwg_inserts": len(ezdwg_map),
-        "dwgread_inserts": len(libre_map),
-        "matched": matched,
-        "mismatches": len(mismatches),
-        "mismatch_samples": mismatches[:20],
-    }

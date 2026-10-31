@@ -106,6 +106,7 @@ def test_toa1_chain_reaches_oda(tmp_path):
     log = load(tmp_path / "a.convert.json")
     assert log["engine"] == "oda" and log["requested_engine"] == "chain"
     assert log["engine_version"] == "27.9.0"
+    assert log.get("engine_version_source") == "documented"  # J5
     assert [s["engine"] for s in log["chain"]] == ["ezdwg", "libredwg", "oda"]
     assert log["chain"][0]["result"] == "failed"
     assert log["chain"][1]["result"] == "skipped"
@@ -181,10 +182,132 @@ def test_toa4_nested_loss_tries_next_keeps_smallest(tmp_path):
     assert log["nested_content_kept"]["engine"] == "libredwg"
     assert log["nested_content_kept"]["entities_lost"] == 4
     assert any(w["code"] == "NESTED_CONTENT_LOSS" for w in log["warnings"])
+    # J6: smallest-loss keep uses "kept … (smallest loss) after:" not "converted by … after:"
+    fb = next(w for w in log["warnings"] if w["code"] == "ENGINE_FALLBACK")
+    assert fb["detail"].startswith("kept libredwg (smallest loss) after:")
     assert out_tmp.read_bytes() == better.read_bytes()
     assert [s["result"] for s in log["chain"] if s["engine"] in ("ezdwg", "libredwg")] == [
         "nested_content_loss", "nested_content_loss",
     ]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="shell stand-in for converters")
+def test_toa4_kept_first_engine_wording(tmp_path):
+    """J6: when every engine loses and the first (ezdwg) is kept, say kept ezdwg (smallest loss)."""
+    pytest.importorskip("ezdwg")
+    dwg = fake_dwg(tmp_path / "site.dwg", os.urandom(200))
+    ezdwg_dxf = make_dxf(tmp_path / "ez.dxf", inserts=2, texts=1)
+    worse = make_dxf(tmp_path / "worse.dxf", inserts=1, texts=0)
+
+    def fake_ezdwg(dwg_path, out_tmp, log):
+        log["engine_version"] = "0.16.0"
+        log["returncode"] = 0
+        Path(out_tmp).write_bytes(ezdwg_dxf.read_bytes())
+
+    def fake_check(dwg_path, dxf_path):
+        data = Path(dxf_path).read_bytes()
+        if data == ezdwg_dxf.read_bytes():
+            return {
+                "ok": False, "checked": True, "layers_with_loss": 2, "entities_lost": 4,
+                "by_layer": {"Y": {"INSERT": 4}},
+                "warning": {
+                    "code": "NESTED_CONTENT_LOSS",
+                    "detail": "DXF lost nested INSERT/TEXT/MTEXT vs raw DWG: 2 layer(s), 4 entit(y/ies)",
+                    "layers_with_loss": 2, "entities_lost": 4,
+                },
+            }
+        return {
+            "ok": False, "checked": True, "layers_with_loss": 28, "entities_lost": 218,
+            "by_layer": {"X": {"INSERT": 218}},
+            "warning": {
+                "code": "NESTED_CONTENT_LOSS",
+                "detail": "DXF lost nested INSERT/TEXT/MTEXT vs raw DWG: 28 layer(s), 218 entit(y/ies)",
+                "layers_with_loss": 28, "entities_lost": 218,
+            },
+        }
+
+    libre = fake_reader(tmp_path / "ok.sh", worse)
+    log = {
+        "script": "convert.py 0.3.0", "engine": "chain", "requested_engine": "chain",
+        "engine_version": None, "warnings": [],
+        "input": {"path": str(dwg), "sha256": "x", "bytes": 1, "acadver": "AC1032", "release": "R2018"},
+    }
+    out_tmp = tmp_path / "out.dxf.tmp"
+    a = mock.Mock(libredwg_exe=str(libre), exe=None, timeout=60)
+    with mock.patch.object(convert_mod, "run_ezdwg", side_effect=fake_ezdwg), \
+         mock.patch.object(convert_mod, "check_nested_content", side_effect=fake_check), \
+         mock.patch.dict(os.environ, {"LDIP_LIBREDWG_EXE": str(libre), "LDIP_ODA_EXE": ""}, clear=False):
+        convert_mod.run_chain(dwg, out_tmp, log, a)
+    assert log["engine"] == "ezdwg"
+    fb = next(w for w in log["warnings"] if w["code"] == "ENGINE_FALLBACK")
+    assert fb["detail"].startswith("kept ezdwg (smallest loss) after:")
+    assert "converted by ezdwg after:" not in fb["detail"]
+
+
+def test_nested_check_not_run_warning(tmp_path):
+    """J4: nested-content check exception → NESTED_CHECK_NOT_RUN warning; DXF still ok."""
+    dxf = make_dxf(tmp_path / "n.dxf")
+    with mock.patch.object(dwg_common, "count_raw_content_by_layer",
+                           side_effect=RuntimeError("boom")):
+        diff = dwg_common.check_nested_content(tmp_path / "missing.dwg", dxf)
+    assert diff["ok"] is True and diff["checked"] is False
+    assert diff["warning"]["code"] == "NESTED_CHECK_NOT_RUN"
+    assert "boom" in diff["warning"]["detail"]
+    assert "boom" in diff["reason"]
+
+
+def test_libredwg_json_shape_0_14():
+    """J1: LibreDWG 0.14.8679 JSON — entity name, handle list, ins_pt/scale lists."""
+    sample = {
+        "objects": [
+            {
+                "entity": "INSERT",
+                "type": 7,  # integer — must not call .upper()
+                "handle": ["1A", 26],  # use last item
+                "ins_pt": [100.5, 200.25, 0.0],
+                "scale": [1.0, 2.0, 1.0],
+            },
+            {
+                "entity": "LINE",
+                "type": 1,
+                "handle": [1],
+            },
+        ]
+    }
+    found = {}
+    dwg_common._walk_dwgread_inserts(sample, found)
+    assert 26 in found
+    assert found[26]["x"] == 100.5 and found[26]["y"] == 200.25
+    assert found[26]["sx"] == 1.0 and found[26]["sy"] == 2.0 and found[26]["sz"] == 1.0
+
+
+def test_cross_check_never_raises_on_walk(tmp_path, monkeypatch):
+    """J1: parser/walk failure → checked false in report; convert still ok."""
+    dwg = fake_dwg(tmp_path / "c.dwg")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    # Fake dwgread writes JSON with int type (old bug shape) — parser must not crash.
+    dwgread = tmp_path / "dwgread"
+    json_payload = json.dumps({
+        "entity": "INSERT", "type": 7, "handle": [18],
+        "ins_pt": [0, 0, 0], "scale": [1, 1, 1],
+    })
+    script = tmp_path / "dwgread.py"
+    script.write_text(
+        "import sys\n"
+        "if sys.argv[1:2] == ['--version']:\n print('dwgread 0.14.8679'); raise SystemExit(0)\n"
+        f"open(sys.argv[sys.argv.index('-o')+1],'w').write({json_payload!r})\n"
+    )
+    dwgread.write_text(f"#!/bin/sh\nexec {PY} {script} \"$@\"\n")
+    dwgread.chmod(dwgread.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("LDIP_DWGREAD_EXE", str(dwgread))
+    # No ezdwg decode needed for walk unit path — exercise cross_check_inserts catch-all via
+    # a broken ezdwg map that raises, ensuring checked:false rather than exception.
+    with mock.patch.object(dwg_common, "_ezdwg_insert_map", side_effect=RuntimeError("decode boom")):
+        report = dwg_common.cross_check_inserts(dwg, temp_dir=str(out_dir))
+    assert report["checked"] is False
+    assert "decode boom" in report["reason"]
+    assert not list(dwg.parent.glob("*.dwgread.json.tmp"))  # J3: never beside the DWG
 
 
 # ------------------------------------------------------------------ entmode / insert_owner_chain

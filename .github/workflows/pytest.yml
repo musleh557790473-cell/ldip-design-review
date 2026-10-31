@@ -21,11 +21,10 @@ jobs:
             openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 670 = 659 on main @ 0972b5e + Amendment O-a skill 1
-          # (+6 synthetic + 5 real env-gated skips in test_skill1_oa_*.py).
-          # Claude main baseline: 618 passed / 41 skipped / 0 failed.
-          # This environment on main: 617 passed / 42 skipped (one extra env skip).
-          # Expect after O-a: 623 passed / 47 skipped / 0 failed (Cursor) or 624 / 46 (Claude).
-          python tools/check_suite.py --expect 670 --tests tests
+          # 679 = 670 at b27aef8 + J1–J7 review fixes
+          # (+4 synthetic in test_skill1_oa_build.py + 5 real env-gated in test_skill1_oa_real.py).
+          # Cursor without LibreDWG/scratch: +4 pass, +5 skip → 627 passed / 52 skipped.
+          # Claude with LibreDWG + DWGs: runs J7 real tests (chain QRWN/NRJS + cross-check ×3).
+          python tools/check_suite.py --expect 679 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
