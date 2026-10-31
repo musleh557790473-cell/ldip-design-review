@@ -17,8 +17,10 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
+          # ezdwg pinned 0.16.0 (D13 / D13-2); unpinned installs pull 0.17.x and fail
+          # tests/test_skill14_build.py::test_nested_insert_raw_not_todxf.
           pip install pytest shapely numpy scipy jsonschema lxml ezdxf pypdfium2 Pillow \
-            openpyxl pdfplumber reportlab python-docx ezdwg PyYAML
+            openpyxl pdfplumber reportlab python-docx 'ezdwg==0.16.0' PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
           # 679 = 670 at b27aef8 + J1–J7 review fixes
