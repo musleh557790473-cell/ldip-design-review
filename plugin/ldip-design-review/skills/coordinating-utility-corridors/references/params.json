@@ -1,6 +1,6 @@
 {
-  "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run",
-  "note": "Skill 14 detection thresholds (SPC-0006 Rev O §4.17). NOT deposited rulebook values. DO-4: findings report-only until COR states change in rules_v9.",
+  "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run; DO-5a…d C2 [AGREED 31 Oct 15:44]",
+  "note": "Skill 14 detection thresholds (SPC-0006 Rev O §4.17). NOT deposited rulebook values. DO-4: findings report-only until COR states change in rules_v9. C2 ER positions from ER §7.10(e) (R-O5 / DO-5a…d AGREED 31 Oct 15:44).",
   "required_utilities": [
     "water",
     "sewer",
@@ -14,11 +14,18 @@
   "wet": ["water", "sewer", "storm", "storm_cb", "irrigation", "irrigation_secondary", "sewer_fm"],
   "dry": ["mv", "lv", "hv", "telecom", "street_lighting", "house_connection"],
   "power": ["mv", "lv", "hv"],
+  "c2_er_positions_m": {
+    "water": 1.5,
+    "storm": 2.5,
+    "sewer": 3.0
+  },
+  "c2_tolerance_m": 0.5,
   "tolerances": {
     "c5_extra_m": 0.5,
     "c4_power_horizontal_min_m": 1.0,
     "coord_abs_m": 0.05,
-    "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run"
+    "c2_tolerance_m": 0.5,
+    "tag": "DO-7 [AGREED 29 Oct 21:20], confirm on first run; DO-5a…d [AGREED 31 Oct 15:44]"
   },
   "curb": {
     "lane_dimension_pair_m": 0.30,

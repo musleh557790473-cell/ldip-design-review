@@ -10,7 +10,8 @@
       ],
       "expected": [
         "check_corridors.py C3 passes",
-        "C2 water offset_to_curb row is +1.5",
+        "C2 water unsigned distance 1.5 m vs ER → pass (DO-5 / R-O5)",
+        "water at 0.12 m from curb → C2 design_error Probable Major (MOMRA quote; CRS Parsons; rule_id null)",
         "corridors.json findings are report_only with rule_id null (DO-4)"
       ]
     },
