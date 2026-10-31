@@ -8,16 +8,19 @@
 4. Rules applied by the extractor
 5. Known limits
 
-## 1. Engines (`convert.py --engine`)
+## 1. Engines (`convert.py --engine`, 0.3.0 — Amendment O-a)
 
 | Engine | What it is | Notes |
 |---|---|---|
 | `ezdwg` | Python package, MIT, reads DWG R2000–R2018 | Under test (SPC-0006 Appendix A). Dimensions kept as DIMENSION, inserts kept. Classes and proxy objects are not documented as transferred, so AECC detection is limited. Entities it skips are listed in the log (`ENGINE_SKIPPED_ENTITIES`). **Pinned to 0.16.0** (D13, owner 5 Oct 2026; D13-2, owner 16 Oct 2026 — 0.12.9 dropped setting-out table cells): results from another version are not comparable; `convert.py` then warns `ENGINE_VERSION_UNPINNED` |
-| `oda` | ODA File Converter, external program | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `unknown` until installed |
+| `libredwg` | GNU LibreDWG `dwg2dxf` 0.14.8679 | `--libredwg-exe` or `LDIP_LIBREDWG_EXE`. Version from `dwgread --version`. DXF accepted only when ezdxf loads it (QRWN LibreDWG DXF can fail with "Invalid sort handle code 331" → next step) |
+| `oda` | ODA File Converter 27.9.0 | `--exe` or env `LDIP_ODA_EXE`. Output ACAD2018 DXF, audit on. Licence: K2 [GAP]. Version recorded as `27.9.0` with `engine_version_source: "documented"` (not probed from the install) |
 | `accoreconsole` | AutoCAD Core Console, Windows only | `--exe` or env `LDIP_ACCORE_EXE`. Script `DXFOUT … Version 2018, 16 decimals`. Prompt sequence to verify on the review workstation [GAP] |
+| `chain` | Reader order O-a.2 | ezdwg → libredwg → oda → `next: local_autocad`. Missing programs logged as `skipped` |
 
 The converter log `<stem>.convert.json` records the engine, version, input hash and DWG release
-(from the file signature, e.g. `AC1032` = R2018), output hash, duration and return code.
+(from the file signature, e.g. `AC1032` = R2018), output hash, duration, return code, `chain[]`,
+`fallback_from`, and nested-content / optional `--cross-check` results.
 
 ## 2. Top-level blocks (SPC-0006 §2.4)
 
@@ -58,7 +61,9 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
   `text_differs` is true if it differs from the measurement by more than 0.05 %.
 - **Warnings:** `UNITS_NOT_METRES`, `CRS_NOT_DECLARED`, `CRS_NOT_32638`, `EXTENTS_NOT_SET`,
   `DXF_RECOVERED`, `TITLE_BLOCK_HEURISTIC`, `TITLE_BLOCK_NOT_FOUND`, `AECC_DETECTION_LIMITED`, and the
-  converter's `ENGINE_SKIPPED_ENTITIES` and `TITLE_BLOCK_ATTRIBS_UNDECODED` (K5-2: the DWG holds block
+  converter's `ENGINE_SKIPPED_ENTITIES`, `ENGINE_FALLBACK`, `NESTED_CONTENT_LOSS` (O-a.3.1),
+  `NESTED_CHECK_NOT_RUN` (check raised; DXF kept), and
+  `TITLE_BLOCK_ATTRIBS_UNDECODED` (K5-2: the DWG holds block
   attributes ezdwg cannot decode, or a known Parsons title-block insert ("Ladun - Qairwan ATT", K5 profile)
   without readable attributes; the convert log `attributes` gives the counts and the blocks.
   `TITLE_BLOCK_NOT_FOUND` is then not added, and the title block is `null`).
@@ -97,6 +102,15 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
   0.05 m, open and closed (`closed`), with `points` in drawing units; `layers` gives records and length per
   layer. Listed in `content.side_files` with its SHA-256 and record count. Over 200,000 records:
   `LINEWORK_LARGE` and the layer list only.
-- Reader chain (`--engine chain`): ezdwg, then LibreDWG `dwg2dxf` when enabled (`LDIP_LIBREDWG_EXE`, after
-  licence review L-1), else `next: local_autocad` (the owner's local AutoCAD route). The convert log keeps
-  `chain`, `fallback_from` and the warning `ENGINE_FALLBACK`.
+- Reader chain (`--engine chain`, convert.py 0.3.0, Amendment O-a / Rev F §4.1A): ezdwg → LibreDWG
+  `dwg2dxf` → ODA → `next: local_autocad` (owner's local AutoCAD route). Missing programs are `skipped`.
+  After each engine, O-a.3.1 compares INSERT/TEXT/MTEXT counts per layer (raw DWG vs DXF, all block
+  records; handles are not compared). Any layer with raw > DXF → `NESTED_CONTENT_LOSS` and the next
+  engine is tried; if every engine loses content, the DXF with the smallest loss is kept with the
+  warning. Expected ezdwg real losses (probe): QRWN UTL-30000-001 28 layers / 218 entities; NRJS
+  IUC-30001 23 / 97; NMAR UTL-30000-001 0 / 0; NMAR UTL-10000-000 2 / 4.
+- Owner helper `dwg_common.insert_owner_chain(path)` (O-a.3.2): `decode_entity_placements` →
+  (handle, entmode, owner); entmode 1/2 = top-level (ignore owner). Fallback: cycle rule when
+  entmode unavailable (S33 G1 / §3B). Skill 14 adopts later. QRWN handle 18 → entmode 2, owner 0.
+- Optional `--cross-check`: `dwgread -O JSON` vs ezdwg INSERT pos/scale by handle (tol 0.001 m).
+  UTL-30000 band probe: QRWN 110/110, NRJS 44/44, NMAR 123/123, 0 mismatches.

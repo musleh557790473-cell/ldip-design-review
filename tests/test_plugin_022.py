@@ -303,7 +303,7 @@ def test_d8_manifest_from_disk_and_checkers(batch):
     # skill 2 (session 8): a PDF with no ingestion file is failed, code 2 (extract_pdf.py not run)
     assert by["C-03.pdf"]["status"] == "failed" and by["C-03.pdf"]["error"]["code"] == 2
     assert by["D-04.txt"]["type"] == "other" and by["D-04.txt"]["status"] == "skipped"
-    assert m["converter"] == {"name": "oda", "version": "unknown"}
+    assert m["converter"] == {"name": "oda", "version": "27.9.0"}  # Amendment O-a documented ODA version
     assert m["counts"] == {"extracted": 1, "failed": 2, "skipped": 1}
     # C3 batch ownership passes on the folder the script described
     sys.path.insert(0, str(SCRIPTS))

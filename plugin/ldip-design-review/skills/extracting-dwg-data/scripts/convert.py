@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
-"""DWG → DXF with a switchable engine (SPC-0006 §4.1.3, §4.1.5).
+"""DWG → DXF with a switchable engine (SPC-0006 §4.1.3, §4.1.5; Amendment O-a).
 
 Engines:
-  ezdwg          Python package (MIT), reads DWG R2000–R2018; under test (SPC-0006 Appendix A).
-  libredwg       GNU LibreDWG `dwg2dxf` (GPL-3.0, separate program; --libredwg-exe or env LDIP_LIBREDWG_EXE).
-                 Enabled only after the licence review L-1 (SPC-0006 Rev F §4.1A.2, DF-1).
-  chain          (0.2.0, K21-1 / K21-3) ezdwg first; when ezdwg fails on the file (exit 2 or 3) LibreDWG,
-                 if it is enabled (LDIP_LIBREDWG_EXE set); when no step reads the file: exit 3 with
-                 `next: local_autocad` — the owner runs the local AutoCAD route (P-APS-1 accoreconsole or a
-                 local AutoCAD / Civil 3D connector) on his computer. Agents never call a connector.
-  oda            ODA File Converter (external program; --exe or env LDIP_ODA_EXE). Licence: K2 [GAP].
-  accoreconsole  AutoCAD Core Console, Windows only (--exe or env LDIP_ACCORE_EXE). Script DXFOUT.
+  ezdwg          Python package (MIT), reads DWG R2000–R2018; pinned 0.16.0 (D13 / D13-2).
+  libredwg       GNU LibreDWG `dwg2dxf` 0.14.8679 (`--libredwg-exe` / `LDIP_LIBREDWG_EXE`).
+                 Version from `dwgread --version`. DXF accepted only when ezdxf loads it.
+  oda            ODA File Converter 27.9.0 (`--exe` / `LDIP_ODA_EXE`). Output DXF ACAD2018, audit on.
+  chain          (0.3.0, O-a.2) ezdwg → libredwg → oda → failed with `next: local_autocad`.
+                 After each engine: nested-content check (O-a.3.1). On NESTED_CONTENT_LOSS try next;
+                 if every engine loses content, keep the DXF with the smallest loss + warning.
+                 Skip missing programs; log skipped. Agents never call a local AutoCAD connector.
+  accoreconsole  AutoCAD Core Console, Windows only (`--exe` / `LDIP_ACCORE_EXE`). Script DXFOUT.
 
 Usage: python convert.py --engine chain|ezdwg|libredwg|oda|accoreconsole --dwg <file.dwg> --out <file.dxf>
                          --log <file.convert.json> [--exe <converter>] [--libredwg-exe <dwg2dxf>]
-                         [--timeout 600] [--reuse]
+                         [--timeout 600] [--reuse] [--cross-check]
 --reuse (0.1.1, D9): keep an earlier conversion when its log says ok for the same engine, its input
 hash equals the DWG on disk and its output hash equals the DXF on disk; nothing is rewritten.
+--cross-check (O-a): compare INSERT pos/scale by handle (dwgread -O JSON vs ezdwg, tol 0.001 m).
 Writes the DXF (via a temporary name, then rename) and a converter log: engine and version, input
-hash and DWG version, output hash, duration, return code, entities the engine skipped.
+hash and DWG version, output hash, duration, return code, chain steps, nested-content result.
 Exit: 0 converted · 2 input error or no DXF produced · 3 engine missing, DWG version not supported,
 or timeout. The only external programs called are the named converters (SPC-0006 §2.3.5).
 With --engine chain the log records the engine that converted (`engine`), the steps tried (`chain`) and,
 after a fallback, the first engine's error (`fallback_from`).
 """
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -39,14 +40,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dwg_common import (  # noqa: E402
-    EXIT_DEPENDENCY, EXIT_INPUT, EXIT_OK, DwgError, atomic_write_json, check_path, emit, sha256_file,
+    EXIT_DEPENDENCY, EXIT_INPUT, EXIT_OK, DwgError, atomic_write_json, check_nested_content,
+    check_path, cross_check_inserts, dxf_loadable, emit, libredwg_version_string, sha256_file,
 )
 
 # DWG file signature → release (first 6 bytes of the file)
 ACADVER = {"AC1009": "R12", "AC1012": "R13", "AC1014": "R14", "AC1015": "R2000", "AC1018": "R2004",
            "AC1021": "R2007", "AC1024": "R2010", "AC1027": "R2013", "AC1032": "R2018"}
 EZDWG_SUPPORTED = ("AC1015", "AC1018", "AC1021", "AC1024", "AC1027", "AC1032")
-EZDWG_PINNED = "0.16.0"   # D13 [AGREED] 5 Oct 2026, D13-2 [AGREED] 16 Oct 2026 20:13: run environment pins ezdwg to this version
+EZDWG_PINNED = "0.16.0"   # D13 [AGREED] 5 Oct 2026, D13-2 [AGREED] 16 Oct 2026 20:13
+ODA_DOCUMENTED = "27.9.0"  # Amendment O-a approved ODA File Converter version
+CHAIN_ENGINES = ("ezdwg", "libredwg", "oda")
 
 
 def dwg_version(path):
@@ -155,7 +159,9 @@ def run_oda(dwg, out_tmp, log, exe, timeout):
     # ODAFileConverter <in dir> <out dir> <version> <type> <recurse> <audit> [filter]
     exe = find_exe(exe, "LDIP_ODA_EXE", "ODA File Converter")
     log["exe"] = str(exe)
-    log["engine_version"] = "unknown"   # [GAP] K2: read from the installed product once chosen
+    # Amendment O-a: approved 27.9.0; mark source so the log does not claim a probed install.
+    log["engine_version"] = ODA_DOCUMENTED
+    log["engine_version_source"] = "documented"
     with tempfile.TemporaryDirectory(dir=out_tmp.parent) as td:
         run_external([str(exe), str(dwg.parent), td, "ACAD2018", "DXF", "0", "1", dwg.name], timeout, log)
         produced = Path(td) / (dwg.stem + ".dxf")
@@ -179,27 +185,33 @@ def run_accore(dwg, out_tmp, log, exe, timeout):
 
 
 def libredwg_exe(arg):
-    """dwg2dxf path, or None when LibreDWG is not enabled (DF-1: not before licence review L-1)."""
+    """dwg2dxf path, or None when LibreDWG is not available."""
     exe = arg or os.environ.get("LDIP_LIBREDWG_EXE")
+    return Path(exe) if exe and Path(exe).is_file() else None
+
+
+def oda_exe(arg):
+    exe = arg or os.environ.get("LDIP_ODA_EXE")
     return Path(exe) if exe and Path(exe).is_file() else None
 
 
 def run_libredwg(dwg, out_tmp, log, exe, timeout):
     exe = libredwg_exe(exe)
     if exe is None:
-        raise DwgError(EXIT_DEPENDENCY, "LibreDWG not enabled (licence review L-1; set LDIP_LIBREDWG_EXE after it closes)")
+        raise DwgError(EXIT_DEPENDENCY, "LibreDWG not found (set LDIP_LIBREDWG_EXE / --libredwg-exe)")
     log["exe"] = str(exe)
-    try:
-        v = subprocess.run([str(exe), "--version"], capture_output=True, text=True, timeout=30)
-        log["engine_version"] = (v.stdout or v.stderr).strip().splitlines()[-1] if (v.stdout or v.stderr).strip() else "unknown"
-    except (OSError, subprocess.TimeoutExpired):
-        log["engine_version"] = "unknown"
+    log["engine_version"] = libredwg_version_string(str(exe), timeout=min(30, timeout))
     run_external([str(exe), "-y", "--as", "r2018", "-o", str(out_tmp), str(dwg)], timeout, log)
     if out_tmp.is_file() and out_tmp.stat().st_size and log.get("returncode"):
         # dwg2dxf returns non-zero for recoverable read errors while still writing a DXF
         log["warnings"].append({"code": "ENGINE_READ_ERRORS",
                                 "detail": f"dwg2dxf exit {log['returncode']}: the DXF was written; "
                                           + (log.get("stderr_tail") or "")[-200:].replace("\n", " ")})
+    if out_tmp.is_file() and out_tmp.stat().st_size:
+        ok, err = dxf_loadable(out_tmp)
+        if not ok:
+            out_tmp.unlink(missing_ok=True)
+            raise DwgError(EXIT_INPUT, f"LibreDWG DXF rejected by ezdxf: {err}")
 
 
 def run_engine(engine, dwg, out_tmp, log, a):
@@ -220,42 +232,130 @@ def run_engine(engine, dwg, out_tmp, log, a):
         raise DwgError(EXIT_INPUT, f"{engine} produced no DXF (return code {log.get('returncode')})")
 
 
+def sub_log(log, sub):
+    sub["input"] = log["input"]
+    return sub
+
+
+def _apply_nested_check(dwg, out_tmp, sub, step_entry):
+    """Run O-a.3.1 after a successful engine write; attach result to step and sub-log."""
+    diff = check_nested_content(dwg, out_tmp)
+    sub["nested_content"] = {
+        "checked": diff.get("checked", False),
+        "ok": diff.get("ok", True),
+        "layers_with_loss": diff.get("layers_with_loss", 0),
+        "entities_lost": diff.get("entities_lost", 0),
+        **({"reason": diff["reason"]} if diff.get("reason") else {}),
+    }
+    step_entry["nested_content"] = dict(sub["nested_content"])
+    if diff.get("warning"):
+        sub["warnings"].append(diff["warning"])
+        # NESTED_CHECK_NOT_RUN: keep the DXF (ok stays true); only loss triggers fallback.
+        if diff["warning"].get("code") == "NESTED_CONTENT_LOSS":
+            step_entry["result"] = "nested_content_loss"
+    return diff
+
+
+def _commit_candidate(log, eng, sub, errors, keep_loss_warning=False):
+    """Copy a successful engine sub-log into the main convert log."""
+    log["engine"] = eng
+    for k, v in sub.items():
+        if k != "warnings":
+            log[k] = v
+    log["warnings"].extend(sub["warnings"])
+    if errors:
+        log["fallback_from"] = errors[0]
+        if not any(w["code"] == "ENGINE_FALLBACK" for w in log["warnings"]):
+            # J6: when every engine lost content and we keep the smallest-loss DXF, say "kept …"
+            # rather than "converted by … after: …" (misleading when the first engine is kept).
+            if keep_loss_warning:
+                detail = f"kept {eng} (smallest loss) after: " + "; ".join(errors)
+            else:
+                detail = f"converted by {eng} after: " + "; ".join(errors)
+            log["warnings"].append({"code": "ENGINE_FALLBACK", "detail": detail})
+    if keep_loss_warning and not any(w["code"] == "NESTED_CONTENT_LOSS" for w in log["warnings"]):
+        nc = sub.get("nested_content") or {}
+        log["warnings"].append({
+            "code": "NESTED_CONTENT_LOSS",
+            "detail": (
+                f"all chain engines lost nested content; kept {eng} "
+                f"(smallest loss: {nc.get('layers_with_loss', 0)} layer(s), "
+                f"{nc.get('entities_lost', 0)} entit(y/ies))"
+            ),
+            "layers_with_loss": nc.get("layers_with_loss", 0),
+            "entities_lost": nc.get("entities_lost", 0),
+        })
+
+
 def run_chain(dwg, out_tmp, log, a):
-    """K21-3 reader order: ezdwg -> LibreDWG (when enabled) -> owner step (local AutoCAD route)."""
+    """O-a.2 reader order: ezdwg → LibreDWG → ODA → owner step (local AutoCAD route).
+
+    After each successful write, O-a.3.1 nested-content check. Loss → try next engine.
+    If every producing engine loses content, keep the DXF with the smallest loss + warning.
+    """
     log["chain"] = []
-    steps = ["ezdwg", "libredwg"]
     errors = []
-    for eng in steps:
+    # (entities_lost, eng, dxf_bytes, sub_dict)
+    loss_candidates = []
+
+    for eng in CHAIN_ENGINES:
         if eng == "libredwg" and libredwg_exe(a.libredwg_exe) is None:
-            log["chain"].append({"engine": eng, "result": "not_enabled",
-                                 "detail": "licence review L-1 open (DF-1); LDIP_LIBREDWG_EXE not set"})
+            log["chain"].append({"engine": eng, "result": "skipped",
+                                 "detail": "LibreDWG not found (LDIP_LIBREDWG_EXE / --libredwg-exe)"})
             continue
+        if eng == "oda" and oda_exe(a.exe) is None:
+            log["chain"].append({"engine": eng, "result": "skipped",
+                                 "detail": "ODA File Converter not found (LDIP_ODA_EXE / --exe)"})
+            continue
+
         sub = {"warnings": []}
+        step = {"engine": eng}
         out_tmp.unlink(missing_ok=True)
         try:
             run_engine(eng, dwg, out_tmp, sub_log(log, sub), a)
         except DwgError as e:
-            log["chain"].append({"engine": eng, "result": "failed", "code": e.code, "detail": e.detail[:400]})
+            step.update({"result": "failed", "code": e.code, "detail": e.detail[:400]})
+            log["chain"].append(step)
             errors.append(f"{eng}: {e.detail[:300]}")
             continue
-        log["chain"].append({"engine": eng, "result": "ok"})
-        log["engine"] = eng
-        for k, v in sub.items():
-            if k != "warnings":
-                log[k] = v
-        log["warnings"].extend(sub["warnings"])
-        if errors:
-            log["fallback_from"] = errors[0]
-            log["warnings"].append({"code": "ENGINE_FALLBACK", "detail": f"converted by {eng} after: " + "; ".join(errors)})
+
+        diff = _apply_nested_check(dwg, out_tmp, sub, step)
+        if diff.get("ok", True):
+            step["result"] = "ok"
+            log["chain"].append(step)
+            _commit_candidate(log, eng, sub, errors)
+            return
+
+        # Nested content loss: keep bytes as a candidate and try the next engine.
+        dxf_bytes = out_tmp.read_bytes()
+        loss_candidates.append((diff.get("entities_lost", 0), eng, dxf_bytes, sub))
+        step["result"] = "nested_content_loss"
+        log["chain"].append(step)
+        errors.append(
+            f"{eng}: NESTED_CONTENT_LOSS {diff.get('layers_with_loss', 0)} layer(s), "
+            f"{diff.get('entities_lost', 0)} entit(y/ies)"
+        )
+        out_tmp.unlink(missing_ok=True)
+
+    if loss_candidates:
+        loss_candidates.sort(key=lambda t: (t[0], CHAIN_ENGINES.index(t[1])))
+        lost, eng, dxf_bytes, sub = loss_candidates[0]
+        out_tmp.write_bytes(dxf_bytes)
+        # Prefer the kept engine's own NESTED_CONTENT_LOSS warning; add summary if needed
+        _commit_candidate(log, eng, sub, [e for e in errors if not e.startswith(f"{eng}:")],
+                          keep_loss_warning=True)
+        log["nested_content_kept"] = {
+            "engine": eng, "entities_lost": lost,
+            "candidates": [{"engine": e, "entities_lost": n} for n, e, _, _ in loss_candidates],
+        }
         return
+
     log["next"] = "local_autocad"
-    raise DwgError(EXIT_DEPENDENCY, "no reader in the chain converted the file (" + "; ".join(errors or ["no step ran"])
-                   + "); next: local AutoCAD route on the owner's computer (P-APS-1 / local connector)")
-
-
-def sub_log(log, sub):
-    sub["input"] = log["input"]
-    return sub
+    raise DwgError(
+        EXIT_DEPENDENCY,
+        "no reader in the chain converted the file (" + "; ".join(errors or ["no step ran"])
+        + "); next: local AutoCAD route on the owner's computer (P-APS-1 / local connector)",
+    )
 
 
 def reusable(dwg, out, logp, engine):
@@ -284,6 +384,8 @@ def main(argv=None):
     ap.add_argument("--libredwg-exe")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--reuse", action="store_true")
+    ap.add_argument("--cross-check", action="store_true",
+                    help="O-a: compare INSERT pos/scale by handle (dwgread -O JSON vs ezdwg)")
     a = ap.parse_args(argv)
     log = {"script": f"convert.py {__version__}", "engine": a.engine, "requested_engine": a.engine,
            "engine_version": None, "warnings": []}
@@ -309,10 +411,33 @@ def main(argv=None):
             run_chain(dwg, out_tmp, log, a)
         else:
             run_engine(a.engine, dwg, out_tmp, log, a)
+            # Single-engine mode: still record nested-content for the convert log (no fallback).
+            diff = check_nested_content(dwg, out_tmp)
+            log["nested_content"] = {
+                "checked": diff.get("checked", False),
+                "ok": diff.get("ok", True),
+                "layers_with_loss": diff.get("layers_with_loss", 0),
+                "entities_lost": diff.get("entities_lost", 0),
+                **({"reason": diff["reason"]} if diff.get("reason") else {}),
+            }
+            if diff.get("warning"):
+                log["warnings"].append(diff["warning"])
         log["duration_s"] = round(time.monotonic() - t0, 1)
         os.replace(out_tmp, out)
         log["output"] = {"path": out.as_posix(), "sha256": sha256_file(out), "bytes": out.stat().st_size,
                          "dxf_version": "R2018"}
+        if a.cross_check:
+            # J1/J2/J3: resolved LibreDWG path (env), temp JSON beside output, never fail convert.
+            resolved = libredwg_exe(a.libredwg_exe)
+            try:
+                log["cross_check"] = cross_check_inserts(
+                    dwg,
+                    libredwg_exe=str(resolved) if resolved else a.libredwg_exe,
+                    timeout=a.timeout,
+                    temp_dir=str(out.parent),
+                )
+            except Exception as exc:  # belt-and-braces: cross_check_inserts already catches
+                log["cross_check"] = {"checked": False, "reason": f"{type(exc).__name__}: {exc}"}
         log["status"] = "ok"
         atomic_write_json(logp, log)
         emit({"status": "ok", "engine": log["engine"], "engine_version": log["engine_version"],
