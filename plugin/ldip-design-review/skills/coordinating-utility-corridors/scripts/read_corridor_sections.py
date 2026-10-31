@@ -97,9 +97,20 @@ def _insert_target_map(path):
     return targets
 
 
-def _build_owner_index(inserts, owners, block_headers, insert_targets):
-    """Map insert handle → parent insert chain keyed by target header handle (F2)."""
+# Same rule as skill 1 dwg_common.insert_owner_chain (O-a.3.2 / #22):
+# entmode 1 / 2 = top-level (ignore owner) before the OWNER_CYCLE walk.
+TOP_LEVEL_ENTMODES = frozenset({1, 2})
+
+
+def _build_owner_index(inserts, owners, block_headers, insert_targets, entmodes=None):
+    """Map insert handle → parent insert chain keyed by target header handle (F2).
+
+    ``entmodes`` maps insert handle → entmode from ``decode_entity_placements``.
+    When a parent INSERT is top-level (entmode 1/2), stop before walking its
+    owner (K2 / skill 1 O-a.3.2). Cycle rule still applies when entmode is absent.
+    """
     owner_of = {h: o for h, o in owners}
+    entmode_of = entmodes or {}
     header_name = _header_name_map(block_headers)
     insert_by_h = {}
     # header handle → inserts that target it
@@ -111,22 +122,27 @@ def _build_owner_index(inserts, owners, block_headers, insert_targets):
             "handle": h, "x": x, "y": y, "z": z,
             "sx": sx, "sy": sy, "sz": sz, "rot": rot, "name": name,
             "owner": owner_of.get(h), "target": tgt,
+            "entmode": entmode_of.get(h),
         }
         if tgt is not None:
             targeting[tgt].append(h)
 
     def parent_chain(handle):
-        """Walk INSERT owner → parent INSERT targeting that header (G1).
+        """Walk INSERT owner → parent INSERT targeting that header (G1 / K2).
 
-        On a repeated owner header, truncate to parents kept at the first visit
-        and warn OWNER_CYCLE (ezdwg can report a false owner that loops).
-        Stop at *Model_Space / *Paper_Space or a non-header owner.
+        Before the cycle rule: if this INSERT or a parent is top-level
+        (entmode 1/2), stop and do not walk that owner's false chain
+        (QRWN handle 18). On a repeated owner header, truncate and warn
+        OWNER_CYCLE. Stop at *Model_Space / *Paper_Space or a non-header owner.
         """
+        warnings = []
+        # Starting INSERT already top-level → world coords, empty parent chain
+        if entmode_of.get(handle) in TOP_LEVEL_ENTMODES:
+            return [], warnings
         chain = []
         # owner header → chain length after its parent was appended
         seen_at = {}
         owner = owner_of.get(handle)
-        warnings = []
         while owner is not None:
             if owner in seen_at:
                 chain = chain[: seen_at[owner]]
@@ -170,6 +186,9 @@ def _build_owner_index(inserts, owners, block_headers, insert_targets):
                 "target": parent.get("target"),
             })
             seen_at[owner] = len(chain)
+            # K2: top-level parent (entmode 1/2) — ignore its owner (skill 1 O-a)
+            if entmode_of.get(parent["handle"]) in TOP_LEVEL_ENTMODES:
+                break
             owner = owner_of.get(parent["handle"])
         return chain, warnings
 
@@ -315,8 +334,17 @@ def read_dwg_raw(dwg_path, layers_map, params):
     block_headers = list(decode_block_header_names(path))
     header_name = _header_name_map(block_headers)
     insert_targets = _insert_target_map(path)
+    # K2 / skill 1 O-a.3.2: entmode 1/2 = top-level before OWNER_CYCLE
+    entmodes = {}
+    try:
+        from ezdwg.raw import decode_entity_placements
+        for row in decode_entity_placements(path):
+            if len(row) >= 2:
+                entmodes[row[0]] = row[1]
+    except Exception:
+        entmodes = {}
     insert_by_h, parent_chain = _build_owner_index(
-        inserts, owners, block_headers, insert_targets
+        inserts, owners, block_headers, insert_targets, entmodes=entmodes
     )
 
     lw_rows = list(decode_lwpolyline_entities(path))

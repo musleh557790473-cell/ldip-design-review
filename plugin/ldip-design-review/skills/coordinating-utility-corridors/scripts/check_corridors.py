@@ -249,7 +249,7 @@ def run_c2(sections, params, rows, findings, meta, status_cap):
                      f"sides={sides}"),
                 evid("E02", "standard",
                      f"ER §7.10(e) p.57: {ER_C2_QUOTE} "
-                     f"(R-O5; docs/reviews/S33-R-O5-ER-7.10e.md)"),
+                     f"(R-O5; AICC project note S33-R-O5 (not in Git))"),
             ]
             if len(samples) > 1:
                 evidence.append(evid(
@@ -269,7 +269,7 @@ def run_c2(sections, params, rows, findings, meta, status_cap):
                     "route": "CRS", "recipient": "Parsons",
                 },
                 status_cap=status_cap,
-                owner={"role": "Parsons", "name": None},
+                # K5: keep 0.1.0 AICC owner role; Parsons stays in location.recipient
                 source_doc="ER §7.10(e) / SPC-0006 Rev O §4.17",
                 note=("DO-4 report-only (rule_id null); DO-5a…d / R-O5: unsigned ER "
                       "positions; CRS to Parsons."),

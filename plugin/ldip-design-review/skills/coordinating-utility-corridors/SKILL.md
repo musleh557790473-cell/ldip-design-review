@@ -85,4 +85,4 @@ Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4
 Report the script's `detail` on any non-zero exit.
 
 Methods and layer map: `references/`. Finding / row skeleton: `templates/corridors.json`.
-C2 ER wording: cite R-O5 (`docs/reviews/S33-R-O5-ER-7.10e.md`).
+C2 ER wording: cite R-O5 (AICC project note S33-R-O5 (not in Git)).

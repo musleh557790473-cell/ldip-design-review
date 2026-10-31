@@ -169,28 +169,37 @@ def _assert_c2_samples(doc, samples, tol=0.02):
             )
 
 
-def _assert_c2_er_findings(doc, sec_doc, er=None, tol=0.5):
-    """DO-5 / R-O5: one finding per section × utility when |unsigned − ER| > tol."""
-    er = er or {"water": 1.5, "storm": 2.5, "sewer": 3.0}
-    expected = set()
-    for sec in sec_doc["sections"]:
-        label = sec["label"]
-        by_util = {}
-        for b in sec.get("bands") or []:
-            util = b.get("utility")
-            if util not in er or b.get("offset_to_curb") is None:
-                continue
-            d = abs(float(b["offset_to_curb"]))
-            by_util.setdefault(util, []).append(abs(d - er[util]))
-        for util, devs in by_util.items():
-            if max(devs) > tol + 1e-9:
-                expected.add((label, util))
+# K1: fixed expected C2 finding sets (section × utility) from R-O5 / S33 §2 —
+# do not recompute from reader output (that cannot fail a wrong rule).
+C2_ER_EXPECTED = {
+    "QRWN": {
+        ("A1", "storm"), ("A2", "storm"), ("A4", "storm"),
+        ("B1", "storm"), ("B2", "storm"), ("B3", "storm"),
+        ("A1", "water"), ("A2", "water"), ("A4", "water"), ("B3", "water"),
+        # B1 water 1.50 / B2 water 1.38 pass; sewer none (B3 right Δ 0.49)
+    },
+    "NRJS": {
+        ("A1", "storm"), ("A2", "storm"), ("A3", "storm"),
+        ("A1", "water"), ("A2", "water"), ("A3", "water"),
+    },
+    "NMAR": {
+        ("A1", "storm"), ("A2", "storm"), ("A3", "storm"), ("A3-1", "storm"),
+        ("B1", "storm"), ("B1-1", "storm"), ("B1-2", "storm"),
+        ("A1", "water"), ("A2", "water"), ("A3", "water"), ("A3-1", "water"),
+        # B1 / B1-1 / B1-2 water 1.90 pass; sewer none
+    },
+}
+
+
+def _assert_c2_er_findings(doc, site):
+    """DO-5 / R-O5: fixed expected finding set per site (K1); schema fields (K5)."""
+    expected = C2_ER_EXPECTED[site]
     found = {
         (f["location"].get("section"), f["location"].get("utility"))
         for f in doc["findings"]
         if f["reference"]["clause"] == "C2"
     }
-    assert found == expected, f"C2 findings {found} != expected {expected}"
+    assert found == expected, f"{site}: C2 findings {found} != expected {expected}"
     for f in doc["findings"]:
         if f["reference"]["clause"] != "C2":
             continue
@@ -198,8 +207,28 @@ def _assert_c2_er_findings(doc, sec_doc, er=None, tol=0.5):
         assert f["severity"] == "Major"
         assert f["proposed_status"] == "Probable"
         assert f["reference"]["rule_id"] is None
-        assert f["owner"]["role"] == "Parsons"
+        # K5: AICC owner role (0.1.0); Parsons is recipient, not owner.role
+        assert f["owner"]["role"] == "IM / CM"
+        assert f["location"].get("recipient") == "Parsons"
         assert "MOMRA" in f["statement"]
+    if site == "QRWN":
+        # K1: B3 sewer unsigned 2.51 → Δ 0.49 ≤ 0.5 → pass, no finding
+        assert ("B3", "sewer") not in found
+        b3_sewer = [
+            r for r in doc["comparisons"]
+            if r["check"] == "C2"
+            and r["values"].get("section") == "B3"
+            and r["values"].get("utility") == "sewer"
+            and r["result"] in ("pass", "flag", "information")
+        ]
+        assert b3_sewer, "QRWN B3 sewer C2 row missing"
+        # At least one side near Δ 0.49 (right 2.51)
+        assert any(
+            r["values"].get("deviation_m") is not None
+            and abs(float(r["values"]["deviation_m"]) - 0.49) <= 0.02
+            for r in b3_sewer
+        ), b3_sewer
+        assert all(r["result"] == "pass" for r in b3_sewer), b3_sewer
 
 
 def _assert_c4_samples(doc, samples, tol=0.02):
@@ -271,9 +300,14 @@ def _run_site(site: str, tmp_path: Path):
         f"{site}: C3 flags {doc['counts']['c3_flags']} != {exp['c3_flags']}"
     )
     _assert_c2_samples(doc, exp["c2_samples"])
-    _assert_c2_er_findings(doc, sec)
+    _assert_c2_er_findings(doc, site)
     _assert_c4_samples(doc, exp["c4_samples"])
     assert all(f.get("report_only") and f["reference"]["rule_id"] is None for f in doc["findings"])
+    if site == "QRWN":
+        # K2: handle 18 is top-level (entmode 2); OWNER_CYCLE must not appear for it
+        assert not any(
+            w.get("code") == "OWNER_CYCLE" for w in (sec.get("warnings") or [])
+        ), sec.get("warnings")
     return sec, doc, msg
 
 

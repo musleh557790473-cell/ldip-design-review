@@ -464,9 +464,14 @@ def test_skill14_frontmatter_and_layout():
     assert "legend_colours" not in layers.get("sites", {}).get("NMAR", {})
     params = load(skill / "references/params.json")
     assert "DO-7 [AGREED 29 Oct 21:20]" in params["tag"]
+    assert "DO-5a…d" in params["tag"] and "AGREED 31 Oct 15:44" in params["tag"]
+    assert "PROPOSED" not in params["tag"]
+    assert "DN-5" not in params["note"] and "R-L5" not in params["note"]
+    assert "AGREED 31 Oct 15:44" in (params.get("tolerances") or {}).get("tag", "")
     assert params["c2_er_positions_m"] == {"water": 1.5, "storm": 2.5, "sewer": 3.0}
     assert params["c2_tolerance_m"] == 0.5
     assert "CL" not in (params.get("curb") or {}).get("center_line_layer_substrings", [])
+    assert "not in Git" in text or "AICC project note S33-R-O5" in text
     assert (skill / "templates/corridors.json").is_file()
     assert (skill / "templates/corridors.schema.json").is_file()
     assert (skill / "evals/evals.json").is_file()
@@ -499,12 +504,15 @@ def test_c2_er_finding_when_beyond_tolerance(tmp_path):
     assert f["severity"] == "Major"
     assert f["proposed_status"] == "Probable"
     assert f["reference"]["rule_id"] is None
-    assert f["owner"]["role"] == "Parsons"
+    # K5: 0.1.0 owner role; Parsons is addressee only
+    assert f["owner"]["role"] == "IM / CM"
     assert f["location"].get("route") == "CRS"
+    assert f["location"].get("recipient") == "Parsons"
     assert "MOMRA cross-section typical" in f["statement"]
     assert "direction" in f["statement"].lower() or "not stated" in f["statement"].lower()
     assert "Parsons" in f["statement"]
     assert any("R-O5" in (e.get("extract") or "") for e in f["evidence"])
+    assert any("not in Git" in (e.get("extract") or "") for e in f["evidence"])
 
 
 def test_c2_one_finding_per_section_utility_both_sides(tmp_path):
@@ -593,6 +601,64 @@ def test_c2_within_tolerance_no_finding(tmp_path):
         f["location"].get("utility") == "sewer" for f in doc["findings"]
         if f["reference"]["clause"] == "C2"
     )
+
+
+def _c2_sewer_both_sides(curb, unsigned_left, unsigned_right):
+    """One utility (sewer), both sides at given unsigned distances; other ER utils on ER."""
+    bands = [
+        _band(-(curb + unsigned_left), 0.5, LAYER["sewer"], "sewer", "wet",
+              -curb, curb, index=0),
+        _band(curb + unsigned_right, 0.5, LAYER["sewer"], "sewer", "wet",
+              -curb, curb, index=1),
+        _band(curb + 1.5, 0.85, LAYER["water"], "water", "wet", -curb, curb),
+        _band(curb + 2.5, 0.5, LAYER["storm"], "storm", "wet", -curb, curb),
+        _band(curb + 0.8, 0.4, LAYER["irrigation"], "irrigation", "wet", -curb, curb),
+        _band(-(curb + 1.2), 0.5, LAYER["mv"], "mv", "dry", -curb, curb, power=True),
+        _band(-(curb + 1.8), 0.4, LAYER["lv"], "lv", "dry", -curb, curb, power=True),
+        _band(-(curb + 2.3), 0.3, LAYER["telecom"], "telecom", "dry", -curb, curb),
+        _band(-(curb + 2.8), 0.3, LAYER["street_lighting"], "street_lighting", "dry",
+              -curb, curb),
+    ]
+    bands[0]["offset_to_curb"] = -unsigned_left
+    bands[0]["side"] = "left"
+    bands[1]["offset_to_curb"] = unsigned_right
+    bands[1]["side"] = "right"
+    return make_section("A1", bands, curb=curb)
+
+
+def test_c2_edge_within_tolerance_0_49(tmp_path):
+    """K4: sewer |Δ|=0.49 on both sides → pass, no finding (tol 0.5)."""
+    # ER sewer 3.0 → unsigned 2.51 → Δ 0.49
+    doc, _ = check(tmp_path, sections_doc(_c2_sewer_both_sides(3.5, 2.51, 2.51)))
+    c2s = [r for r in doc["comparisons"]
+           if r["check"] == "C2" and r["values"].get("utility") == "sewer"]
+    assert len(c2s) == 2
+    assert {r["values"].get("side") for r in c2s} == {"left", "right"}
+    assert all(r["result"] == "pass" for r in c2s)
+    assert all(abs(r["values"]["deviation_m"] - 0.49) < 1e-6 for r in c2s)
+    assert not any(
+        f["location"].get("utility") == "sewer" for f in doc["findings"]
+        if f["reference"]["clause"] == "C2"
+    )
+
+
+def test_c2_edge_beyond_tolerance_0_51(tmp_path):
+    """K4: sewer |Δ|=0.51 on both sides → one finding; both sides in evidence."""
+    # ER sewer 3.0 → unsigned 2.49 → Δ 0.51
+    doc, _ = check(tmp_path, sections_doc(_c2_sewer_both_sides(3.5, 2.49, 2.49)))
+    c2s = [r for r in doc["comparisons"]
+           if r["check"] == "C2" and r["values"].get("utility") == "sewer"]
+    assert len(c2s) == 2
+    assert {r["values"].get("side") for r in c2s} == {"left", "right"}
+    assert all(r["result"] == "flag" for r in c2s)
+    assert all(abs(r["values"]["deviation_m"] - 0.51) < 1e-6 for r in c2s)
+    finds = [
+        f for f in doc["findings"]
+        if f["reference"]["clause"] == "C2" and f["location"].get("utility") == "sewer"
+    ]
+    assert len(finds) == 1
+    assert finds[0]["owner"]["role"] == "IM / CM"
+    assert any("both sides" in (e.get("extract") or "") for e in finds[0]["evidence"])
 
 
 def test_parse_section_label_strict():
@@ -787,6 +853,36 @@ def test_owner_cycle_truncates_and_warns():
     _by_h3, pc3 = _build_owner_index(inserts3, owners3, block_headers, targets3)
     chain3, _ = pc3(6)
     assert chain3 == []
+
+
+def test_owner_entmode_top_level_stops_before_cycle():
+    """K2: entmode 1/2 on parent INSERT 18 → keep parent, no OWNER_CYCLE (QRWN)."""
+    sys.path.insert(0, str(SK))
+    from read_corridor_sections import _build_owner_index
+
+    inserts = [
+        (1, 1.0, 0.0, 0.0, 0.85, 1.0, 1.0, 0.0, "BAND"),
+        (18, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, "XREF"),
+        (137, 658537.0, 0.0, 0.0, 0.8, 0.8, 1.0, 0.0, "*U6"),
+    ]
+    owners = [(1, 19), (18, 148), (137, 19)]
+    block_headers = [
+        (19, "XREF"), (148, "*U6"), (10, "BAND"),
+        (1, "*Model_Space"), (2, "*Paper_Space"),
+    ]
+    insert_targets = {1: 10, 18: 19, 137: 148}
+    # QRWN probe: handle 18 → entmode 2 (top-level)
+    entmodes = {18: 2, 1: 0, 137: 0}
+    _by_h, parent_chain = _build_owner_index(
+        inserts, owners, block_headers, insert_targets, entmodes=entmodes
+    )
+    chain, warns = parent_chain(1)
+    assert [p["handle"] for p in chain] == [18], chain
+    assert not any(w["code"] == "OWNER_CYCLE" for w in warns), warns
+    # Starting INSERT itself top-level → empty chain
+    chain_tl, warns_tl = parent_chain(18)
+    assert chain_tl == []
+    assert warns_tl == []
 
 
 def test_two_sections_same_y_global_labels(tmp_path):
