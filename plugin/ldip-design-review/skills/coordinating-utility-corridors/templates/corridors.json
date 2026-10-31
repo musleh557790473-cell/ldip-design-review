@@ -34,7 +34,7 @@
     "c1_missing": 0
   },
   "meta": {
-    "marking": "report only (DO-4); C2 information until R-O5 (DO-5); C4 Not auto-verifiable at PD (DO-6)",
+    "marking": "report only (DO-4); C2 ER unsigned offsets (DO-5 / R-O5); C4 Not auto-verifiable at PD (DO-6)",
     "site": null,
     "sub": null,
     "run": null,
@@ -42,7 +42,9 @@
     "route": null,
     "status_cap": null,
     "generated_at": null,
-    "checker": "check_corridors/0.1.0",
-    "source": null
+    "checker": "check_corridors/0.1.1",
+    "source": null,
+    "c2_er_positions_m": {"water": 1.5, "storm": 2.5, "sewer": 3.0},
+    "c2_tolerance_m": 0.5
   }
 }
