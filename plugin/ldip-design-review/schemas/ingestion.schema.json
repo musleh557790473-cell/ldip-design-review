@@ -514,8 +514,12 @@
            ]
           },
           "handle": {
-           "type": "string",
-           "pattern": "^[0-9A-Fa-f]+$"
+           "type": [
+            "string",
+            "null"
+           ],
+           "pattern": "^[0-9A-Fa-f]+$",
+           "description": "L3: ATTRIB texts use the source ATTRIB handle (or null); never the insert handle"
           },
           "space": {
            "type": "string"

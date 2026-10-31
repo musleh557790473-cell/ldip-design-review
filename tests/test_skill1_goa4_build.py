@@ -135,3 +135,71 @@ def test_doa4_title_block_name_still_skipped(tmp_path):
     # ATTRIB on the skipped title-block insert must not appear as source=attrib
     assert not [t for t in ing["content"]["texts"]
                 if t.get("source") == "attrib" and t.get("tag") == "DWG_NO"]
+
+
+def _l2_attrib_plus_text_copy_dxf(path):
+    """Attributed insert plus a co-located TEXT copy (ezdwg-style duplicate)."""
+    doc = ezdxf.new("R2018")
+    doc.header["$INSUNITS"] = 6
+    blk = doc.blocks.new("MARK")
+    blk.add_attdef("LAB", (0, 0), dxfattribs={"height": 1.0})
+    msp = doc.modelspace()
+    ins = msp.add_blockref("MARK", (50.0, 60.0))
+    ins.add_auto_attribs({"LAB": "A1"})
+    # ezdwg route writes a TEXT at the same WCS point as the ATTRIB
+    msp.add_text("A1", dxfattribs={"height": 1.0, "insert": (50.0, 60.0)})
+    doc.saveas(path)
+    return path
+
+
+def test_l2_attrib_duplicate_text_skipped(tmp_path):
+    """L2: attributed insert + TEXT copy at same point → one text; attribs_duplicate counted."""
+    dxf = _l2_attrib_plus_text_copy_dxf(tmp_path / "L2.dxf")
+    dwg = fake_dwg(tmp_path / "L2.dwg")
+    log = convert_log(tmp_path / "L2.convert.json", dwg, dxf)
+    rc, out = run_extract("--dxf", dxf, "--dwg", dwg, "--convert-log", log, "--out",
+                          tmp_path / "L2.dwg.json")
+    assert rc == 0, out
+    ing = load(tmp_path / "L2.dwg.json")
+    a1 = [t for t in ing["content"]["texts"] if t.get("text") == "A1"]
+    assert len(a1) == 1, a1
+    assert a1[0].get("source") != "attrib"
+    assert ing["content"]["block_expansion"].get("attribs_duplicate", 0) == 1
+    assert validate(tmp_path / "L2.dwg.json")[0] == 0
+
+
+def _l3_two_nested_attrib_dxf(path):
+    """Two nested attributed inserts (separate outer blocks) → distinct source ATTRIB handles."""
+    doc = ezdxf.new("R2018")
+    doc.header["$INSUNITS"] = 6
+    mark = doc.blocks.new("MARK")
+    mark.add_attdef("A1", (0, 0), dxfattribs={"height": 1.0})
+    for name, nest_xy, top_xy in (
+        ("OUTER_A", (1.0, 2.0), (100.0, 200.0)),
+        ("OUTER_B", (3.0, 4.0), (300.0, 400.0)),
+    ):
+        outer = doc.blocks.new(name)
+        nested = outer.add_blockref("MARK", nest_xy)
+        nested.add_auto_attribs({"A1": "A1"})
+        doc.modelspace().add_blockref(name, top_xy)
+    doc.saveas(path)
+    return path
+
+
+def test_l3_nested_attrib_handles_distinct(tmp_path):
+    """L3: two nested attributed inserts yield different ATTRIB handles (not insert handles)."""
+    dxf = _l3_two_nested_attrib_dxf(tmp_path / "L3.dxf")
+    dwg = fake_dwg(tmp_path / "L3.dwg")
+    log = convert_log(tmp_path / "L3.convert.json", dwg, dxf)
+    rc, out = run_extract("--dxf", dxf, "--dwg", dwg, "--convert-log", log, "--out",
+                          tmp_path / "L3.dwg.json")
+    assert rc == 0, out
+    ing = load(tmp_path / "L3.dwg.json")
+    attribs = [t for t in ing["content"]["texts"] if t.get("source") == "attrib"]
+    assert len(attribs) == 2, attribs
+    handles = [t.get("handle") for t in attribs]
+    assert all(h is not None for h in handles), handles
+    assert handles[0] != handles[1], handles
+    for t in attribs:
+        assert t["handle"] != t["insert_handle"]
+    assert validate(tmp_path / "L3.dwg.json")[0] == 0

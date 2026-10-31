@@ -19,7 +19,10 @@ Usage: python extract_dxf.py --dxf <file.dxf> --dwg <source.dwg> --convert-log <
   (defpoint / text_midpoint). An entity on layer 0 takes the layer of its insert. Title-block skip
   (narrowed, DOa4-2): paper-space inserts, `TB_ATTRIB_BLOCKS`, or block name containing "Title Block"
   (case-insensitive). Other attributed inserts are expanded; each ATTRIB becomes a text with
-  `source: "attrib"` and `tag`. `--no-expand` keeps the 0.1 behaviour.
+  `source: "attrib"` and `tag`. L2 skips an ATTRIB when a TEXT/MTEXT with the same string already
+  exists within 0.01 m (`block_expansion.attribs_duplicate`). L3 sets ATTRIB `handle` from the
+  source ATTRIB (`source_of_copy` by index) or null — never the insert handle. `--no-expand`
+  keeps the 0.1 behaviour.
 - `--linework` writes the side file `<stem>.linework.json` next to the ingestion file: every LINE, ARC,
   CIRCLE, LWPOLYLINE, 2-D POLYLINE and SPLINE of model space and of the expanded blocks, flattened at
   0.05 m, with layer, layer_short, handle, via_block, closed, length and points [[E, N], ...] in drawing
@@ -174,15 +177,44 @@ def dim_rec(e, space, *, with_points=False):
     return rec
 
 
-def attrib_handle(a, fallback):
-    """ATTRIB on a virtual nested INSERT may have no handle; fall back to the insert handle."""
+def attrib_handle(a, ins):
+    """L3: handle of the source ATTRIB in the block definition; null if unavailable.
+
+    Prefer the entity handle; else the virtual insert's ``source_of_copy`` ATTRIB matched by
+    attribute index; else ``a.source_of_copy``. Never fall back to the insert handle
+    (``insert_handle`` already carries it).
+    """
     try:
         h = a.dxf.handle
         if h:
             return h
     except Exception:
         pass
-    return fallback
+    src_ins = getattr(ins, "source_of_copy", None)
+    if src_ins is not None:
+        try:
+            src_attribs = list(getattr(src_ins, "attribs", []) or [])
+            attribs_list = list(getattr(ins, "attribs", []) or [])
+            idx = next((i for i, x in enumerate(attribs_list) if x is a), None)
+            if idx is None:
+                tag = str(a.dxf.get("tag", ""))
+                idx = next((i for i, x in enumerate(attribs_list)
+                            if str(x.dxf.get("tag", "")) == tag), None)
+            if idx is not None and idx < len(src_attribs):
+                h = src_attribs[idx].dxf.handle
+                if h:
+                    return h
+        except Exception:
+            pass
+    src = getattr(a, "source_of_copy", None)
+    if src is not None:
+        try:
+            h = src.dxf.handle
+            if h:
+                return h
+        except Exception:
+            pass
+    return None
 
 
 def attrib_text_rec(a, space, layer, handle):
@@ -191,6 +223,26 @@ def attrib_text_rec(a, space, layer, handle):
             "insert": pt(a.dxf.insert), "height": r3(a.dxf.get("height", None)),
             "rotation": r3(a.dxf.get("rotation", 0)), "handle": handle, "space": space,
             "source": "attrib", "tag": str(a.dxf.get("tag", ""))}
+
+
+def attrib_near_existing_text(texts, string, insert_pt, space, tol=0.01):
+    """True when a TEXT/MTEXT (not another attrib) with the same string is within tol metres (L2)."""
+    x, y = insert_pt[0], insert_pt[1]
+    tol2 = tol * tol
+    for t in texts:
+        if t.get("space") != space:
+            continue
+        if t.get("source") == "attrib":
+            continue
+        if t.get("type") not in ("TEXT", "MTEXT"):
+            continue
+        if t.get("text") != string:
+            continue
+        ti = t.get("insert") or [0.0, 0.0]
+        dx, dy = ti[0] - x, ti[1] - y
+        if dx * dx + dy * dy <= tol2:
+            return True
+    return False
 
 
 def shoelace(pts):
@@ -249,18 +301,13 @@ def expanded(msp, doc, stats):
     Also yields ATTRIB entities attached to expanded inserts (DOa4-2); their insert point is already WCS.
     """
     def emit_attribs(ins, chain, top, eff_layer):
-        # Nested virtual INSERTs often lack ATTRIB handles; fall back to this insert's handle, else top.
-        try:
-            ins_h = ins.dxf.handle
-        except Exception:
-            ins_h = None
-        fb = ins_h or top
+        # L3: ATTRIB handle from source_of_copy / entity; null if missing — never the insert handle.
         for a in getattr(ins, "attribs", []) or []:
             lay = a.dxf.get("layer", "0")
             lay = eff_layer if lay == "0" else lay
             stats["entities"] += 1
             stats["attribs"] += 1
-            yield a, lay, attrib_handle(a, fb), chain, top
+            yield a, lay, attrib_handle(a, ins), chain, top
 
     def walk(ins, chain, top, depth, eff_layer):
         try:
@@ -428,7 +475,13 @@ def extract(a):
             extra = {"handle": h, "layer": lay, "layer_short": layer_short(lay), "via_block": chain, "insert_handle": top}
             try:
                 if t == "ATTRIB":
-                    texts.append({**attrib_text_rec(v, "model", lay, h), **extra})
+                    # L2: ezdwg writes TEXT copies of attributes — skip the attrib when a
+                    # TEXT/MTEXT with the same string already exists within 0.01 m.
+                    rec = {**attrib_text_rec(v, "model", lay, h), **extra}
+                    if attrib_near_existing_text(texts, rec["text"], rec["insert"], "model"):
+                        xstats["attribs_duplicate"] += 1
+                        continue
+                    texts.append(rec)
                     xstats["texts"] += 1
                 elif t in ("TEXT", "MTEXT"):
                     texts.append({**text_rec(v, "model"), **extra})

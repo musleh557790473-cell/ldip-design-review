@@ -101,9 +101,30 @@ def test_doa4_real_nmar_libredwg_dimensions_195(tmp_path):
 
 
 def test_doa4_real_nmar_plan_attrib_a1_58(tmp_path):
+    """L1 + L2 LibreDWG + L3: 58 attrib A1 texts (filter source/text, not tag); handles unique|null."""
     dwg = _require_libredwg_and_dwg("LDIP_SKILL1_NMAR_PLAN_DWG")
     libre = _libredwg_then_extract(dwg, tmp_path, "nmar_plan")
+    # L1: select by source == "attrib" and text == "A1" (real tag is "TEXT")
     a1 = [t for t in libre["content"]["texts"]
-          if t.get("source") == "attrib" and t.get("tag") == "A1" and t.get("text") == "A1"]
+          if t.get("source") == "attrib" and t.get("text") == "A1"]
     assert len(a1) == 58, f"got {len(a1)} A1 attrib texts"
+    assert all(t.get("tag") == "TEXT" for t in a1), {t.get("tag") for t in a1}
+    # L2 LibreDWG: still 58, all with source "attrib"
+    assert all(t.get("source") == "attrib" for t in a1)
+    # L3: attribute handles are unique or null
+    handles = [t.get("handle") for t in a1]
+    non_null = [h for h in handles if h is not None]
+    assert len(non_null) == len(set(non_null)), "duplicate non-null attrib handles"
     _ezdwg_extract_passes(dwg, tmp_path, "nmar_plan")
+
+
+def test_l2_real_nmar_plan_ezdwg_a1_58_total(tmp_path):
+    """L2 ezdwg route: TEXT copies of ATTRIBs must not double-count — exactly 58 'A1' texts total."""
+    dwg = _dwg("LDIP_SKILL1_NMAR_PLAN_DWG")
+    if dwg is None:
+        pytest.skip("LDIP_SKILL1_NMAR_PLAN_DWG not set (real DWG scratch only)")
+    pytest.importorskip("ezdwg")
+    ez = _ezdwg_extract_passes(dwg, tmp_path, "nmar_plan_l2")
+    a1 = [t for t in ez["content"]["texts"] if t.get("text") == "A1"]
+    assert len(a1) == 58, f"got {len(a1)} A1 texts total (expected 58 after L2 de-dupe)"
+    assert ez["content"]["block_expansion"].get("attribs_duplicate", 0) >= 1
