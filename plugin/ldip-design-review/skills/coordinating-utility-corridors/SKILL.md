@@ -8,7 +8,7 @@ description: >-
   sections (UTL-30000) or corridor plans (UTL-10000) for COR-001 / COR-002 /
   COR-101.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   spec: "SPC-0006 Rev O §4.17"
 ---
 
@@ -27,8 +27,9 @@ hydraulics, culvert need, cover to pavement (R-O3), 3D clashes until DD.
 
 **Report only (DO-4):** `corridors.json` findings carry `issue_type` with
 **no `rule_id`** until COR states change in rules_v9 after T14-R on all three
-sites. C2 value findings wait for R-O5 (DO-5); C4 at PD is *Not auto-verifiable*
-(DO-6).
+sites. C2 compares unsigned band–curb distance to ER §7.10(e) positions
+(water 1.5 / storm 2.5 / sewer 3.0 m; DO-5 / R-O5); C4 at PD is *Not
+auto-verifiable* (DO-6).
 
 Packages: Python 3.11+, `ezdwg==0.16.0` (pinned), `jsonschema`, `pdfplumber`
 (PDF fallback only).
@@ -40,11 +41,15 @@ Packages: Python 3.11+, `ezdwg==0.16.0` (pinned), `jsonschema`, `pdfplumber`
    bound-xref blocks are dropped there.
 2. Map layers through `references/utility_layers.json` (per site; DO-3 moves the
    code list to rules_v9 later). Do not invent layer→utility mappings mid-run.
-3. Detection thresholds live in `references/params.json` (DO-7 C5 tolerance). Do
-   not put deposited rulebook numbers into Git.
-4. C2 rows are **information** only until R-O5 (DO-5). C3 runs now. C4 writes the
-   spacing table and marks close pairs *Not auto-verifiable* — no Confirmed
-   design_error from C4 at PD (DO-6).
+3. Detection thresholds live in `references/params.json` (DO-7 C5 tolerance;
+   DO-5a `c2_er_positions_m` / `c2_tolerance_m`). Do not put deposited rulebook
+   numbers into Git.
+4. C2 uses **unsigned** band-centre distance to the curb vs
+   `params.c2_er_positions_m` (R-O5). Finding when `|d − ER| > c2_tolerance_m`
+   (0.5 m): `design_error`, Probable, Major, one per section × utility, CRS to
+   Parsons. Storm CB bands are not compared. C3 runs. C4 writes the spacing
+   table and marks close pairs *Not auto-verifiable* — no Confirmed design_error
+   from C4 at PD (DO-6).
 5. PDF fallback caps every finding status at **Probable** (DO-2).
 6. Write outputs only under the context / evidence folders. Submittal folders are
    read-only.
@@ -80,3 +85,4 @@ Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing package · 4
 Report the script's `detail` on any non-zero exit.
 
 Methods and layer map: `references/`. Finding / row skeleton: `templates/corridors.json`.
+C2 ER wording: cite R-O5 (`docs/reviews/S33-R-O5-ER-7.10e.md`).

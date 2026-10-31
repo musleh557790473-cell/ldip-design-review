@@ -1,4 +1,4 @@
-"""Skill 14 0.1.0 — synthetic T14-1…T14-5 + nested INSERT proofs + C6 raw (S33 fixes).
+"""Skill 14 0.1.1 — synthetic T14-1…T14-5 + C2 ER findings (DO-5 / R-O5) + nested proofs.
 
 SPC-0006 Rev O §4.17. No real project data.
 """
@@ -136,7 +136,7 @@ def check(tmp_path, sec_doc, **kw):
 
 
 def test_t14_1_wet_dry_water_offset(tmp_path):
-    """T14-1: wet one side, dry the other, water at +1.5 → C3 pass; C2 row +1.5."""
+    """T14-1: wet one side, dry the other, water at +1.5 → C3 pass; C2 pass at ER."""
     sec = full_wet_dry(curb=3.5, water_centre=3.5 + 1.5)
     water = next(b for b in sec["bands"] if b["utility"] == "water")
     assert abs(water["offset_to_curb"] - 1.5) < 1e-9
@@ -146,7 +146,10 @@ def test_t14_1_wet_dry_water_offset(tmp_path):
     c2_water = [r for r in doc["comparisons"]
                 if r["check"] == "C2" and r["values"].get("utility") == "water"]
     assert c2_water and abs(c2_water[0]["values"]["offset_to_curb_m"] - 1.5) < 1e-9
-    assert c2_water[0]["result"] == "information"
+    assert c2_water[0]["result"] == "pass"
+    assert not any(
+        f["reference"]["clause"] == "C2" and "water" in f["title"] for f in doc["findings"]
+    )
     assert all(f.get("reference", {}).get("rule_id") is None for f in doc["findings"])
     assert all(f.get("report_only") is True for f in doc["findings"])
     assert all(f.get("agent") == "COO" for f in doc["findings"])
@@ -448,9 +451,10 @@ def test_skill14_frontmatter_and_layout():
     skill = PLUGIN / "skills/coordinating-utility-corridors"
     assert (skill / "SKILL.md").is_file()
     text = (skill / "SKILL.md").read_text(encoding="utf-8")
-    assert 'version: "0.1.0"' in text
+    assert 'version: "0.1.1"' in text
     assert 'spec: "SPC-0006 Rev O §4.17"' in text
     assert "Use when" in text.split("---", 2)[1] or "Use when" in text
+    assert "R-O5" in text or "c2_er_positions_m" in text
     assert (skill / "scripts/read_corridor_sections.py").is_file()
     assert (skill / "scripts/check_corridors.py").is_file()
     layers = load(skill / "references/utility_layers.json")
@@ -460,6 +464,8 @@ def test_skill14_frontmatter_and_layout():
     assert "legend_colours" not in layers.get("sites", {}).get("NMAR", {})
     params = load(skill / "references/params.json")
     assert "DO-7 [AGREED 29 Oct 21:20]" in params["tag"]
+    assert params["c2_er_positions_m"] == {"water": 1.5, "storm": 2.5, "sewer": 3.0}
+    assert params["c2_tolerance_m"] == 0.5
     assert "CL" not in (params.get("curb") or {}).get("center_line_layer_substrings", [])
     assert (skill / "templates/corridors.json").is_file()
     assert (skill / "templates/corridors.schema.json").is_file()
@@ -468,15 +474,125 @@ def test_skill14_frontmatter_and_layout():
     assert 3 <= len(evals["evals"]) <= 5
 
 
-def test_c2_never_emits_value_findings(tmp_path):
-    """DO-5: C2 is information only — no findings from offsets."""
-    sec = full_wet_dry()
+def test_c2_er_finding_when_beyond_tolerance(tmp_path):
+    """DO-5a: |unsigned − ER| > 0.5 → C2 design_error / Probable / Major; CRS Parsons."""
+    sec = full_wet_dry(curb=3.5, water_centre=3.5 + 0.12)  # unsigned 0.12 vs 1.5
+    # Align storm / sewer to ER so only water flags
     for b in sec["bands"]:
-        if b["utility"] == "water":
-            b["offset_to_curb"] = 0.01
+        if b["utility"] == "storm":
+            b["centre"] = 3.5 + 2.5
+            b["offset_to_curb"] = 2.5
+            b["x_min"], b["x_max"] = b["centre"] - 0.25, b["centre"] + 0.25
+        if b["utility"] == "sewer":
+            b["centre"] = 3.5 + 3.0
+            b["offset_to_curb"] = 3.0
+            b["x_min"], b["x_max"] = b["centre"] - 0.25, b["centre"] + 0.25
     doc, _ = check(tmp_path, sections_doc(sec))
-    assert not any(f["reference"]["clause"] == "C2" for f in doc["findings"])
-    assert all(r["result"] == "information" for r in doc["comparisons"] if r["check"] == "C2")
+    c2w = [r for r in doc["comparisons"]
+           if r["check"] == "C2" and r["values"].get("utility") == "water"]
+    assert c2w and c2w[0]["result"] == "flag"
+    assert abs(c2w[0]["values"]["unsigned_distance_m"] - 0.12) < 1e-6
+    finds = [f for f in doc["findings"] if f["reference"]["clause"] == "C2"]
+    assert len(finds) == 1
+    f = finds[0]
+    assert f["issue_type"] == "design_error"
+    assert f["severity"] == "Major"
+    assert f["proposed_status"] == "Probable"
+    assert f["reference"]["rule_id"] is None
+    assert f["owner"]["role"] == "Parsons"
+    assert f["location"].get("route") == "CRS"
+    assert "MOMRA cross-section typical" in f["statement"]
+    assert "direction" in f["statement"].lower() or "not stated" in f["statement"].lower()
+    assert "Parsons" in f["statement"]
+    assert any("R-O5" in (e.get("extract") or "") for e in f["evidence"])
+
+
+def test_c2_one_finding_per_section_utility_both_sides(tmp_path):
+    """DO-5c: one finding per section × utility; both sides in evidence when they differ."""
+    curb = 3.5
+    # Left water at 0.12 from curb (carriageway), right water at 2.38 (verge) — both >0.5 from 1.5
+    bands = [
+        _band(-(curb + 0.12), 0.85, LAYER["water"], "water", "wet", -curb, curb, index=0),
+        _band(curb + 2.38, 0.85, LAYER["water"], "water", "wet", -curb, curb, index=1),
+        _band(curb + 2.5, 0.5, LAYER["storm"], "storm", "wet", -curb, curb),
+        _band(curb + 3.0, 0.5, LAYER["sewer"], "sewer", "wet", -curb, curb),
+        _band(curb + 0.8, 0.4, LAYER["irrigation"], "irrigation", "wet", -curb, curb),
+        _band(-(curb + 1.2), 0.5, LAYER["mv"], "mv", "dry", -curb, curb, power=True),
+        _band(-(curb + 1.8), 0.4, LAYER["lv"], "lv", "dry", -curb, curb, power=True),
+        _band(-(curb + 2.3), 0.3, LAYER["telecom"], "telecom", "dry", -curb, curb),
+        _band(-(curb + 2.8), 0.3, LAYER["street_lighting"], "street_lighting", "dry",
+              -curb, curb),
+    ]
+    # Force left water unsigned 0.12 (inside carriageway → signed −0.12)
+    bands[0]["offset_to_curb"] = -0.12
+    bands[0]["side"] = "left"
+    bands[1]["offset_to_curb"] = 2.38
+    bands[1]["side"] = "right"
+    sec = make_section("A2", bands, curb=curb)
+    doc, _ = check(tmp_path, sections_doc(sec))
+    water_finds = [
+        f for f in doc["findings"]
+        if f["reference"]["clause"] == "C2" and f["location"].get("utility") == "water"
+    ]
+    assert len(water_finds) == 1
+    # Larger deviation is |0.12−1.5|=1.38 > |2.38−1.5|=0.88
+    assert "1.380" in water_finds[0]["statement"] or "0.120" in water_finds[0]["statement"]
+    assert any("both sides" in (e.get("extract") or "") for e in water_finds[0]["evidence"])
+    storm_finds = [
+        f for f in doc["findings"]
+        if f["reference"]["clause"] == "C2" and f["location"].get("utility") == "storm"
+    ]
+    assert storm_finds == []  # at ER 2.5
+
+
+def test_c2_storm_cb_not_compared(tmp_path):
+    """Storm CB bands are information only — never a C2 ER finding."""
+    sec = full_wet_dry(curb=3.5, water_centre=3.5 + 1.5)
+    for b in sec["bands"]:
+        if b["utility"] in ("storm", "sewer"):
+            b["offset_to_curb"] = {"storm": 2.5, "sewer": 3.0}[b["utility"]]
+            b["centre"] = 3.5 + b["offset_to_curb"]
+            b["x_min"], b["x_max"] = b["centre"] - 0.25, b["centre"] + 0.25
+    # Add storm_cb far from any ER value
+    cb = _band(3.5 + 0.2, 0.4, "-01- Storm CB", "storm_cb", "wet", -3.5, 3.5, index=0)
+    cb["offset_to_curb"] = 0.2
+    sec["bands"].append(cb)
+    sec["band_count"] = len(sec["bands"])
+    doc, _ = check(tmp_path, sections_doc(sec))
+    cb_rows = [r for r in doc["comparisons"]
+               if r["check"] == "C2" and r["values"].get("utility") == "storm_cb"]
+    assert cb_rows and all(r["result"] == "information" for r in cb_rows)
+    assert not any(
+        f["location"].get("utility") == "storm_cb" for f in doc["findings"]
+        if f["reference"]["clause"] == "C2"
+    )
+
+
+def test_c2_within_tolerance_no_finding(tmp_path):
+    """Sewer at 2.65 (|Δ|=0.35 ≤ 0.5) → pass, no finding (R-O5 probe)."""
+    sec = full_wet_dry(curb=3.5, water_centre=3.5 + 1.5)
+    for b in sec["bands"]:
+        if b["utility"] == "storm":
+            b["offset_to_curb"] = 2.5
+            b["centre"] = 3.5 + 2.5
+            b["x_min"], b["x_max"] = b["centre"] - 0.25, b["centre"] + 0.25
+        if b["utility"] == "sewer":
+            b["offset_to_curb"] = -2.65  # carriageway side
+            b["centre"] = 3.5 - 2.65  # will recompute below
+            # Keep on right verge-ish: unsigned 2.65
+            b["centre"] = 3.5 + 2.65
+            b["side"] = "right"
+            b["offset_to_curb"] = 2.65
+            b["x_min"], b["x_max"] = b["centre"] - 0.25, b["centre"] + 0.25
+    doc, _ = check(tmp_path, sections_doc(sec))
+    c2s = [r for r in doc["comparisons"]
+           if r["check"] == "C2" and r["values"].get("utility") == "sewer"]
+    assert c2s and c2s[0]["result"] == "pass"
+    assert abs(c2s[0]["values"]["deviation_m"] - 0.35) < 1e-6
+    assert not any(
+        f["location"].get("utility") == "sewer" for f in doc["findings"]
+        if f["reference"]["clause"] == "C2"
+    )
 
 
 def test_parse_section_label_strict():

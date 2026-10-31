@@ -17,7 +17,7 @@ SPC-0006 Rev O §4.17. Binding decisions DO-1…DO-8. S33 PR #21 fixes R1–R8 /
 | Check | Rule (report-only until DO-4) | Notes |
 |---|---|---|
 | C1 | COR-101 presence | Required utilities; `storm_cb`→storm; tree `c1_as` for SL / irrigation secondary |
-| C2 | COR-001 offsets | Information until R-O5; **not_run** when curb missing (R2) |
+| C2 | COR-001 offsets | Unsigned band–curb distance vs `c2_er_positions_m` (water 1.5 / storm 2.5 / sewer 3.0). Flag + finding when `|d − ER| > c2_tolerance_m` (0.5). One finding per section × utility (larger Δ; both sides in evidence). Storm CB not compared. `design_error` / Probable / Major; CRS → Parsons. Quote ER §7.10(e); note direction not stated (DO-5a…d / R-O5). **not_run** when curb missing (R2). `rule_id` null (DO-4) |
 | C3 | COR-001 side rule | Per-band classes per side; tree bands excluded |
 | C4 | COR-002 horizontal | Per-band pairs; tree excluded; `< 1.0 m` → *Not auto-verifiable* (DO-6) |
 | C5 | Plan vs band | Offset ≤ half-width + 0.5 m (DO-7 AGREED) |

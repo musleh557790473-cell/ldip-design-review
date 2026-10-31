@@ -157,7 +157,7 @@ def _assert_c2_samples(doc, samples, tol=0.02):
             if r["check"] == "C2"
             and r["values"].get("section") == section
             and r["values"].get("utility") == util
-            and r["result"] == "information"
+            and r["result"] in ("information", "pass", "flag")
         ]
         assert rows, f"C2 sample missing for {section}/{util}"
         offs = [r["values"].get("offset_to_curb_m") for r in rows]
@@ -167,6 +167,39 @@ def _assert_c2_samples(doc, samples, tol=0.02):
             assert any(abs(o - exp) <= tol for o in offs), (
                 f"C2 {section}/{util}: expected ~{exp}, got {offs}"
             )
+
+
+def _assert_c2_er_findings(doc, sec_doc, er=None, tol=0.5):
+    """DO-5 / R-O5: one finding per section × utility when |unsigned − ER| > tol."""
+    er = er or {"water": 1.5, "storm": 2.5, "sewer": 3.0}
+    expected = set()
+    for sec in sec_doc["sections"]:
+        label = sec["label"]
+        by_util = {}
+        for b in sec.get("bands") or []:
+            util = b.get("utility")
+            if util not in er or b.get("offset_to_curb") is None:
+                continue
+            d = abs(float(b["offset_to_curb"]))
+            by_util.setdefault(util, []).append(abs(d - er[util]))
+        for util, devs in by_util.items():
+            if max(devs) > tol + 1e-9:
+                expected.add((label, util))
+    found = {
+        (f["location"].get("section"), f["location"].get("utility"))
+        for f in doc["findings"]
+        if f["reference"]["clause"] == "C2"
+    }
+    assert found == expected, f"C2 findings {found} != expected {expected}"
+    for f in doc["findings"]:
+        if f["reference"]["clause"] != "C2":
+            continue
+        assert f["issue_type"] == "design_error"
+        assert f["severity"] == "Major"
+        assert f["proposed_status"] == "Probable"
+        assert f["reference"]["rule_id"] is None
+        assert f["owner"]["role"] == "Parsons"
+        assert "MOMRA" in f["statement"]
 
 
 def _assert_c4_samples(doc, samples, tol=0.02):
@@ -238,6 +271,7 @@ def _run_site(site: str, tmp_path: Path):
         f"{site}: C3 flags {doc['counts']['c3_flags']} != {exp['c3_flags']}"
     )
     _assert_c2_samples(doc, exp["c2_samples"])
+    _assert_c2_er_findings(doc, sec)
     _assert_c4_samples(doc, exp["c4_samples"])
     assert all(f.get("report_only") and f["reference"]["rule_id"] is None for f in doc["findings"])
     return sec, doc, msg

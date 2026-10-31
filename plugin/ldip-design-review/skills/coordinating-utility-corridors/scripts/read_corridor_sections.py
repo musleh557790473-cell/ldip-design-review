@@ -12,7 +12,7 @@ Usage:
 
 Exit: 0 done · 2 input · 3 missing package · 4 schema. No network, no shell.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import math

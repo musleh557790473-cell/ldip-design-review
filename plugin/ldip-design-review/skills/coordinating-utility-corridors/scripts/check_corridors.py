@@ -2,7 +2,7 @@
 """C1–C6 utility-corridor checks (skill 14, SPC-0006 Rev O §4.17).
 
 DO-4: report only — findings carry issue_type but **no rule_id**.
-DO-5: C2 value findings wait for R-O5 (information rows only).
+DO-5: C2 unsigned band–curb distance vs ER §7.10(e) positions (R-O5 / DO-5a…d).
 DO-6: C4 at PD = Not auto-verifiable (+ spacing table).
 DO-7: C5 tolerance = band half-width + 0.5 m.
 
@@ -14,7 +14,7 @@ Usage:
 
 Exit: 0 done · 2 input · 4 schema. No network, no shell.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import sys
@@ -58,8 +58,15 @@ def comparison_row(check, quantity, sources, values, units, difference, pct, res
     }
 
 
+ER_C2_QUOTE = (
+    "Utilities allocated per MOMRA cross-section typical: Water main 1.5 m from curb, "
+    "sewer 3.0 m, storm 2.5 m, dry utilities opposite side."
+)
+
+
 def finding_stub(check, title, statement, issue_type, severity, status, evidence,
-                 site, sub, run_id, location=None, status_cap=None):
+                 site, sub, run_id, location=None, status_cap=None, owner=None,
+                 note=None, source_doc=None):
     """SPC-0003-shaped candidate — report only; reference.rule_id is always null (DO-4)."""
     agent = "COO"
     fid_run = run_id or f"{site or 'QRWN'}-SYN-19700101T0000"
@@ -85,15 +92,17 @@ def finding_stub(check, title, statement, issue_type, severity, status, evidence
         "evidence": evidence,
         "reference": {
             "rule_id": None,
-            "source_doc": "SPC-0006 Rev O §4.17",
+            "source_doc": source_doc or "SPC-0006 Rev O §4.17",
             "clause": check,
             "rulebook_version": None,
         },
         "proposed_status": status,
-        "owner": {"role": "IM / CM", "name": None},
+        "owner": owner or {"role": "IM / CM", "name": None},
         "created_at": _now(),
         "report_only": True,
-        "note": "DO-4: report only until COR-001 / 002 / 101 states change in rules_v9.",
+        "note": note or (
+            "DO-4: report only until COR-001 / 002 / 101 states change in rules_v9."
+        ),
     }
 
 
@@ -135,7 +144,15 @@ def run_c1(sections, params, rows, findings, meta, status_cap):
 
 
 def run_c2(sections, params, rows, findings, meta, status_cap):
-    """COR-001 offsets — information only until R-O5 (DO-5). not_run if curb missing (R2)."""
+    """COR-001 offsets vs ER §7.10(e) (DO-5a…d / R-O5).
+
+    Unsigned band-centre distance to curb vs ``c2_er_positions_m`` (water 1.5 /
+    storm 2.5 / sewer 3.0). Finding when |distance − value| > ``c2_tolerance_m``
+    (0.5). One finding per section × utility; storm_cb not compared. Report-only
+    (DO-4): rule_id null. Route CRS to Parsons.
+    """
+    er_pos = params.get("c2_er_positions_m") or {}
+    tol = float(params.get("c2_tolerance_m", 0.5))
     for sec in sections:
         label = sec.get("label") or "?"
         curb_ok = sec.get("curb_found")
@@ -150,9 +167,35 @@ def run_c2(sections, params, rows, findings, meta, status_cap):
                 note="R2: curb not found — C2 not_run (offset_to_curb null)",
             ))
             continue
+
+        # Per-band rows (keep signed offset for probe samples); storm_cb skipped for ER.
+        by_util = defaultdict(list)
         for rec in iter_section_bands(sec):
             util = rec.get("utility")
             off = rec.get("offset_to_curb")
+            unsigned = abs(float(off)) if off is not None else None
+            er = er_pos.get(util) if util in er_pos else None
+            if util == "storm_cb" or er is None:
+                rows.append(comparison_row(
+                    "C2", f"offset:{label}:{util}:{rec.get('side')}:{rec.get('index', 0)}",
+                    ["section"],
+                    {
+                        "section": label, "utility": util,
+                        "side": rec.get("side"), "index": rec.get("index", 0),
+                        "offset_to_curb_m": off,
+                        "unsigned_distance_m": unsigned,
+                        "centre": rec.get("centre"),
+                        "curb_left": sec.get("curb_left"),
+                        "curb_right": sec.get("curb_right"),
+                    },
+                    "m", None, None, "information",
+                    note=("storm_cb not compared to ER positions (DO-5)"
+                          if util == "storm_cb"
+                          else "no ER position for this utility (C2 compares water/storm/sewer)"),
+                ))
+                continue
+            deviation = abs(unsigned - er) if unsigned is not None else None
+            flag = deviation is not None and deviation > tol + 1e-9
             rows.append(comparison_row(
                 "C2", f"offset:{label}:{util}:{rec.get('side')}:{rec.get('index', 0)}",
                 ["section"],
@@ -160,11 +203,76 @@ def run_c2(sections, params, rows, findings, meta, status_cap):
                     "section": label, "utility": util,
                     "side": rec.get("side"), "index": rec.get("index", 0),
                     "offset_to_curb_m": off,
+                    "unsigned_distance_m": round(unsigned, 6) if unsigned is not None else None,
+                    "er_m": er, "deviation_m": round(deviation, 6) if deviation is not None else None,
+                    "tolerance_m": tol,
                     "centre": rec.get("centre"),
                     "curb_left": sec.get("curb_left"), "curb_right": sec.get("curb_right"),
                 },
-                "m", None, None, "information",
-                note="DO-5: C2 value judgement waits for R-O5 (ER §7.10(e) wording)",
+                "m", round(deviation, 6) if deviation is not None else None, None,
+                "flag" if flag else ("pass" if deviation is not None else "information"),
+                severity="Major" if flag else None,
+                status="Probable" if flag else None,
+                note="DO-5a: |unsigned offset − ER| vs c2_tolerance_m (R-O5)",
+            ))
+            if unsigned is not None:
+                by_util[util].append({
+                    "side": rec.get("side"), "index": rec.get("index", 0),
+                    "offset_to_curb_m": off, "unsigned_m": unsigned,
+                    "deviation_m": deviation, "er_m": er,
+                })
+
+        # One finding per section × ER utility (DO-5c); larger deviation wins.
+        for util, samples in sorted(by_util.items()):
+            er = er_pos[util]
+            best = max(samples, key=lambda s: s["deviation_m"])
+            if best["deviation_m"] <= tol + 1e-9:
+                continue
+            sides = sorted({s["side"] for s in samples if s.get("side")})
+            side_bits = "; ".join(
+                f"{s['side']} unsigned={s['unsigned_m']:.3f} m "
+                f"(signed={s['offset_to_curb_m']}, Δ={s['deviation_m']:.3f} m)"
+                for s in samples
+            )
+            statement = (
+                f"Section {label}: '{util}' band centre is {best['unsigned_m']:.3f} m "
+                f"(unsigned) from the curb vs ER allocation {er:.1f} m "
+                f"(|Δ|={best['deviation_m']:.3f} m > {tol:.1f} m). "
+                f"ER §7.10(e): \"{ER_C2_QUOTE}\" "
+                f"Direction from the curb is not stated; comparison uses unsigned distance "
+                f"(DO-5d / R-O5). Sides: {side_bits}. Route CRS to Parsons."
+            )
+            evidence = [
+                evid("E01", "script_output",
+                     f"section={label} utility={util} er={er} tol={tol} "
+                     f"max_unsigned={best['unsigned_m']:.3f} max_dev={best['deviation_m']:.3f} "
+                     f"sides={sides}"),
+                evid("E02", "standard",
+                     f"ER §7.10(e) p.57: {ER_C2_QUOTE} "
+                     f"(R-O5; docs/reviews/S33-R-O5-ER-7.10e.md)"),
+            ]
+            if len(samples) > 1:
+                evidence.append(evid(
+                    "E03", "script_output",
+                    f"both sides: {side_bits}",
+                ))
+            findings.append(finding_stub(
+                "C2",
+                f"{util} offset vs ER in section {label}",
+                statement,
+                "design_error", "Major", "Probable",
+                evidence,
+                meta["site"], meta["sub"], meta["run"],
+                location={
+                    "document_no": meta.get("doc") or "UTL-30000",
+                    "section": label, "utility": util,
+                    "route": "CRS", "recipient": "Parsons",
+                },
+                status_cap=status_cap,
+                owner={"role": "Parsons", "name": None},
+                source_doc="ER §7.10(e) / SPC-0006 Rev O §4.17",
+                note=("DO-4 report-only (rule_id null); DO-5a…d / R-O5: unsigned ER "
+                      "positions; CRS to Parsons."),
             ))
 
 
@@ -595,11 +703,15 @@ def main(argv=None):
                 "rows": 0,
                 "comparisons": len(rows),
                 "findings": len(findings),
+                "c2_flags": sum(1 for r in rows if r["check"] == "C2" and r["result"] == "flag"),
                 "c3_flags": sum(1 for r in rows if r["check"] == "C3" and r["result"] == "flag"),
                 "c1_missing": sum(1 for r in rows if r["check"] == "C1" and r["result"] == "flag"),
+                "c2_findings": sum(
+                    1 for f in findings if (f.get("reference") or {}).get("clause") == "C2"
+                ),
             },
             "meta": {
-                "marking": "report only (DO-4); C2 information until R-O5 (DO-5); "
+                "marking": "report only (DO-4); C2 ER unsigned offsets (DO-5 / R-O5); "
                            "C4 Not auto-verifiable at PD (DO-6)",
                 "site": a.site, "sub": a.sub, "run": meta["run"], "stage": a.stage,
                 "route": sections_doc.get("route"),
@@ -607,6 +719,8 @@ def main(argv=None):
                 "generated_at": _now(),
                 "checker": f"check_corridors/{__version__}",
                 "source": sections_doc.get("source"),
+                "c2_er_positions_m": params.get("c2_er_positions_m"),
+                "c2_tolerance_m": params.get("c2_tolerance_m"),
             },
         }
         doc["counts"]["rows"] = len(doc["rows"])

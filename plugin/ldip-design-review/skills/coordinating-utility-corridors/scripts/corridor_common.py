@@ -2,7 +2,7 @@
 
 I/O, exits, params, utility_layers. No rule IDs in findings (DO-4). No network, no shell.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import json
 import os
@@ -52,6 +52,10 @@ def load_params(path=None):
     doc = read_json(path or PARAMS_PATH)
     tol = doc.get("tolerances") or {}
     band = doc.get("band") or {}
+    er_pos = doc.get("c2_er_positions_m") or {}
+    c2_tol = doc.get("c2_tolerance_m")
+    if c2_tol is None:
+        c2_tol = tol.get("c2_tolerance_m", 0.5)
     return {
         "required": list(doc.get("required_utilities") or []),
         "wet": set(doc.get("wet") or []),
@@ -60,6 +64,8 @@ def load_params(path=None):
         "c5_extra_m": float(tol.get("c5_extra_m", 0.5)),
         "c4_min_m": float(tol.get("c4_power_horizontal_min_m", 1.0)),
         "coord_abs_m": float(tol.get("coord_abs_m", 0.05)),
+        "c2_er_positions_m": {str(k): float(v) for k, v in er_pos.items()},
+        "c2_tolerance_m": float(c2_tol),
         "curb": doc.get("curb") or {},
         "section_label": doc.get("section_label") or {},
         "band": band,
