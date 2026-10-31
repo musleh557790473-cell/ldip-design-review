@@ -2,8 +2,8 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.2.1"
-  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A; Amendment O-a"
+  version: "0.2.2"
+  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A; Amendment O-a; G-Oa4 (DOa4)"
 ---
 
 # Extracting DWG data
@@ -60,9 +60,11 @@ your list and `<stem>` its file name without `.dwg`.
    `python "<SK>/extract_dxf.py" --dxf "<B>/<stem>.dxf" --dwg "<F>" --convert-log "<B>/<stem>.convert.json" --out "<B>/<stem>.dwg.json" --source-path "<F>" --resolve-base "<folder of F>" [--linework]`
    Add `--linework` for a road drawing: the prompt marks it as a road carrier, or its document number
    has the discipline code `ROD` or `IRO`. It writes `<B>/<stem>.linework.json` (all line work,
-   flattened) and lists it in the ingestion file. Block references are expanded by default (texts
-   and closed polylines inside them are kept with `via_block`); never pass `--no-expand` unless the
-   prompt says so.
+   flattened) and lists it in the ingestion file. Block references are expanded by default (texts,
+   closed polylines and DIMENSIONs inside them are kept with `via_block`; ATTRIBs on expanded inserts
+   become texts with `source: "attrib"`). Title-block inserts (paper space, Parsons `TB_ATTRIB_BLOCKS`,
+   or a name containing "Title Block") are not expanded. Never pass `--no-expand` unless the prompt
+   says so.
 4. **Validate** — all ingestion files of the batch in one call:
    `python "<SK>/validate_ingestion.py" --files "<B>/<stem1>.dwg.json" "<B>/<stem2>.dwg.json"`
    Exit 4 lists the failing files; do not edit the JSON (`write_manifest.py` records them as failed).

@@ -23,10 +23,10 @@ jobs:
             openpyxl pdfplumber reportlab python-docx 'ezdwg==0.16.0' PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 679 = 670 at b27aef8 + J1–J7 review fixes
-          # (+4 synthetic in test_skill1_oa_build.py + 5 real env-gated in test_skill1_oa_real.py).
-          # Cursor without LibreDWG/scratch: +4 pass, +5 skip → 627 passed / 52 skipped.
-          # Claude with LibreDWG + DWGs: runs J7 real tests (chain QRWN/NRJS + cross-check ×3).
-          python tools/check_suite.py --expect 679 --tests tests
+          # 685 = 679 after PR #22 + G-Oa4 / DOa4
+          # (+3 synthetic in test_skill1_goa4_build.py + 3 real env-gated in test_skill1_goa4_real.py).
+          # Cursor without LibreDWG/scratch: 630 passed / 55 skipped.
+          # Claude with LibreDWG + DWGs runs the DOa4 real extract counts (and prior J7 real tests).
+          python tools/check_suite.py --expect 685 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
