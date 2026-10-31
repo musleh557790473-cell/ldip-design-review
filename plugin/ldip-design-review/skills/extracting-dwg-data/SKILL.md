@@ -2,8 +2,8 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.2.0"
-  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A"
+  version: "0.2.1"
+  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A; Amendment O-a"
 ---
 
 # Extracting DWG data
@@ -14,10 +14,13 @@ never raises a finding. The scripts do the work: run them, read their one-line r
 read their source.
 
 Packages: Python 3.11+, `ezdxf`, `jsonschema`; engine `ezdwg==0.16.0` (pinned, D13 / D13-2), or ODA File
-Converter / AutoCAD Core Console as external programs. Another ezdwg version still converts, but
+Converter 27.9.0 / AutoCAD Core Console as external programs. Another ezdwg version still converts, but
 `convert.py` adds the warning `ENGINE_VERSION_UNPINNED` (results not comparable with pinned runs).
-Engine `chain` (Rev F, K21-3) runs ezdwg, then LibreDWG `dwg2dxf` when it is enabled
-(`LDIP_LIBREDWG_EXE`; not before licence review L-1), and otherwise records `next: local_autocad`.
+Engine `chain` (`convert.py` 0.3.0, Amendment O-a / Rev F §4.1A): ezdwg → LibreDWG `dwg2dxf`
+(`LDIP_LIBREDWG_EXE`) → ODA (`LDIP_ODA_EXE`) → `next: local_autocad`. Missing programs are skipped
+and logged. After each engine, a nested-content check (INSERT/TEXT/MTEXT per layer, raw vs DXF) may
+warn `NESTED_CONTENT_LOSS` and try the next reader; if every reader loses content, the DXF with the
+smallest loss is kept with that warning.
 
 ## Hard rules
 
@@ -31,7 +34,8 @@ Engine `chain` (Rev F, K21-3) runs ezdwg, then LibreDWG `dwg2dxf` when it is ena
    `write_manifest.py` records it as `status: failed` with the script's code and detail. Never write a
    `.dwg.json` by hand and never fill in values the script did not produce.
 4. Warnings are data. Copy them as they are; do not resolve them (for example, units not metres or no
-   CRS is for GIS-008 to judge).
+   CRS is for GIS-008 to judge). Treat `NESTED_CONTENT_LOSS` the same way: record it; do not invent
+   missing inserts or texts.
 5. `origin_signals` is Probable by definition; `aecc.civil3d_native: true` (an AECC object is drawn)
    is the only deterministic Civil 3D signal (brief §1.4). `saved_in_civil3d: true` means only that
    the file was saved in a Civil 3D session. With engine `ezdwg`, an AECC count of 0 proves nothing
@@ -47,6 +51,8 @@ your list and `<stem>` its file name without `.dwg`.
 2. **Convert** — for each DWG, with the Bash tool `timeout` set to 600000 (a 15 MB DWG takes
    about 2 minutes with ezdwg; the default 120 s cuts it off):
    `python "<SK>/convert.py" --engine <engine> --dwg "<F>" --out "<B>/<stem>.dxf" --log "<B>/<stem>.convert.json" --reuse`
+   Prefer `--engine chain` unless the prompt names a single engine. Optional `--cross-check` compares
+   INSERT pos/scale by handle (`dwgread -O JSON` vs ezdwg, tol 0.001 m) into the convert log.
    `--reuse` keeps an earlier conversion of the same DWG with the same engine (a retry does not
    convert again). Exit 3 = engine missing, DWG version not supported, or timeout; exit 2 = not a
    DWG or no DXF produced. Either way: continue; the manifest script records it (hard rule 3).
@@ -77,5 +83,5 @@ Per DWG: `<stem>.dxf`, `<stem>.convert.json`, `<stem>.dwg.json` (template 1.2), 
 `batch_manifest.json` per batch (from `write_manifest.py`).
 Exit codes (SPC-0006 §2.3.3): 0 done · 2 input error · 3 missing engine or package · 4 schema failure.
 
-What each content key holds, the dimension override rule, the title-block heuristic and the engine
-limits: `references/dwg_content.md`. The file skeleton: `templates/ingestion.json`.
+What each content key holds, the dimension override rule, the title-block heuristic, the reader chain
+and nested-content warning: `references/dwg_content.md`. The file skeleton: `templates/ingestion.json`.

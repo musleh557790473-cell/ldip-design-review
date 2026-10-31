@@ -168,32 +168,38 @@ def fake_reader(path, dxf_src=None):
 def test_reader_chain(tmp_path):
     pytest.importorskip("ezdwg")
     dwg = fake_dwg(tmp_path / "bad.dwg", os.urandom(4000))
-    env = {"LDIP_LIBREDWG_EXE": ""}
+    # Amendment O-a: ezdwg → libredwg → oda → next: local_autocad; missing programs skipped
+    env = {"LDIP_LIBREDWG_EXE": "", "LDIP_ODA_EXE": ""}
     rc, out = run(SK1, "convert.py", "--engine", "chain", "--dwg", dwg, "--out", tmp_path / "a.dxf",
                   "--log", tmp_path / "a.convert.json", env=env)
     assert rc == 3 and out["next"] == "local_autocad"
     log = load(tmp_path / "a.convert.json")
-    assert [s["engine"] for s in log["chain"]] == ["ezdwg", "libredwg"]
-    assert log["chain"][0]["result"] == "failed" and log["chain"][1]["result"] == "not_enabled"
-    # LibreDWG enabled but also failing: both errors kept
+    assert [s["engine"] for s in log["chain"]] == ["ezdwg", "libredwg", "oda"]
+    assert log["chain"][0]["result"] == "failed"
+    assert log["chain"][1]["result"] == "skipped" and log["chain"][2]["result"] == "skipped"
+    # LibreDWG enabled but also failing; ODA still skipped → next local_autocad
     rc, out = run(SK1, "convert.py", "--engine", "chain", "--dwg", dwg, "--out", tmp_path / "b.dxf",
-                  "--log", tmp_path / "b.convert.json", env={"LDIP_LIBREDWG_EXE": str(fake_reader(tmp_path / "fail.sh"))})
+                  "--log", tmp_path / "b.convert.json",
+                  env={"LDIP_LIBREDWG_EXE": str(fake_reader(tmp_path / "fail.sh")), "LDIP_ODA_EXE": ""})
     log = load(tmp_path / "b.convert.json")
-    assert rc == 3 and [s["result"] for s in log["chain"]] == ["failed", "failed"] and log["next"] == "local_autocad"
+    assert rc == 3 and [s["result"] for s in log["chain"]] == ["failed", "failed", "skipped"]
+    assert log["next"] == "local_autocad"
     # LibreDWG converts after ezdwg fails: engine libredwg, fallback_from, ENGINE_FALLBACK
     good = nested_dxf(tmp_path / "good.dxf")
     rc, out = run(SK1, "convert.py", "--engine", "chain", "--dwg", dwg, "--out", tmp_path / "c.dxf",
                   "--log", tmp_path / "c.convert.json",
-                  env={"LDIP_LIBREDWG_EXE": str(fake_reader(tmp_path / "ok.sh", good))})
+                  env={"LDIP_LIBREDWG_EXE": str(fake_reader(tmp_path / "ok.sh", good)), "LDIP_ODA_EXE": ""})
     log = load(tmp_path / "c.convert.json")
     assert rc == 0 and log["engine"] == "libredwg" and log["requested_engine"] == "chain"
     assert log["fallback_from"].startswith("ezdwg:") and "ENGINE_FALLBACK" in [w["code"] for w in log["warnings"]]
-    assert log["engine_version"] == "dwg2dxf 0.0-test"
+    # version comes from dwgread --version when present; fake dwg2dxf --version is the fallback
+    assert "0.0-test" in (log["engine_version"] or "")
     # the extraction accepts the fallback log, and --reuse keeps it
     assert run(SK1, "extract_dxf.py", "--dxf", tmp_path / "c.dxf", "--dwg", dwg, "--convert-log", tmp_path / "c.convert.json",
                "--out", tmp_path / "bad.dwg.json")[0] == 0
     rc, out = run(SK1, "convert.py", "--engine", "chain", "--dwg", dwg, "--out", tmp_path / "c.dxf",
-                  "--log", tmp_path / "c.convert.json", "--reuse", env={"LDIP_LIBREDWG_EXE": ""})
+                  "--log", tmp_path / "c.convert.json", "--reuse",
+                  env={"LDIP_LIBREDWG_EXE": "", "LDIP_ODA_EXE": ""})
     assert rc == 0 and out["reused"] and out["engine"] == "libredwg"
 
 
