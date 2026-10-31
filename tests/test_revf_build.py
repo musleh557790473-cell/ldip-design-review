@@ -62,12 +62,13 @@ def nested_dxf(path):
     outer = doc.blocks.new("XR_Layout")
     outer.add_blockref("INNER", (100, 0), dxfattribs={"rotation": 90, "xscale": 2, "yscale": 2})
     outer.add_arc((0, 0), 5, 0, 90, dxfattribs={"layer": "XR_Layout$0$15 m ROW"})
-    tb = doc.blocks.new("TB_A1")
+    # DOa4-2: only "Title Block" / TB_ATTRIB_BLOCKS / paper-space inserts are skipped — not every ATTDEF.
+    tb = doc.blocks.new("Sheet Title Block")
     tb.add_attdef("DWG_NO", (0, 0), dxfattribs={"height": 1})
     tb.add_line((0, 0), (1, 1), dxfattribs={"layer": "TB_LINE"})
     msp = doc.modelspace()
     msp.add_blockref("XR_Layout", (1000, 2000), dxfattribs={"layer": "XREF_LAYER"})
-    msp.add_blockref("TB_A1", (0, 0)).add_auto_attribs({"DWG_NO": "X"})
+    msp.add_blockref("Sheet Title Block", (0, 0)).add_auto_attribs({"DWG_NO": "X"})
     msp.add_line((0, 0), (3, 4), dxfattribs={"layer": "RD_CL"})
     doc.saveas(path)
     return path

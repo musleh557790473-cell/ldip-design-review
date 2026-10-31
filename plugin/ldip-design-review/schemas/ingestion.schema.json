@@ -514,8 +514,12 @@
            ]
           },
           "handle": {
-           "type": "string",
-           "pattern": "^[0-9A-Fa-f]+$"
+           "type": [
+            "string",
+            "null"
+           ],
+           "pattern": "^[0-9A-Fa-f]+$",
+           "description": "L3: ATTRIB texts use the source ATTRIB handle (or null); never the insert handle"
           },
           "space": {
            "type": "string"
@@ -533,6 +537,16 @@
           },
           "layer_short": {
            "type": "string"
+          },
+          "source": {
+           "enum": [
+            "attrib"
+           ],
+           "description": "DOa4-2: ATTRIB on an expanded insert recorded as a text"
+          },
+          "tag": {
+           "type": "string",
+           "description": "ATTRIB tag when source is attrib"
           }
          },
          "required": [
@@ -591,6 +605,35 @@
           },
           "text_differs": {
            "type": "boolean"
+          },
+          "via_block": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           },
+           "minItems": 1
+          },
+          "insert_handle": {
+           "type": "string",
+           "pattern": "^[0-9A-Fa-f]+$"
+          },
+          "layer_short": {
+           "type": "string"
+          },
+          "points": {
+           "type": "object",
+           "description": "DOa4-1: definition / text points after insert transform (expanded dimensions)",
+           "additionalProperties": {
+            "type": "array",
+            "items": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "minItems": 3,
+            "maxItems": 3
+           }
           }
          },
          "required": [

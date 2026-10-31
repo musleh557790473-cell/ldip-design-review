@@ -144,7 +144,10 @@ def test_extract_content(tmp_path):
     areas = sorted(p["area"] for p in c["polylines"])
     assert areas == [139.27, 300.0] or areas == [139.28, 300.0]                  # square + semicircle bulge
     assert c["open_polylines_by_layer"] == {"C-PLOT": 1}
-    assert {t["text"] for t in c["texts"]} == {"PLOT 118", "Local\nMasjid"}
+    # DOa4-2: PLOT_TAG (attributed, not a title block) is expanded → ATTRIB "118" as text
+    assert {t["text"] for t in c["texts"]} == {"PLOT 118", "Local\nMasjid", "118"}
+    assert any(t.get("source") == "attrib" and t.get("tag") == "PLOT_ID" and t["text"] == "118"
+               for t in c["texts"])
     assert any(b["attributes"] == {"PLOT_ID": "118"} for b in c["blocks"])
     assert c["xrefs"][0]["saved_path"] == "C:/xrefs/base_survey.dwg" and c["xrefs"][0]["resolved"] is None
     assert next(ly for ly in c["layers"] if ly["name"] == "FROZEN")["frozen"] is True

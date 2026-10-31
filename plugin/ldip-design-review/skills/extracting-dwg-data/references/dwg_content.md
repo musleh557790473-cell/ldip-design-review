@@ -44,8 +44,8 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
 | `header` | `insunits`, `measurement`, `extmin`, `extmax`, `acadver_source` (DWG), `acadver_dxf` |
 | `layers[]` | name, colour, linetype, frozen, off, locked, entity count (all layouts) |
 | `blocks[]` | every INSERT (model and paper space): name, layer, insert point, scale, rotation, attributes (tag → value; a repeated tag gets `#2`), handle, space |
-| `texts[]` | TEXT and MTEXT: plain text, layer, insert point, height, rotation, handle, space |
-| `dimensions[]` | dimension type, geometric measurement, stored text, `override`, `override_kind`, and for a numeric override `text_value` and `text_differs` |
+| `texts[]` | TEXT and MTEXT: plain text, layer, insert point, height, rotation, handle, space. Expanded ATTRIBs (DOa4-2) are recorded as TEXT with `source: "attrib"` and `tag` |
+| `dimensions[]` | dimension type, geometric measurement, stored text, `override`, `override_kind`, and for a numeric override `text_value` and `text_differs`. Expanded dimensions (DOa4-1) also carry `via_block`, `insert_handle`, `layer_short` and transformed `points` (defpoint / text_midpoint) |
 | `polylines[]` | closed LWPOLYLINE and 2D POLYLINE in model space: vertices (0.001), `has_bulge`, elevation, area (0.01; arcs flattened at 0.001) |
 | `open_polylines_by_layer` | count of open polylines per layer |
 | `xrefs[]`, `images[]`, `fonts[]` | saved path or file name; `resolved` true/false with `--resolve-base`, null without |
@@ -89,14 +89,19 @@ The converter log `<stem>.convert.json` records the engine, version, input hash 
   class catalogue (345–448 classes in the Parsons samples) even with no Civil 3D object, so classes alone
   give `saved_in_civil3d`, not `civil3d_native`.
 
-## Block expansion and line work (0.2.0, SPC-0006 Rev F §4.1A)
+## Block expansion and line work (0.2.0, SPC-0006 Rev F §4.1A; DOa4-1 / DOa4-2)
 
 - Template 1.2. Model-space block references (bound xrefs included) are expanded, nested to depth 4.
-  Texts and closed polylines found inside are added to `texts` / `polylines` with `via_block` (block-name
-  chain), `insert_handle` (the model-space insert) and `layer_short` (layer name after the last `$`);
-  `handle` is the handle in the block definition. An entity on layer 0 takes its insert's layer.
-  Inserts with attributes and the Parsons title-block blocks are not expanded (K5).
-  `content.block_expansion` counts what was expanded (`--no-expand`: off).
+  Texts, closed polylines and DIMENSIONs found inside are added to `texts` / `polylines` / `dimensions`
+  with `via_block` (block-name chain), `insert_handle` (the model-space insert) and `layer_short`
+  (layer name after the last `$`); `handle` is the handle in the block definition. An entity on layer 0
+  takes its insert's layer. Expanded dimensions use the insert-transformed measurement and carry
+  transformed `points` (DOa4-1). Counted in `block_expansion.dimensions`.
+- **Title-block skip (narrowed, DOa4-2 / K5):** an insert is not expanded only when it is in paper
+  space, its block name is in `TB_ATTRIB_BLOCKS` ("Ladun - Qairwan ATT"), or its block name contains
+  `"Title Block"` (case-insensitive). Other inserts that merely carry ATTRIBs are expanded. Each
+  ATTRIB becomes a text with `source: "attrib"`, `tag`, `via_block` and `insert_handle` (position
+  already in world coordinates). `content.block_expansion` counts what was expanded (`--no-expand`: off).
 - `--linework` writes `<stem>.linework.json` (schema `linework.schema.json` 1.0): every LINE, ARC,
   CIRCLE, LWPOLYLINE, 2-D POLYLINE and SPLINE of model space and of the expanded blocks, flattened at
   0.05 m, open and closed (`closed`), with `points` in drawing units; `layers` gives records and length per
