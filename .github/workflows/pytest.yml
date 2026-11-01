@@ -23,9 +23,9 @@ jobs:
             openpyxl pdfplumber reportlab python-docx 'ezdwg==0.16.0' PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 694 = 685 after PR #24 (skill14 0.1.1) + G-Oa4 (+3 synthetic + 3 real)
-          # + L1–L3 (+2 synthetic + 1 real ezdwg). Cursor without LibreDWG/scratch:
-          # 638 passed / 56 skipped. Claude with LibreDWG + DWGs runs the real gates.
-          python tools/check_suite.py --expect 694 --tests tests
+          # 708 = 694 after v0.13.0 + skill 9 0.3.0 coordinates
+          # (+9 synthetic T9-C* / unit + 5 real T9-R1…R5 env-gated).
+          # Cursor without LDIP_REVIEW_ROOT: real gates skipped. Claude with scratch runs them.
+          python tools/check_suite.py --expect 708 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

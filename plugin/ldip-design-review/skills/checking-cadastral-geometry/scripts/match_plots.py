@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DLUS ↔ drawing plot matching: GIS-004, 005, 006, 007, 010, 011, 016 (SPC-0004 §7; SPC-0006 §4.6.3).
+"""DLUS ↔ drawing plot matching: GIS-004, 005, 006, 007, 010, 011, 016 (SPC-0004 §7; SPC-0006 §4.18).
 
 Usage (review run):
   python match_plots.py --ingestion <a.dwg.json> [...] --dlus <dlus.json> --gis001 <gis001.json>
@@ -18,10 +18,14 @@ Rules, each only when it is in the rules file (not inactive) and its values are 
           tolerance_rel is also set, the difference must exceed both)
   GIS-004 layer → Level 2 via `layer_mapping` (per site)  → land_use_differs
   GIS-010 DLUS Land Area < `min_area_by_land_use`[Level 2] → below_min_area
-  GIS-011 Σ DLUS Land Area vs `site_boundary` polygon area (per site) > tolerance_abs → site_area_differs
-  GIS-007, GIS-016 → not_run (reference cadastre / CMP source not defined [GAP])
+  GIS-011 Σ DLUS Land Area vs `site_boundary` (when DLUS given); C8 boundary polygon vs
+          `official_site_area` (nature / deed)              → site_area_differs
+  GIS-007 C9: each boundary vertex vs nearest `reference_dataset[SITE]` vertex; max planar
+          deviation vs `tolerance` (default 0.02 m). Runs only when the dataset is set
+          → boundary_off_reference
+  GIS-016 → not_run (CMP source not defined [GAP])
 Exit 0 ran · 2 input error · 3 missing package. No network, no shell calls."""
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import collections
@@ -32,6 +36,73 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dwg_geom import (MAX_SAMPLES, InputError, check_out_path, dwg_source, layer_list, load_ingestion,  # noqa: E402
                       load_rules, need_shapely, norm, param, pattern, polygon, read_json, write_result)
+
+
+def _official_areas(raw):
+    """official_site_area[SITE] → list of (label, m2)."""
+    if raw is None:
+        return []
+    if isinstance(raw, (int, float)):
+        return [("official", float(raw))]
+    if isinstance(raw, dict):
+        return [(str(k), float(v)) for k, v in raw.items() if v is not None]
+    return []
+
+
+def _ref_vertices(raw, review_hint=None):
+    """reference_dataset[SITE] as vertex list, {vertices: [...]}, or {path: ...}."""
+    if raw is None:
+        return None
+    if isinstance(raw, list) and raw and isinstance(raw[0], (list, tuple)):
+        return [tuple(map(float, p[:2])) for p in raw]
+    if isinstance(raw, dict):
+        if raw.get("vertices"):
+            return [tuple(map(float, p[:2])) for p in raw["vertices"]]
+        if raw.get("path"):
+            d = read_json(raw["path"])
+            if isinstance(d, list):
+                return [tuple(map(float, p[:2])) for p in d]
+            return [tuple(map(float, p[:2])) for p in (d.get("vertices") or d.get("coordinates") or [])]
+    return None
+
+
+def find_drawn_boundary(ings, site_bnd_verts, official, tol):
+    """Closed polyline equal to site_boundary, or whose area matches an official area within tol."""
+    from shapely.geometry import Polygon
+    target = None
+    if site_bnd_verts and len(site_bnd_verts) >= 3:
+        target = Polygon([tuple(map(float, p)) for p in site_bnd_verts])
+        if not target.is_valid:
+            target = target.buffer(0)
+    best = None
+    for ing in ings:
+        src = dwg_source(ing)
+        for p in ing["content"].get("polylines", []):
+            if p.get("n_vertices", 0) < 3 or p.get("has_bulge"):
+                continue
+            g = polygon(p)
+            if not g.is_valid:
+                g = g.buffer(0)
+            area = float(p.get("area") if p.get("area") is not None else g.area)
+            rec = {"handle": p["handle"], "layer": p["layer"], "area": area, "src": src, "geom": g,
+                   "vertices": [tuple(map(float, v[:2])) for v in p["vertices"]]}
+            if target is not None:
+                # equal: Hausdorff or symmetric area difference small
+                try:
+                    hd = target.hausdorff_distance(g)
+                except Exception:
+                    hd = None
+                if hd is not None and hd <= max(float(tol or 0.02), 0.02):
+                    return rec
+                if abs(g.area - target.area) <= float(tol or 1.0) and g.intersects(target):
+                    # near-equal area and overlap — keep as candidate
+                    if best is None or abs(g.area - target.area) < abs(best["area"] - target.area):
+                        best = rec
+            for _lab, off in official:
+                if abs(area - off) <= float(tol or 1.0):
+                    if best is None or abs(area - off) < abs(best["area"] - off):
+                        best = rec
+    return best
 
 RULES = ("GIS-004", "GIS-005", "GIS-006", "GIS-007", "GIS-010", "GIS-011", "GIS-016")
 
@@ -100,6 +171,80 @@ def dwg_sample(p, extract, row=None):
     return s
 
 
+def _run_gis007(present, ings, site, results):
+    """C9 — boundary vertices vs reference_dataset[SITE] (SPC-0006 §4.18)."""
+    if any(x["rule_id"] == "GIS-007" for x in results):
+        return
+    r007 = present.get("GIS-007")
+    if r007 is None:
+        results.append({"rule_id": "GIS-007", "result": "not_run",
+                        "reason": "rule not in the rules file (inactive or not for this agent)", "patterns": []})
+        return
+    ref_raw = param(r007, "reference_dataset", site)
+    ref = _ref_vertices(ref_raw)
+    if ref is None:
+        results.append({"rule_id": "GIS-007", "result": "not_run",
+                        "reason": "reference cadastre input not defined [GAP: reference_dataset]", "patterns": []})
+        return
+    tol = param(r007, "tolerance")
+    if tol is None:
+        tol = 0.02
+    # Boundary vertices: GIS-011 site_boundary, else longest closed polyline
+    r011 = present.get("GIS-011")
+    bnd = param(r011, "site_boundary", site) if r011 else None
+    verts = [tuple(map(float, p[:2])) for p in bnd] if bnd else None
+    src = None
+    if verts is None:
+        drawn = find_drawn_boundary(ings, None, [], tol)
+        if drawn is None:
+            # fall back: largest-area closed polyline
+            best = None
+            for ing in ings:
+                for p in ing["content"].get("polylines", []):
+                    if p.get("n_vertices", 0) < 3:
+                        continue
+                    area = float(p.get("area") or 0)
+                    if best is None or area > best["area"]:
+                        best = {"area": area, "vertices": [tuple(map(float, v[:2])) for v in p["vertices"]],
+                                "src": dwg_source(ing), "handle": p["handle"], "layer": p["layer"]}
+            if best is None:
+                results.append({"rule_id": "GIS-007", "result": "not_run",
+                                "reason": "no site boundary vertices to compare", "patterns": []})
+                return
+            verts, src = best["vertices"], best["src"]
+            handle, layer = best["handle"], best["layer"]
+        else:
+            verts, src = drawn["vertices"], drawn["src"]
+            handle, layer = drawn["handle"], drawn["layer"]
+    else:
+        handle, layer = None, None
+        if ings:
+            src = dwg_source(ings[0])
+    import numpy as np
+    ref_xy = np.asarray(ref, dtype=float)
+    bad = []
+    max_d = 0.0
+    for i, (e, n) in enumerate(verts):
+        d2 = (ref_xy[:, 0] - e) ** 2 + (ref_xy[:, 1] - n) ** 2
+        j = int(np.argmin(d2))
+        near = ref[j]
+        d = float(d2[j] ** 0.5)
+        max_d = max(max_d, d)
+        if d > float(tol):
+            bad.append({"handles": [handle] if handle else [], "layer": layer,
+                        "extract": f"vertex[{i}] E={e:.3f} N={n:.3f}; nearest_ref={near[0]:.3f},{near[1]:.3f}; d={d:.4f} m"})
+    pats = []
+    if bad:
+        pats.append(pattern(
+            "boundary_off_reference",
+            f"{len(bad)} site boundary vertices deviate more than {float(tol):g} m from the reference (max {max_d:.4f} m)",
+            bad[:MAX_SAMPLES], len(bad),
+            src or {"source_type": "script_output", "path": f"reference_dataset/{site}",
+                    "sha256": "0" * 64, "document_no": f"{site}-boundary", "file_type": "rules"}))
+    results.append({"rule_id": "GIS-007", "result": "fail" if pats else "pass", "patterns": pats,
+                    "max_deviation_m": round(max_d, 4)})
+
+
 def run(a):
     _, rules = load_rules(a.rules)
     ings = [load_ingestion(p) for p in a.ingestion]  # inputs are checked even when no rule runs
@@ -109,17 +254,18 @@ def run(a):
     def not_run(rid, reason):
         results.append({"rule_id": rid, "result": "not_run", "reason": reason, "patterns": []})
 
-    for rid in ("GIS-007", "GIS-016"):
-        if present[rid] is None:
-            not_run(rid, "rule not in the rules file (inactive or not for this agent)")
-        else:
-            not_run(rid, {"GIS-007": "reference cadastre input not defined [GAP: reference_dataset]",
-                          "GIS-016": "CMP reference not defined [GAP: cmp_source]"}[rid])
+    if present["GIS-016"] is None:
+        not_run("GIS-016", "rule not in the rules file (inactive or not for this agent)")
+    else:
+        not_run("GIS-016", "CMP reference not defined [GAP: cmp_source]")
+
     dlus = read_json(a.dlus) if a.dlus else None
     if dlus is not None and dlus.get("result", {}).get("result") != "pass" and any(
             i["pattern"] in ("header_not_found", "missing_column") for i in dlus["result"]["issues"]):
         for rid in ("GIS-004", "GIS-005", "GIS-006", "GIS-010", "GIS-011"):
             not_run(rid, "GIS-002 failed: DLUS not readable")
+        # GIS-007 may still run on drawing + reference alone
+        _run_gis007(present, ings, a.site, results)
         return {"results": results, "plots": None}
     excluded = read_json(a.gis001).get("excluded_plot_ids", []) if a.gis001 else []
     by_id, ex = dlus_rows(dlus, excluded) if dlus else ({}, set())
@@ -145,25 +291,78 @@ def run(a):
                         dlus_source(dlus)) for l2, v in sorted(bad.items(), key=lambda kv: str(kv[0]))]
         results.append({"rule_id": "GIS-010", "result": "fail" if pats else "pass", "patterns": pats})
 
+    # GIS-011 — DLUS sum vs boundary (when DLUS) + C8 drawn boundary vs official_site_area
     r011 = present["GIS-011"]
     if r011 is None:
         not_run("GIS-011", "rule not in the rules file (inactive or not for this agent)")
-    elif dlus is None:
-        not_run("GIS-011", "no DLUS input")
     else:
         tol = param(r011, "tolerance_abs")
         bnd = param(r011, "site_boundary", a.site)
-        if tol is None or bnd is None:
-            not_run("GIS-011", "parameter " + ("tolerance_abs" if tol is None else "site_boundary") + " not set [GAP]")
-        else:
-            from shapely.geometry import Polygon
-            barea = Polygon([tuple(map(float, p)) for p in bnd]).area
-            total = sum(r["land_area"] or 0.0 for r in dlus["rows"])
-            d = total - barea
-            pats = [] if abs(d) <= float(tol) else [pattern(
-                "site_area_differs", f"DLUS total {total:,.2f} m2 differs from the site boundary area {barea:,.2f} m2 by {d:+,.2f} m2",
-                [{"cells": [], "extract": f"sum(Land Area)={total:.2f}; boundary={barea:.2f}; diff={d:+.2f}"}], 1, dlus_source(dlus))]
+        official = _official_areas(param(r011, "official_site_area", a.site))
+        pats = []
+        src011 = None
+        if dlus is not None:
+            if tol is None or bnd is None:
+                # DLUS branch not_run, but C8 may still run
+                if not official:
+                    not_run("GIS-011", "parameter " + ("tolerance_abs" if tol is None else "site_boundary") + " not set [GAP]")
+                else:
+                    pass  # fall through to C8
+            else:
+                from shapely.geometry import Polygon
+                barea = Polygon([tuple(map(float, p)) for p in bnd]).area
+                total = sum(r["land_area"] or 0.0 for r in dlus["rows"])
+                d = total - barea
+                src011 = dlus_source(dlus)
+                if abs(d) > float(tol):
+                    pats.append(pattern(
+                        "site_area_differs",
+                        f"DLUS total {total:,.2f} m2 differs from the site boundary area {barea:,.2f} m2 by {d:+,.2f} m2",
+                        [{"cells": [], "extract": f"sum(Land Area)={total:.2f}; boundary={barea:.2f}; diff={d:+.2f}"}],
+                        1, src011))
+        # C8 boundary part
+        drawn = find_drawn_boundary(ings, bnd, official, tol) if (official and tol is not None) else None
+        if official and tol is not None:
+            if drawn is None and bnd is None and not pats and not any(x["rule_id"] == "GIS-011" for x in results):
+                not_run("GIS-011", "no drawn boundary matching site_boundary / official_site_area")
+            elif drawn is not None:
+                extracts = []
+                fail = False
+                for lab, off in official:
+                    diff = drawn["area"] - off
+                    extracts.append(f"{lab}={off:.2f}; drawn={drawn['area']:.2f}; diff={diff:+.2f}")
+                    if abs(diff) > float(tol):
+                        fail = True
+                if fail:
+                    # Merge into one site_area_differs pattern when DLUS also failed
+                    msg = (f"Drawn site boundary area {drawn['area']:,.2f} m2 differs from the official site area "
+                           f"({', '.join(f'{l}={v:,.2f}' for l, v in official)})")
+                    sample = {"handles": [drawn["handle"]], "layer": drawn["layer"],
+                              "extract": " | ".join(extracts)}
+                    existing = next((p for p in pats if p["pattern"] == "site_area_differs"), None)
+                    if existing:
+                        existing["message"] = existing["message"] + "; " + msg
+                        existing["samples"] = (existing["samples"] + [sample])[:MAX_SAMPLES]
+                        existing["count"] = existing.get("count", 1) + 1
+                    else:
+                        pats.append(pattern("site_area_differs", msg, [sample], 1, drawn["src"]))
+                src011 = src011 or drawn["src"]
+        elif dlus is None and not pats and not any(x["rule_id"] == "GIS-011" for x in results):
+            reason = []
+            if tol is None:
+                reason.append("tolerance_abs")
+            if not official and bnd is None:
+                reason.append("site_boundary/official_site_area")
+            if reason:
+                not_run("GIS-011", "parameter " + "+".join(reason) + " not set [GAP]")
+            elif bnd is not None and not official:
+                not_run("GIS-011", "no DLUS input and official_site_area not set [GAP]")
+        ran = bool(pats) or (dlus is not None and tol is not None and bnd is not None) or (
+            official and tol is not None and drawn is not None)
+        if ran and not any(x["rule_id"] == "GIS-011" for x in results):
             results.append({"rule_id": "GIS-011", "result": "fail" if pats else "pass", "patterns": pats})
+
+    _run_gis007(present, ings, a.site, results)
 
     # drawing rules
     r005 = present["GIS-005"]

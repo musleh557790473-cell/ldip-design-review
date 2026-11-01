@@ -10,16 +10,17 @@ Usage: python build_candidates.py --results <r1.json> [<r2.json> ...] --rules <r
            --run <run-id> --site <SITE> --sub <sub-id> [--document-no <schedule number>] [--review-root <LDIP_Review>]
            [--start 1] --out findings/<run>/candidates/gis.json
 Results files: read_dlus.py (GIS-002), check_ids.py (GIS-001), check_schedule.py (GIS-003, GIS-012 to
-GIS-015), check_crs.py (GIS-008), check_topology.py (GIS-009) and match_plots.py (GIS-004 to 007, 010,
-011, 016) outputs; a match_plots.py --profile file is refused. Each finding is located in the file its
-pattern was read from (location.file_path is relative to --review-root, default the working directory,
-which is the LDIP_Review folder in a run; file_sha256 is that file's hash). Schedule findings take
---document-no; drawing findings take the drawing's number from its ingestion file (the file name when
-the title block was not read). A drawing finding is located by handles and layer (location.dwg).
+GIS-015), check_crs.py (GIS-008), check_control.py (GIS-017), check_topology.py (GIS-009) and
+match_plots.py (GIS-004 to 007, 010, 011, 016) outputs; a match_plots.py --profile file is refused.
+Each finding is located in the file its pattern was read from (location.file_path is relative to
+--review-root, default the working directory, which is the LDIP_Review folder in a run; file_sha256 is
+that file's hash). Schedule findings take --document-no; drawing findings take the drawing's number
+from its ingestion file (the file name when the title block was not read). A drawing finding is
+located by handles and layer (location.dwg).
 Exit: 0 written · 2 input error · 3 dependency · 4 candidates failed the finding schema (nothing written).
 No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -46,7 +47,7 @@ def collect(results_docs):
             raise ValueError("a match_plots.py --profile file is not a check result")
         if "results" in d:
             out += [dict(r, source=r.get("source") or d.get("dlus_source")) for r in d["results"]]
-        elif d.get("rule_id") in ("GIS-001", "GIS-008", "GIS-009"):
+        elif d.get("rule_id") in ("GIS-001", "GIS-008", "GIS-009", "GIS-017"):
             out.append(dict(d, source=d.get("source") or d.get("dlus_source")))
         elif "result" in d and isinstance(d["result"], dict) and d["result"].get("rule_id") == "GIS-002":
             res = d["result"]
@@ -68,7 +69,11 @@ def finding(n, rr, pat, rule, a, rb_version, now):
         raise ValueError(f"no source for {rule['rule_id']} pattern {pat['pattern']}")
     source_type = src["source_type"]
     is_dwg = source_type.startswith("dwg")
-    document_no = src.get("document_no") if is_dwg else a.document_no
+    # DWG / LandXML / script_output (GIS-017 datum) carry document_no on the pattern source;
+    # schedule cells still need --document-no.
+    document_no = src.get("document_no") if (is_dwg or source_type in ("landxml", "script_output")) else a.document_no
+    if not document_no:
+        document_no = a.document_no
     if is_dwg and not document_no:
         document_no = Path(src["path"]).stem
     if not document_no:
@@ -166,8 +171,9 @@ def main(argv=None):
     a.default_source = next((d.get("source") or d.get("dlus_source") for d in docs
                              if d.get("rule_id") in (None, "GIS-001") and (d.get("source") or d.get("dlus_source"))), None)
     a.script_of = {"GIS-001": "check_ids.py", "GIS-002": "read_dlus.py", "GIS-008": "check_crs.py",
-                   "GIS-009": "check_topology.py", **{r: "match_plots.py" for r in
-                                                      ("GIS-004", "GIS-005", "GIS-006", "GIS-007", "GIS-010", "GIS-011", "GIS-016")}}
+                   "GIS-009": "check_topology.py", "GIS-017": "check_control.py",
+                   **{r: "match_plots.py" for r in
+                      ("GIS-004", "GIS-005", "GIS-006", "GIS-007", "GIS-010", "GIS-011", "GIS-016")}}
     now = datetime.now(RIYADH).isoformat(timespec="seconds")
     findings, skipped, n = [], [], a.start
     for rr in collect(docs):
