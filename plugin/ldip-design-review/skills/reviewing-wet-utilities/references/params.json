@@ -1,0 +1,120 @@
+{
+  "tag": "DQ-7 / DQ-9 / DQ-12 / DQ-14 / DQ-15 [AGREED 1 Nov 2026 21:55]",
+  "note": "Skill 11 detection thresholds (SPC-0006 Rev Q §4.19). ER values from the connected 83-page edition (sha 2b3db87e…f6bb, DQ-14). NOT deposited rulebook values. DQ-11: findings report-only until WUT states change in the next rulebook.",
+  "tolerances": {
+    "length_m": 0.05,
+    "slope_pct": 0.01,
+    "level_m": 0.01,
+    "en_m": 0.05,
+    "report_pct": 0.02,
+    "w3_threshold_tol": 0.01,
+    "tag": "DQ-9 [AGREED 21:55]"
+  },
+  "w1_required": {
+    "sewer": {"plan": true, "model": true},
+    "water": {"plan": true, "model": true},
+    "irrigation": {"plan": true, "model": true},
+    "storm": {"plan": true, "model": true}
+  },
+  "er": {
+    "edition": "connected 83-page Employer's Requirements",
+    "edition_sha256_prefix": "2b3db87e",
+    "sewer": {
+      "clause": "§7.5.2",
+      "page": 32,
+      "min_diameter_mm": 200,
+      "min_slope_by_d_mm": [
+        {"diameter_mm": 200, "min_slope_pct": 0.5},
+        {"diameter_mm": 300, "min_slope_pct": 0.35}
+      ],
+      "min_velocity_half_full_ms": 0.6,
+      "d_over_d_max": 0.75,
+      "mh_spacing_m": {"min": 30, "max": 80},
+      "cover_m": 1.2,
+      "note": "0.75 m/s column in declared tables = peak (W3)"
+    },
+    "water": {
+      "clause": "§7.5.1 / FLS",
+      "page": 31,
+      "min_diameter_mm": 100,
+      "pressure_min_bar": 3.5,
+      "pressure_max_bar": 7.0,
+      "fire_pressure_bar": 1.5,
+      "velocity_max_ms": 3.0,
+      "head_loss_m_per_km": {"min": 2, "max": 5},
+      "valve_spacing_m": 500,
+      "cover_m": 1.2,
+      "hydrant_spacing_m": {"residential": 150, "commercial": 90},
+      "pages_fls": "48-49"
+    },
+    "storm": {
+      "clause": "§7.5.3 / §7.5.7–7.5.8 / Table 7-8 / Table 7-11",
+      "page": 43,
+      "return_period_yr_applied": 10,
+      "min_diameter_mm": 300,
+      "velocity_ms": {"min": 0.61, "max": 3.66},
+      "cover_m": 1.2,
+      "mh_spacing_m": {
+        "lt_800_mm_min": 70,
+        "lt_800_mm_max": 100,
+        "gt_800_mm_min": 100,
+        "gt_800_mm_max": 120,
+        "box_min": 120,
+        "box_max": 150
+      }
+    },
+    "irrigation": {
+      "clause": "§7.5.12",
+      "page": 47,
+      "velocity_max_ms": 2.0
+    }
+  },
+  "er_conflicts": {
+    "storm": [
+      {
+        "id": "return_period",
+        "title": "ER storm return period conflict (10-yr vs 20-yr)",
+        "a": "Table 7-8 / §7.5.3 city networks 10-yr (p.43)",
+        "b": "text 20-yr (p.43, 46)",
+        "applied": "10-yr (Table 7-8 / §7.5.3)",
+        "source_doc": "ER §7.5.3 / Table 7-8 p.43",
+        "statement": "ER internal conflict on storm return period: Table 7-8 / §7.5.3 state 10-yr for city networks (p.43) while body text cites 20-yr (p.43, 46). Until RCRC answers the RFI (DQ-13 / DQ-15), W6 applies 10-yr and reports this Observation."
+      },
+      {
+        "id": "min_velocity",
+        "title": "ER storm min velocity conflict (0.61 vs 0.9 m/s)",
+        "a": "§7.5.7 V 0.61 – 3.66 m/s",
+        "b": "0.9 m/s half-full (p.46)",
+        "applied": "§7.5.7 0.61 – 3.66 m/s",
+        "source_doc": "ER §7.5.7 p.43–46",
+        "statement": "ER internal conflict on storm minimum velocity: §7.5.7 gives 0.61 – 3.66 m/s while p.46 cites 0.9 m/s half-full. Until answered (DQ-15), W6 applies §7.5.7 and reports this Observation."
+      },
+      {
+        "id": "mh_spacing",
+        "title": "ER storm MH spacing conflict (Table 7-11 vs ≤ 80 m)",
+        "a": "Table 7-11: <800 mm 70–100 m; >800 mm 100–120 m (p.46)",
+        "b": "≤ 80 m (p.46)",
+        "applied": "Table 7-11",
+        "source_doc": "ER Table 7-11 p.46",
+        "statement": "ER internal conflict on storm MH spacing: Table 7-11 (70–100 / 100–120 m) vs ≤ 80 m on the same page. Until answered (DQ-15), W6 applies Table 7-11 and reports this Observation."
+      },
+      {
+        "id": "cover",
+        "title": "ER storm cover conflict (1.2 vs ~1.0 m)",
+        "a": "§7.5.8 cover ≥ 1.2 m",
+        "b": "~1.0 m (p.47)",
+        "applied": "§7.5.8 ≥ 1.2 m",
+        "source_doc": "ER §7.5.8 p.46–47",
+        "statement": "ER internal conflict on storm cover: §7.5.8 requires ≥ 1.2 m while p.47 cites ~1.0 m. Until answered (DQ-15), W6 applies 1.2 m and reports this Observation."
+      }
+    ]
+  },
+  "severity": {
+    "tag": "DQ-12",
+    "major": ["pressure", "fire", "min_gradient", "adverse", "mh_spacing"],
+    "minor": ["cover", "diameter_labels", "report_vs_model", "drafting_label"]
+  },
+  "phase": "A",
+  "phase_scope": ["W1", "W2", "W3", "W5_geometry", "W6_plan"],
+  "phase_out": ["W4", "W5_hydraulics", "W7", "W8", "wntr", "binary_out"]
+}

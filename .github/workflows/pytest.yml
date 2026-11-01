@@ -23,9 +23,8 @@ jobs:
             openpyxl pdfplumber reportlab python-docx 'ezdwg==0.16.0' PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 719 = 718 + D1 synthetic (NMAR key-plan G-KEYP vs UTM envelope)
-          # (708 + B1–B3: +1 C4 sign + 8 EPSG forms + 1 normalize_crs; 5 real env-gated).
-          # Cursor without LDIP_SKILL9_* / LDIP_REVIEW_ROOT: real gates skipped.
-          python tools/check_suite.py --expect 719 --tests tests
+          # 737 = 719 + skill 11 phase A (T11-1…T11-6 synthetic + helpers + T11-R1…R5 env-gated).
+          # Cursor without LDIP_SKILL11_* / LDIP_REVIEW_ROOT: real gates skipped.
+          python tools/check_suite.py --expect 737 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

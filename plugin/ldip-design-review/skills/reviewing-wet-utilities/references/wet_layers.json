@@ -1,0 +1,39 @@
+{
+  "tag": "[PROPOSED — DQ-6; per-site wet plan layers; code list moves to rulebook later]",
+  "note": "Wet-network plan layers for STO / SWN / PWT / IRR-10000 drawings (skill 11). Short name after last '$' is also matched.",
+  "default_site": "NMAR",
+  "shared_layers": {
+    "-01- Storm Water": {"utility": "storm", "feature": "pipe"},
+    "-01- Storm CB": {"utility": "storm", "feature": "catch_basin"},
+    "-01- Storm Outfall": {"utility": "storm", "feature": "outfall"},
+    "-01- Attenuation Pond": {"utility": "storm", "feature": "pond"},
+    "-02- Sewerage": {"utility": "sewer", "feature": "pipe"},
+    "-02- Sewer MH": {"utility": "sewer", "feature": "manhole"},
+    "-02-Sewer FM": {"utility": "sewer", "feature": "force_main"},
+    "-04- Irrigation": {"utility": "irrigation", "feature": "pipe"},
+    "-04- Irrigation Valve": {"utility": "irrigation", "feature": "valve"},
+    "-05- Potable Water": {"utility": "water", "feature": "pipe"},
+    "-05- Water Valve": {"utility": "water", "feature": "valve"},
+    "-05- Hydrant": {"utility": "water", "feature": "hydrant"},
+    "-05- Washout": {"utility": "water", "feature": "washout"},
+    "-05- Air Valve": {"utility": "water", "feature": "air_valve"},
+    "SWN-PIPE": {"utility": "sewer", "feature": "pipe"},
+    "SWN-MH": {"utility": "sewer", "feature": "manhole"},
+    "SWN-TEXT": {"utility": "sewer", "feature": "label"},
+    "PWT-PIPE": {"utility": "water", "feature": "pipe"},
+    "PWT-TEXT": {"utility": "water", "feature": "label"},
+    "PWT-HYDRANT": {"utility": "water", "feature": "hydrant"},
+    "STO-PIPE": {"utility": "storm", "feature": "pipe"},
+    "STO-TEXT": {"utility": "storm", "feature": "label"},
+    "STO-OUTFALL": {"utility": "storm", "feature": "outfall"},
+    "IRR-PIPE": {"utility": "irrigation", "feature": "pipe"},
+    "C-PIPE-200": {"utility": "sewer", "feature": "pipe", "diameter_mm": 200},
+    "C-PIPE-250": {"utility": "sewer", "feature": "pipe", "diameter_mm": 250},
+    "C-PIPE-300": {"utility": "sewer", "feature": "pipe", "diameter_mm": 300}
+  },
+  "sites": {
+    "NMAR": {"layers": "shared"},
+    "QRWN": {"layers": "shared"},
+    "NRJS": {"layers": "shared"}
+  }
+}
