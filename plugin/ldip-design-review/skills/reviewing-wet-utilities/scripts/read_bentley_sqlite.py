@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read SewerGEMS (.stsw.sqlite) / WaterGEMS (.wtg.sqlite) hydraulic models (skill 11).
 
-SPC-0006 Rev Q §4.19 / DQ-3:
-  - base alternative = lowest AlternativeID
+SPC-0006 Rev Q §4.19 / DQ-3 / PR #28 R1–R2:
+  - base alternative = lowest AlternativeID **per element**
   - storage is US feet **always** → SI (× 0.3048 for lengths/levels; × 304.8 for diameters mm)
   - real OpenFlows tables (HMIModelingElement / Conduit / IdahoPipe …) — no invented schema
   - optional SHP export cross-check (NMAR Co-17: D / L / inverts)
@@ -56,6 +56,18 @@ def _as_float(v):
         return None
 
 
+def _row_alt(row, cols):
+    if row is None:
+        return None
+    alt_col = _col(cols or [], "AlternativeID")
+    if not alt_col:
+        return None
+    try:
+        return int(row[alt_col]) if row[alt_col] is not None else None
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def _col(cols, *names):
     lower = {c.casefold(): c for c in cols}
     for n in names:
@@ -78,7 +90,7 @@ def detect_kind(path, network_arg):
 
 
 def choose_base_alternative(cur, tables):
-    """DQ-3: base alternative = lowest AlternativeID present."""
+    """Informational: global min AlternativeID across tables (per-element pick is in _index)."""
     alt_ids = set()
     for t in tables:
         cols = _cols(cur, t)
@@ -98,7 +110,10 @@ def choose_base_alternative(cur, tables):
 
 
 def _index_by_domain(cur, table, base_alt, required_cols=()):
-    """Map DomainElementID → row for base alternative (or all rows if no AlternativeID)."""
+    """Map DomainElementID → row with the **lowest AlternativeID for that element** (R1).
+
+    ``base_alt`` is unused for filtering; kept for call-site compatibility.
+    """
     if not table:
         return {}, []
     cols = _cols(cur, table)
@@ -110,18 +125,26 @@ def _index_by_domain(cur, table, base_alt, required_cols=()):
             return {}, cols
     alt_col = _col(cols, "AlternativeID")
     out = {}
-    if alt_col is not None and base_alt is not None:
-        rows = cur.execute(
-            f'SELECT * FROM "{table}" WHERE "{alt_col}" = ?', (base_alt,)
-        ).fetchall()
-    else:
-        rows = cur.execute(f'SELECT * FROM "{table}"').fetchall()
+    best_alt = {}
+    rows = cur.execute(f'SELECT * FROM "{table}"').fetchall()
     for r in rows:
         try:
             eid = int(r[id_col])
         except (TypeError, ValueError, KeyError):
             continue
-        out[eid] = r
+        if alt_col is None:
+            out[eid] = r
+            continue
+        try:
+            aid = int(r[alt_col]) if r[alt_col] is not None else None
+        except (TypeError, ValueError):
+            aid = None
+        if aid is None:
+            continue
+        prev = best_alt.get(eid)
+        if prev is None or aid < prev:
+            best_alt[eid] = aid
+            out[eid] = r
     return out, cols
 
 
@@ -320,7 +343,8 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
             "stop_label": (elements.get(stop_id) or {}).get("label"),
             "e_m": None,
             "n_m": None,
-            "alternative_id": base_alt,
+            "alternative_id": _row_alt(diam.get(eid) or inv.get(eid) or geom.get(eid),
+                                       diam_cols or inv_cols or geom_cols) or base_alt,
             "units_source": "US_feet",
         })
 
@@ -463,7 +487,8 @@ def read_pressure_network(cur, tables, elements, base_alt, network):
             "stop_label": (elements.get(stop_id) or {}).get("label"),
             "e_m": None,
             "n_m": None,
-            "alternative_id": base_alt,
+            "alternative_id": _row_alt(phys.get(eid) or geom.get(eid),
+                                       phys_cols or geom_cols) or base_alt,
             "units_source": "US_feet",
         })
 
