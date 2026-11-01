@@ -140,6 +140,13 @@ def _set_param(rules_doc, rule_id, name, value, tag="PROPOSED", source_id="SRC-1
     raise KeyError(rule_id)
 
 
+def _set_param_if_present(rules_doc, rule_id, name, value, **kwargs):
+    """Set a param when the rule is in get_rules output; skip inactive rules (e.g. GIS-011 in v8)."""
+    if any(r["rule_id"] == rule_id for r in rules_doc["rules"]):
+        return _set_param(rules_doc, rule_id, name, value, **kwargs)
+    return None
+
+
 def _ensure_buffer(rules):
     for r in rules["rules"]:
         if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
@@ -242,9 +249,15 @@ def _pattern_count_contains(patterns, prefix: str, needle: str) -> int:
     return total
 
 
-def _official_nmar_area(rules) -> float | None:
-    for r in rules["rules"]:
-        if r["rule_id"] != "GIS-011":
+def _official_nmar_area(rb_path) -> float | None:
+    """Read GIS-011.parameters.official_site_area.value.NMAR.nature from the rulebook file.
+
+    get_rules drops inactive GIS-011 in rules_v8, so the area must come from the file, not
+    the agent rules JSON.
+    """
+    book = json.loads(Path(rb_path).read_text(encoding="utf-8"))
+    for r in book.get("rules", []):
+        if r.get("rule_id") != "GIS-011":
             continue
         p = (r.get("parameters") or {}).get("official_site_area") or {}
         val = p.get("value") or {}
@@ -265,9 +278,9 @@ def _poly_by_handle(ing_path, handle: str):
     return None
 
 
-def _nmar_envelope_from_ing_or_sites(ing_path, rules, sites):
+def _nmar_envelope_from_ing_or_sites(ing_path, rb_path, sites):
     """Closed polyline whose area ≈ official NMAR nature (±1 m²), else S7 corners from sites JSON."""
-    want = _official_nmar_area(rules)
+    want = _official_nmar_area(rb_path)
     data = json.loads(Path(ing_path).read_text(encoding="utf-8"))
     if want is not None:
         best = None
@@ -384,12 +397,13 @@ def test_t9_r3_nmar_envelope_and_tbm(tmp_path):
     sites, _ = _load_sites()
     ing = _ensure_ingestion(tmp_path, dwg, "NMAR")
     rules = _get_rules_gis(tmp_path, rb)
-    env = _nmar_envelope_from_ing_or_sites(ing, rules, sites)
+    env = _nmar_envelope_from_ing_or_sites(ing, rb, sites)
     if env is None:
         pytest.fail("NMAR envelope: no polyline ≈ official_site_area.NMAR and no S7 in sites JSON")
     _set_param(rules, "GIS-008", "site_envelope", {"NMAR": env})
     _set_param(rules, "GIS-008", "context_layers", {"NMAR": _context_layers_for("NMAR")})
-    _set_param(rules, "GIS-011", "site_boundary", {"NMAR": env["polygon"]})
+    # GIS-011 inactive in rules_v8 → omitted by get_rules; GIS-008 envelope is enough for check_crs
+    _set_param_if_present(rules, "GIS-011", "site_boundary", {"NMAR": env["polygon"]})
     _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
@@ -423,7 +437,8 @@ def test_t9_r4_gis017_nrjs_fail_nmar_pass(tmp_path):
     if "NRJS" not in env_map or "NMAR" not in env_map:
         pytest.fail("T9-R4 needs S8 (NRJS) and S7 (NMAR) in LDIP_SKILL9_SITES_JSON")
     _set_param(rules, "GIS-008", "site_envelope", env_map)
-    _set_param(rules, "GIS-011", "site_boundary", {
+    # GIS-011 inactive in rules_v8 → omitted by get_rules; GIS-008 envelope feeds check_control
+    _set_param_if_present(rules, "GIS-011", "site_boundary", {
         "NRJS": env_map["NRJS"]["polygon"], "NMAR": env_map["NMAR"]["polygon"],
     })
     _ensure_buffer(rules)
@@ -462,7 +477,8 @@ def test_t9_r5_qrwn_egl_landxml_coverage(tmp_path):
     ing_path = _landxml_ingestion(tmp_path, xml)
     rules = _get_rules_gis(tmp_path, rb)
     _set_param(rules, "GIS-008", "site_envelope", {"QRWN": env})
-    _set_param(rules, "GIS-011", "site_boundary", {"QRWN": env["polygon"]})
+    # GIS-011 inactive in rules_v8 → omitted by get_rules; GIS-008 envelope is enough for check_crs
+    _set_param_if_present(rules, "GIS-011", "site_boundary", {"QRWN": env["polygon"]})
     _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
