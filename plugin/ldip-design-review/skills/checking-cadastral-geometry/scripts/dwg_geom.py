@@ -210,7 +210,11 @@ def boundary_geom(bnd):
 
 
 def displacement_vectors(raw):
-    """Normalise known_displacements[SITE] to a list of (dE, dN)."""
+    """Normalise known_displacements[SITE] to a list of (dE, dN).
+
+    Convention (SRC-11 / SPC-0006 §4.18.3 C4): each vector is the (dE, dN) to **add** to
+    drawn coordinates to bring the group into the site frame (`site = drawn + vector`).
+    """
     if raw is None:
         return []
     if isinstance(raw, (list, tuple)) and len(raw) == 2 and not isinstance(raw[0], (list, tuple)):
@@ -223,6 +227,36 @@ def displacement_vectors(raw):
         else:
             out.append((float(item[0]), float(item[1])))
     return out
+
+
+def normalize_crs(value):
+    """Canonical EPSG form for CRS comparison (DWG GEODATA and LandXML CoordinateSystem).
+
+    Accepts ``32638``, ``EPSG:32638``, ``EPSG::32638``, ``urn:ogc:def:crs:EPSG::32638``
+    (any surrounding whitespace / case). Returns ``EPSG:<code>`` when an EPSG code is
+    recognised, else the uppercased stripped string, else None.
+    """
+    import re
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"(?:urn:ogc:def:crs:)?EPSG:{1,2}\s*(\d{4,6})\s*$", s, flags=re.IGNORECASE)
+    if m:
+        return f"EPSG:{m.group(1)}"
+    m = re.fullmatch(r"(\d{4,6})", s)
+    if m:
+        return f"EPSG:{m.group(1)}"
+    return s.upper()
+
+
+def crs_equal(declared, expected):
+    """True when declared and expected name the same CRS after :func:`normalize_crs`."""
+    a, b = normalize_crs(declared), normalize_crs(expected)
+    if a is None or b is None:
+        return False
+    return a == b
 
 
 def surface_extent_box(ext):

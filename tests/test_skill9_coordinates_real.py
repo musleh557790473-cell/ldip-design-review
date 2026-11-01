@@ -1,8 +1,13 @@
 """Skill 9 0.3.0 real-data gates T9-R1…T9-R5 (SPC-0006 Rev P §4.18.5).
 
-Skipped without LDIP_REVIEW_ROOT. Scratch rules are built from the owner's rules_v8 (or latest
-rules_v*) plus runtime values (envelope / context / displacements extracted or copied for the
-test only). No Parsons file or rule value is committed to Git — asserts use counts / patterns only.
+Env (explicit paths; same idea as skill 14):
+  LDIP_SKILL9_QRWN_DWG / LDIP_SKILL9_NRJS_DWG / LDIP_SKILL9_NMAR_DWG
+  LDIP_SKILL9_QRWN_LANDXML
+  LDIP_SKILL9_SITES_JSON   — S7 (NMAR) / S8 (NRJS) corner polygons; owner file outside Git
+  LDIP_SKILL9_<SITE>_INGESTION  — optional pre-built *.dwg.json (else convert+extract)
+  LDIP_REVIEW_ROOT / LDIP_REVIEW — rulebook root; when set, a missing input **fails** (not skip)
+
+No Parsons file or rule value is committed to Git — asserts use counts / patterns only.
 """
 from __future__ import annotations
 
@@ -14,17 +19,30 @@ from pathlib import Path
 
 import pytest
 
-ROOT = os.environ.get("LDIP_REVIEW_ROOT") or os.environ.get("LDIP_REVIEW")
-
-pytestmark = pytest.mark.skipif(
-    not ROOT or not Path(ROOT).is_dir(),
-    reason="LDIP_REVIEW_ROOT not set — real DWG / LandXML / rules_v8 stay out of Git",
-)
-
 REPO = Path(__file__).resolve().parents[1]
 SC = REPO / "plugin/ldip-design-review/skills/checking-cadastral-geometry/scripts"
 SK8 = REPO / "plugin/ldip-design-review/skills/applying-ldip-rulebook/scripts"
+SK1 = REPO / "plugin/ldip-design-review/skills/extracting-dwg-data/scripts"
+SK3 = REPO / "plugin/ldip-design-review/skills/parsing-landxml/scripts"
 PY = sys.executable
+
+ROOT = os.environ.get("LDIP_REVIEW_ROOT") or os.environ.get("LDIP_REVIEW")
+ENV = {
+    "QRWN_DWG": "LDIP_SKILL9_QRWN_DWG",
+    "NRJS_DWG": "LDIP_SKILL9_NRJS_DWG",
+    "NMAR_DWG": "LDIP_SKILL9_NMAR_DWG",
+    "QRWN_LANDXML": "LDIP_SKILL9_QRWN_LANDXML",
+    "SITES_JSON": "LDIP_SKILL9_SITES_JSON",
+    "QRWN_ING": "LDIP_SKILL9_QRWN_INGESTION",
+    "NRJS_ING": "LDIP_SKILL9_NRJS_INGESTION",
+    "NMAR_ING": "LDIP_SKILL9_NMAR_INGESTION",
+}
+_HAS_ANY = bool(ROOT) or any(os.environ.get(v) for v in ENV.values())
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_ANY,
+    reason="LDIP_SKILL9_* / LDIP_REVIEW_ROOT not set — real DWG / LandXML / rules stay out of Git",
+)
 
 
 def run(script, *args, skill=SC):
@@ -36,8 +54,29 @@ def run(script, *args, skill=SC):
     return msg
 
 
-def _root():
-    return Path(ROOT)
+def _fail_or_skip(msg: str):
+    if ROOT:
+        pytest.fail(msg)
+    pytest.skip(msg)
+
+
+def _env_file(name: str) -> Path | None:
+    p = os.environ.get(name)
+    if p and Path(p).is_file():
+        return Path(p)
+    return None
+
+
+def _require_file(env_name: str) -> Path:
+    p = _env_file(env_name)
+    if p is not None:
+        return p
+    _fail_or_skip(f"{env_name} missing/invalid"
+                  + (" while LDIP_REVIEW_ROOT is set" if ROOT else ""))
+
+
+def _root() -> Path | None:
+    return Path(ROOT) if ROOT and Path(ROOT).is_dir() else None
 
 
 def _find(root: Path, patterns):
@@ -47,61 +86,66 @@ def _find(root: Path, patterns):
     return sorted({p for p in hits if p.is_file()})
 
 
-def _rulebook(root: Path):
+def _rulebook_path() -> Path:
+    root = _root()
+    if root is None:
+        _fail_or_skip("LDIP_REVIEW_ROOT not set — need owner rulebook for real gates")
     rb_dir = root / "rulebook"
-    if not rb_dir.is_dir():
-        hits = _find(root, ["**/rules_v8.json", "**/rules_v*.json"])
-        return hits[-1] if hits else None
-    pref = list(rb_dir.glob("rules_v8.json")) or list(rb_dir.glob("rules_v*.json"))
-    return sorted(pref)[-1] if pref else None
+    if rb_dir.is_dir():
+        pref = list(rb_dir.glob("rules_v8.json")) or list(rb_dir.glob("rules_v*.json"))
+        if pref:
+            return sorted(pref)[-1]
+    hits = _find(root, ["**/rules_v8.json", "**/rules_v*.json"])
+    if hits:
+        # prefer v8 when present
+        v8 = [h for h in hits if h.name == "rules_v8.json"]
+        return v8[-1] if v8 else hits[-1]
+    pytest.fail("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
 
 
-def _get_rules_gis(tmp_path, rb):
-    out = tmp_path / "rules_GIS.json"
-    run("get_rules.py", "--rulebook", rb, "--agent", "GIS", "--out", out, skill=SK8)
-    return json.loads(out.read_text(encoding="utf-8"))
+def _load_sites():
+    path = _require_file(ENV["SITES_JSON"])
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        pytest.fail(f"{ENV['SITES_JSON']} must be a JSON object")
+    return doc, path
 
 
-def _set_param(rules_doc, rule_id, name, value, tag="PROPOSED"):
+def _site_polygon(sites: dict, *keys):
+    """Return {polygon: [[E,N],...]} from S7/S8/SITE keys (list or {polygon|corners})."""
+    for key in keys:
+        raw = sites.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, dict):
+            verts = raw.get("polygon") or raw.get("corners") or raw.get("vertices")
+            if verts is None and isinstance(raw.get(key), list):
+                verts = raw[key]
+        elif isinstance(raw, list):
+            verts = raw
+        else:
+            continue
+        if verts and len(verts) >= 3:
+            return {"polygon": [list(map(float, v[:2])) for v in verts]}
+    return None
+
+
+def _set_param(rules_doc, rule_id, name, value, tag="PROPOSED", source_id="SRC-11", clause="§4.18 test"):
     for r in rules_doc["rules"]:
         if r["rule_id"] == rule_id:
-            r.setdefault("parameters", {})[name] = {"value": value, "tag": tag}
+            r.setdefault("parameters", {})[name] = {
+                "value": value, "tag": tag, "source_id": source_id, "clause": clause, "blocking": False,
+            }
             return r
     raise KeyError(rule_id)
 
 
-def _poly_by_handle(ing, handle):
-    h = str(handle).upper()
-    for p in ing.get("content", {}).get("polylines", []):
-        if str(p.get("handle", "")).upper() == h:
-            return p
-    return None
-
-
-def _ensure_ingestion(tmp_path, dwg_path: Path):
-    """Return a *.dwg.json path — reuse existing ingestion next to the DWG or under 0.ai_context."""
-    cand = list(dwg_path.parent.glob(dwg_path.stem + "*.dwg.json"))
-    cand += _find(_root(), [f"**/{dwg_path.stem}.dwg.json", f"**/*{dwg_path.stem}*.dwg.json"])
-    if cand:
-        return cand[0]
-    # Extract with skill 1 when available
-    sk1 = REPO / "plugin/ldip-design-review/skills/extracting-dwg-data/scripts/extract_dxf.py"
-    if not sk1.is_file():
-        pytest.skip(f"no ingestion for {dwg_path.name} and extract_dxf.py missing")
-    out = tmp_path / f"{dwg_path.stem}.dwg.json"
-    p = subprocess.run([PY, str(sk1), "--dwg", str(dwg_path), "--out", str(out)],
-                       capture_output=True, text=True, timeout=1800)
-    if p.returncode != 0:
-        pytest.skip(f"extract failed for {dwg_path.name}: {p.stderr[-500:]}")
-    return out
-
-
-def _envelope_from_handle(ing_path, handle):
-    ing = json.loads(Path(ing_path).read_text(encoding="utf-8"))
-    p = _poly_by_handle(ing, handle)
-    if p is None:
-        return None
-    return {"polygon": [list(map(float, v[:2])) for v in p["vertices"]]}
+def _ensure_buffer(rules):
+    for r in rules["rules"]:
+        if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
+            r["parameters"]["envelope_buffer"] = {
+                "value": 25.0, "tag": "PROPOSED", "source_id": "SRC-11", "clause": "§2.5", "blocking": False,
+            }
 
 
 def _context_layers_for(site):
@@ -110,238 +154,323 @@ def _context_layers_for(site):
     return extra + common
 
 
+def _get_rules_gis(tmp_path, rb_path):
+    out = tmp_path / "rules_GIS.json"
+    run("get_rules.py", "--rulebook", rb_path, "--agent", "GIS", "--out", out, skill=SK8)
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _scratch_rulebook_gis017(tmp_path, rb_path):
+    """Copy rulebook; set GIS-017 advisory + max_distance_tbm 500 (schema source_id/clause)."""
+    book = json.loads(Path(rb_path).read_text(encoding="utf-8"))
+    found = False
+    for r in book.get("rules", []):
+        if r.get("rule_id") != "GIS-017":
+            continue
+        found = True
+        r["state"] = "advisory"
+        r.setdefault("parameters", {})["max_distance_tbm"] = {
+            "value": 500.0, "unit": "m", "tag": "PROPOSED",
+            "source_id": "SRC-11", "clause": "§4.18 DP-8", "blocking": False,
+            "note": "scratch for T9-R4; AICC Survey to confirm before rules_v9 activation",
+        }
+    if not found:
+        pytest.fail("GIS-017 not in rulebook — cannot activate for T9-R4")
+    out = tmp_path / "rulebook_gis017_scratch.json"
+    out.write_text(json.dumps(book), encoding="utf-8")
+    return out
+
+
+def _ensure_ingestion(tmp_path, dwg_path: Path, site: str):
+    """Return *.dwg.json — env ingestion, reuse beside DWG, or convert(ezdwg)+extract(--linework)."""
+    ing_env = ENV.get(f"{site}_ING")
+    if ing_env:
+        p = _env_file(ing_env)
+        if p is not None:
+            return p
+    cand = list(dwg_path.parent.glob(dwg_path.stem + "*.dwg.json"))
+    root = _root()
+    if root is not None:
+        cand += _find(root, [f"**/{dwg_path.stem}.dwg.json", f"**/*{dwg_path.stem}*.dwg.json"])
+    if cand:
+        return cand[0]
+    convert = SK1 / "convert.py"
+    extract = SK1 / "extract_dxf.py"
+    if not convert.is_file() or not extract.is_file():
+        _fail_or_skip(f"no ingestion for {dwg_path.name} and skill 1 convert/extract missing")
+    work = tmp_path / f"ing_{site}_{dwg_path.stem}"
+    work.mkdir(parents=True, exist_ok=True)
+    dxf = work / f"{dwg_path.stem}.dxf"
+    log = work / f"{dwg_path.stem}.convert.json"
+    out = work / f"{dwg_path.stem}.dwg.json"
+    p = subprocess.run(
+        [PY, str(convert), "--engine", "ezdwg", "--dwg", str(dwg_path),
+         "--out", str(dxf), "--log", str(log)],
+        capture_output=True, text=True, timeout=1800)
+    if p.returncode != 0:
+        pytest.fail(f"convert.py ezdwg failed for {dwg_path.name}: {p.stderr[-800:] or p.stdout[-800:]}")
+    p = subprocess.run(
+        [PY, str(extract), "--dxf", str(dxf), "--dwg", str(dwg_path),
+         "--convert-log", str(log), "--out", str(out), "--source-path", str(dwg_path), "--linework"],
+        capture_output=True, text=True, timeout=1800)
+    if p.returncode != 0:
+        pytest.fail(f"extract_dxf.py failed for {dwg_path.name}: {p.stderr[-800:] or p.stdout[-800:]}")
+    return out
+
+
+def _sum_context_prefix(profile: dict, prefix: str) -> int:
+    """Sum profile_context_outside counts whose key equals or starts with prefix (xref chain)."""
+    pref = prefix.casefold()
+    total = 0
+    for k, n in (profile or {}).items():
+        kk = str(k).casefold()
+        if kk == pref or kk.startswith(pref):
+            total += int(n)
+    return total
+
+
+def _pattern_count_contains(patterns, prefix: str, needle: str) -> int:
+    """Sum counts for patterns starting with prefix whose remainder contains needle."""
+    total = 0
+    for p in patterns:
+        name = p.get("pattern") or ""
+        if not name.startswith(prefix):
+            continue
+        rest = name[len(prefix):]
+        if needle in rest:
+            total += int(p.get("count") or 0)
+    return total
+
+
+def _official_nmar_area(rules) -> float | None:
+    for r in rules["rules"]:
+        if r["rule_id"] != "GIS-011":
+            continue
+        p = (r.get("parameters") or {}).get("official_site_area") or {}
+        val = p.get("value") or {}
+        nmar = val.get("NMAR") if isinstance(val, dict) else None
+        if isinstance(nmar, dict) and nmar.get("nature") is not None:
+            return float(nmar["nature"])
+        if isinstance(nmar, (int, float)):
+            return float(nmar)
+    return None
+
+
+def _poly_by_handle(ing_path, handle: str):
+    h = str(handle).upper()
+    data = json.loads(Path(ing_path).read_text(encoding="utf-8"))
+    for p in data.get("content", {}).get("polylines", []):
+        if str(p.get("handle", "")).upper() == h:
+            return {"polygon": [list(map(float, v[:2])) for v in p["vertices"]]}
+    return None
+
+
+def _nmar_envelope_from_ing_or_sites(ing_path, rules, sites):
+    """Closed polyline whose area ≈ official NMAR nature (±1 m²), else S7 corners from sites JSON."""
+    want = _official_nmar_area(rules)
+    data = json.loads(Path(ing_path).read_text(encoding="utf-8"))
+    if want is not None:
+        best = None
+        for p in data.get("content", {}).get("polylines", []):
+            a = float(p.get("area") or 0)
+            if abs(a - want) <= 1.0:
+                if best is None or abs(a - want) < abs(best[0] - want):
+                    best = (a, p)
+        if best is not None:
+            return {"polygon": [list(map(float, v[:2])) for v in best[1]["vertices"]]}
+    env = _site_polygon(sites, "S7", "NMAR")
+    if env is not None:
+        return env
+    return None
+
+
+def _qrwn_envelope(ing_path, sites):
+    """QRWN envelope from sites JSON when present; else accepted DWG handle 6B890 (scratch only)."""
+    env = _site_polygon(sites, "QRWN", "S_QRWN")
+    if env is not None:
+        return env
+    return _poly_by_handle(ing_path, "6B890")
+
+
+def _landxml_ingestion(tmp_path, xml_or_json: Path) -> Path:
+    """Return LandXML ingestion JSON; parse with --in when given a raw .xml (do not alter content)."""
+    p = xml_or_json
+    if p.suffix.lower() == ".json" or str(p).endswith(".xml.json"):
+        return p
+    parse = SK3 / "parse_landxml.py"
+    if not parse.is_file():
+        pytest.fail("parse_landxml.py missing")
+    out_dir = tmp_path / "landxml_batch"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # skill 3: --in + --out batch dir; provenance from the file name / employer for RCRC survey
+    rc = subprocess.run(
+        [PY, str(parse), "--in", str(p), "--out", str(out_dir), "--provenance", "employer"],
+        capture_output=True, text=True, timeout=1800)
+    if rc.returncode != 0:
+        pytest.fail(f"parse_landxml failed: {rc.stderr[-800:] or rc.stdout[-800:]}")
+    produced = sorted(out_dir.glob("*.xml.json")) or sorted(out_dir.rglob("*.json"))
+    if not produced:
+        pytest.fail("parse_landxml produced no JSON")
+    return produced[0]
+
+
 # ------------------------------------------------------------------ T9-R1
 def test_t9_r1_qrwn_11000_context_and_envelope(tmp_path):
-    """T9-R1: QRWN 11000 — Al_Qairawan_Parcel → context; units pass; CRS not_declared."""
-    root = _root()
-    rb = _rulebook(root)
-    if not rb:
-        pytest.skip("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
-    dwgs = _find(root, ["**/*QRWN*MPL*DWG*11000*.dwg", "**/*QRWN*11000*.dwg"])
-    if not dwgs:
-        pytest.skip("QRWN MPL DWG 11000 not found")
-    ing = _ensure_ingestion(tmp_path, dwgs[0])
+    """T9-R1: QRWN 11000 — Al_Qairawan_Parcel* → context (sum prefix); units pass; CRS not_declared."""
+    dwg = _require_file(ENV["QRWN_DWG"])
+    rb = _rulebook_path()
+    sites, _ = _load_sites()
+    ing = _ensure_ingestion(tmp_path, dwg, "QRWN")
     rules = _get_rules_gis(tmp_path, rb)
-    env = _envelope_from_handle(ing, "6B890")
+    env = _qrwn_envelope(ing, sites)
     if env is None:
-        pytest.skip("QRWN envelope handle 6B890 not in ingestion")
+        pytest.fail("QRWN envelope missing (sites JSON QRWN / handle 6B890)")
     _set_param(rules, "GIS-008", "site_envelope", {"QRWN": env})
     _set_param(rules, "GIS-008", "context_layers", {"QRWN": _context_layers_for("QRWN")})
-    if _set_param.__defaults__:
-        pass
-    # ensure buffer present
-    for r in rules["rules"]:
-        if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
-            r["parameters"]["envelope_buffer"] = {"value": 25.0, "tag": "PROPOSED"}
+    _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
-    msg = run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "QRWN",
-              "--out", tmp_path / "gis008.json")
+    run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "QRWN",
+        "--out", tmp_path / "gis008.json")
     out = json.loads((tmp_path / "gis008.json").read_text())
     assert out["files"][0]["units"] == "pass"
     assert out["files"][0]["crs"] == "not_declared"
     ctx = out["files"][0].get("profile_context_outside") or {}
-    # count only — Al_Qairawan_Parcel expected in context profile
-    assert ctx.get("Al_Qairawan_Parcel", 0) >= 3000, f"context count {ctx}"
-    # findings only on non-context layers
+    ctx_n = _sum_context_prefix(ctx, "Al_Qairawan_Parcel")
+    assert ctx_n >= 3000, f"context prefix sum {ctx_n} from {ctx}"
     for p in out.get("patterns", []):
         layer = p["pattern"].split("/", 1)[-1]
-        assert not layer.startswith("Al_Qairawan_Parcel")
+        assert not layer.casefold().startswith("al_qairawan_parcel")
         assert layer not in ("G-KEYP", "G-TTLB", "Defpoints")
 
 
 # ------------------------------------------------------------------ T9-R2
 def test_t9_r2_nrjs_displaced_plot_layers(tmp_path):
-    """T9-R2: NRJS 10001 — displaced_layer_group on 2D-PR-Plot* after SRC-11 vector; count 112."""
-    root = _root()
-    rb = _rulebook(root)
-    if not rb:
-        pytest.skip("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
-    dwgs = _find(root, ["**/*NRJS*MPL*DWG*10001*.dwg", "**/*NRJS*10001*.dwg"])
-    if not dwgs:
-        pytest.skip("NRJS MPL DWG 10001 not found")
-    ing = _ensure_ingestion(tmp_path, dwgs[0])
-    # test envelope = drawn plot 180 (handle 31B3A per §4.18.4)
-    env = _envelope_from_handle(ing, "31B3A")
+    """T9-R2: NRJS — S8 envelope; displaced Plot (25x12)/(30x10)/AN-Symbol; (20x15) outside."""
+    dwg = _require_file(ENV["NRJS_DWG"])
+    rb = _rulebook_path()
+    sites, _ = _load_sites()
+    env = _site_polygon(sites, "S8", "NRJS")
     if env is None:
-        pytest.skip("NRJS plot-180 handle 31B3A not in ingestion")
+        pytest.fail("S8 / NRJS envelope missing in LDIP_SKILL9_SITES_JSON")
+    ing = _ensure_ingestion(tmp_path, dwg, "NRJS")
     rules = _get_rules_gis(tmp_path, rb)
     _set_param(rules, "GIS-008", "site_envelope", {"NRJS": env})
-    _set_param(rules, "GIS-008", "known_displacements", {"NRJS": [-1107.56, 34.31]})
+    _set_param(rules, "GIS-008", "known_displacements", {"NRJS": [-1107.56, 34.31]},
+               source_id="SRC-11", clause="§4.6")
     _set_param(rules, "GIS-008", "displacement_min_entities", 20)
     _set_param(rules, "GIS-008", "context_layers", {"NRJS": _context_layers_for("NRJS")})
-    for r in rules["rules"]:
-        if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
-            r["parameters"]["envelope_buffer"] = {"value": 25.0, "tag": "PROPOSED"}
+    _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
-    msg = run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "NRJS",
-              "--out", tmp_path / "gis008.json")
+    run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "NRJS",
+        "--out", tmp_path / "gis008.json")
     out = json.loads((tmp_path / "gis008.json").read_text())
-    disp = [p for p in out["patterns"] if p["pattern"].startswith("displaced_layer_group/2D-PR-Plot")]
-    assert len(disp) >= 3, f"expected ≥3 displaced 2D-PR-Plot* patterns, got { [p['pattern'] for p in out['patterns']] }"
-    total = sum(p["count"] for p in disp)
-    assert total == 112, f"T9-R2 expected 112 displaced entities, got {total}"
+    pats = out.get("patterns") or []
+    # layer names contain 2D-PR-Plot (…) / 2D-PR-AN-Symbol after $ chains
+    assert _pattern_count_contains(pats, "displaced_layer_group/", "2D-PR-Plot (25x12)") == 67
+    assert _pattern_count_contains(pats, "displaced_layer_group/", "2D-PR-Plot (30x10)") == 34
+    assert _pattern_count_contains(pats, "displaced_layer_group/", "2D-PR-AN-Symbol") == 112
+    # (20x15) has only 11 (< displacement_min_entities 20) → outside, not displaced
+    assert _pattern_count_contains(pats, "displaced_layer_group/", "2D-PR-Plot (20x15)") == 0
+    assert _pattern_count_contains(pats, "outside_site_envelope/", "2D-PR-Plot (20x15)") == 11
 
 
 # ------------------------------------------------------------------ T9-R3
 def test_t9_r3_nmar_envelope_and_tbm(tmp_path):
-    """T9-R3: NMAR TEL 10000-000 — boundary area count; site TBM inside; legend-at-origin patterns."""
-    root = _root()
-    rb = _rulebook(root)
-    if not rb:
-        pytest.skip("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
-    dwgs = _find(root, ["**/*NMAR*10000-000*.dwg", "**/*NMAR*TEL*10000*.dwg", "**/*NMAR*10000*.dwg"])
-    if not dwgs:
-        pytest.skip("NMAR TEL 10000 DWG not found")
-    ing = _ensure_ingestion(tmp_path, dwgs[0])
+    """T9-R3: NMAR TEL — envelope from official area polyline or S7; site TBM inside True."""
+    dwg = _require_file(ENV["NMAR_DWG"])
+    rb = _rulebook_path()
+    sites, _ = _load_sites()
+    ing = _ensure_ingestion(tmp_path, dwg, "NMAR")
     rules = _get_rules_gis(tmp_path, rb)
-    # Prefer envelope already in rules; else skip (probe accepted road-layout xref — may be separate file)
-    env_param = None
-    for r in rules["rules"]:
-        if r["rule_id"] == "GIS-008":
-            env_param = (r.get("parameters") or {}).get("site_envelope")
-    if not env_param or env_param.get("tag") == "GAP" or not (env_param.get("value") or {}).get("NMAR"):
-        # try largest closed polyline as scratch envelope for the test only
-        data = json.loads(Path(ing).read_text(encoding="utf-8"))
-        best = None
-        for p in data.get("content", {}).get("polylines", []):
-            a = float(p.get("area") or 0)
-            if best is None or a > best[0]:
-                best = (a, p)
-        if not best or best[0] < 1000:
-            pytest.skip("NMAR site_envelope not in rules and no large boundary polyline")
-        env = {"polygon": [list(map(float, v[:2])) for v in best[1]["vertices"]]}
-        _set_param(rules, "GIS-008", "site_envelope", {"NMAR": env})
-        # official area check via GIS-011 when area matches
-        _set_param(rules, "GIS-011", "official_site_area",
-                   {"NMAR": {"nature": best[0], "deed": best[0]}})
-        _set_param(rules, "GIS-011", "tolerance_abs", 1.0)
-        _set_param(rules, "GIS-011", "site_boundary", {"NMAR": env["polygon"]})
+    env = _nmar_envelope_from_ing_or_sites(ing, rules, sites)
+    if env is None:
+        pytest.fail("NMAR envelope: no polyline ≈ official_site_area.NMAR and no S7 in sites JSON")
+    _set_param(rules, "GIS-008", "site_envelope", {"NMAR": env})
     _set_param(rules, "GIS-008", "context_layers", {"NMAR": _context_layers_for("NMAR")})
-    for r in rules["rules"]:
-        if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
-            r["parameters"]["envelope_buffer"] = {"value": 25.0, "tag": "PROPOSED"}
+    _set_param(rules, "GIS-011", "site_boundary", {"NMAR": env["polygon"]})
+    _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
-    msg = run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "NMAR",
-              "--out", tmp_path / "gis008.json")
+    run("check_crs.py", "--ingestion", ing, "--rules", rules_path, "--site", "NMAR",
+        "--out", tmp_path / "gis008.json")
     out = json.loads((tmp_path / "gis008.json").read_text())
     assert out["files"][0]["units"] == "pass"
-    # TBM inside via control[] when datum present
     ctrl = out.get("control") or []
     tbm = [c for c in ctrl if c.get("role") == "site_tbm"]
-    if tbm:
-        assert tbm[0]["inside"] is True or tbm[0]["distance_to_boundary_m"] <= 500
-    # legend-at-origin → some outside patterns expected (count > 0)
+    assert tbm, "T9-R3 expected site_tbm in control[]"
+    assert tbm[0]["inside"] is True
     outside = [p for p in out["patterns"] if p["pattern"].startswith("outside_site_envelope/")]
     assert outside, "T9-R3 expected at least one outside_site_envelope pattern (legend/origin)"
 
 
 # ------------------------------------------------------------------ T9-R4
 def test_t9_r4_gis017_nrjs_fail_nmar_pass(tmp_path):
-    """T9-R4: rules_v8 datum_reference — NRJS no_site_tbm; NMAR pass (with max_distance_tbm)."""
-    root = _root()
-    rb = _rulebook(root)
-    if not rb:
-        pytest.skip("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
-    rules = _get_rules_gis(tmp_path, rb)
-    # Activate threshold for the scratch copy only (DP-8 / rules_v9)
-    _set_param(rules, "GIS-017", "max_distance_tbm", 500.0)
-    # Ensure site boundaries exist for distance (from envelope if needed)
-    for site in ("NRJS", "NMAR"):
-        for r in rules["rules"]:
-            if r["rule_id"] == "GIS-011":
-                bnd = (r.get("parameters") or {}).get("site_boundary", {})
-                if bnd.get("tag") == "GAP" or not (bnd.get("value") or {}).get(site):
-                    # use envelope as boundary for distance
-                    for r8 in rules["rules"]:
-                        if r8["rule_id"] == "GIS-008":
-                            env = (r8.get("parameters") or {}).get("site_envelope", {})
-                            ev = (env.get("value") or {}).get(site)
-                            if ev:
-                                poly = ev.get("polygon") if isinstance(ev, dict) else None
-                                if poly:
-                                    cur = (r.get("parameters") or {}).get("site_boundary", {}).get("value") or {}
-                                    if not isinstance(cur, dict):
-                                        cur = {}
-                                    cur = dict(cur)
-                                    cur[site] = poly
-                                    _set_param(rules, "GIS-011", "site_boundary", cur)
+    """T9-R4: scratch rulebook GIS-017 advisory + 500 m; NRJS no_site_tbm; NMAR pass."""
+    rb = _rulebook_path()
+    sites, _ = _load_sites()
+    scratch_rb = _scratch_rulebook_gis017(tmp_path, rb)
+    rules = _get_rules_gis(tmp_path, scratch_rb)
+    # envelopes from S7/S8 for boundary distance
+    env_map = {}
+    s8 = _site_polygon(sites, "S8", "NRJS")
+    s7 = _site_polygon(sites, "S7", "NMAR")
+    if s8:
+        env_map["NRJS"] = s8
+    if s7:
+        env_map["NMAR"] = s7
+    if "NRJS" not in env_map or "NMAR" not in env_map:
+        pytest.fail("T9-R4 needs S8 (NRJS) and S7 (NMAR) in LDIP_SKILL9_SITES_JSON")
+    _set_param(rules, "GIS-008", "site_envelope", env_map)
+    _set_param(rules, "GIS-011", "site_boundary", {
+        "NRJS": env_map["NRJS"]["polygon"], "NMAR": env_map["NMAR"]["polygon"],
+    })
+    _ensure_buffer(rules)
+    # GIS-017 must be present after get_rules from the scratch rulebook
+    if not any(r["rule_id"] == "GIS-017" for r in rules["rules"]):
+        pytest.fail("GIS-017 missing after get_rules on scratch rulebook")
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
 
-    # NRJS — no site TBM
     msg = run("check_control.py", "--rules", rules_path, "--site", "NRJS", "--out", tmp_path / "nrjs.json")
     out = json.loads((tmp_path / "nrjs.json").read_text())
-    if msg["result"] == "not_run":
-        pytest.skip(f"T9-R4 NRJS not_run: {out.get('reason')}")
-    assert msg["result"] == "fail"
+    assert msg["result"] == "fail", out
     assert out["patterns"][0]["pattern"] == "no_site_tbm"
 
-    # NMAR — pass
     msg = run("check_control.py", "--rules", rules_path, "--site", "NMAR", "--out", tmp_path / "nmar.json")
     out = json.loads((tmp_path / "nmar.json").read_text())
-    if msg["result"] == "not_run":
-        pytest.skip(f"T9-R4 NMAR not_run: {out.get('reason')}")
     assert msg["result"] == "pass", out
 
 
 # ------------------------------------------------------------------ T9-R5
 def test_t9_r5_qrwn_egl_landxml_coverage(tmp_path):
-    """T9-R5: QRWN RCRC EGL LandXML — coverage pass; no finding."""
-    root = _root()
-    rb = _rulebook(root)
-    if not rb:
-        pytest.skip("rules_v8 / rules_v* not found under LDIP_REVIEW_ROOT")
-    xmls = _find(root, ["**/*QRWN*EGL*.xml", "**/*QRWN*egl*.xml", "**/*QRWN*RCRC*.xml",
-                        "**/*QRWN*.xml.json", "**/*EGL*.xml.json"])
-    # Prefer LandXML ingestion JSON
-    ings = [p for p in xmls if p.suffix == ".json" or str(p).endswith(".xml.json")]
-    raw_xml = [p for p in xmls if p.suffix.lower() == ".xml"]
-    if not ings and raw_xml:
-        # parse with skill 3
-        sk3 = REPO / "plugin/ldip-design-review/skills/parsing-landxml/scripts/parse_landxml.py"
-        if not sk3.is_file():
-            pytest.skip("QRWN EGL LandXML found but parse_landxml.py missing")
-        out_ing = tmp_path / "egl.xml.json"
-        p = subprocess.run([PY, str(sk3), "--file", str(raw_xml[0]), "--out", str(out_ing),
-                            "--provenance", "employer"],
-                           capture_output=True, text=True, timeout=1800)
-        if p.returncode != 0:
-            pytest.skip(f"parse_landxml failed: {p.stderr[-400:]}")
-        ings = [out_ing]
-    if not ings:
-        pytest.skip("QRWN RCRC EGL LandXML not found under LDIP_REVIEW_ROOT")
-    # Need QRWN envelope — from 11000 handle if available
-    dwgs = _find(root, ["**/*QRWN*MPL*DWG*11000*.dwg", "**/*QRWN*11000*.dwg"])
+    """T9-R5: QRWN RCRC LandXML — coverage pass; CRS normalised; do not alter inputs."""
+    xml = _require_file(ENV["QRWN_LANDXML"])
+    rb = _rulebook_path()
+    sites, _ = _load_sites()
+    # QRWN envelope: sites JSON or from the QRWN DWG handle (scratch rules only)
+    env = _site_polygon(sites, "QRWN", "S_QRWN")
+    if env is None:
+        dwg = _env_file(ENV["QRWN_DWG"])
+        if dwg is None:
+            pytest.fail("T9-R5 needs QRWN in sites JSON or LDIP_SKILL9_QRWN_DWG for envelope handle")
+        dwg_ing = _ensure_ingestion(tmp_path, dwg, "QRWN")
+        env = _poly_by_handle(dwg_ing, "6B890")
+    if env is None:
+        pytest.fail("QRWN envelope missing for T9-R5")
+    ing_path = _landxml_ingestion(tmp_path, xml)
     rules = _get_rules_gis(tmp_path, rb)
-    if dwgs:
-        dwg_ing = _ensure_ingestion(tmp_path, dwgs[0])
-        env = _envelope_from_handle(dwg_ing, "6B890")
-        if env:
-            _set_param(rules, "GIS-008", "site_envelope", {"QRWN": env})
-            _set_param(rules, "GIS-011", "site_boundary", {"QRWN": env["polygon"]})
-    for r in rules["rules"]:
-        if r["rule_id"] == "GIS-008" and "envelope_buffer" not in r.get("parameters", {}):
-            r["parameters"]["envelope_buffer"] = {"value": 25.0, "tag": "PROPOSED"}
-    # Ensure landxml file is treated as employer survey if provenance missing
-    ing_path = ings[0]
-    data = json.loads(Path(ing_path).read_text(encoding="utf-8"))
-    if data.get("source", {}).get("file_type") == "landxml":
-        data["source"]["provenance"] = data["source"].get("provenance") or "employer"
-        # tag surfaces as EGL if name suggests
-        for s in data.get("content", {}).get("surfaces") or []:
-            if "EGL" not in str(s.get("name", "")).upper():
-                s["name"] = (s.get("name") or "") + " EGL"
-        ing_path = tmp_path / "egl_scratch.json"
-        ing_path.write_text(json.dumps(data), encoding="utf-8")
+    _set_param(rules, "GIS-008", "site_envelope", {"QRWN": env})
+    _set_param(rules, "GIS-011", "site_boundary", {"QRWN": env["polygon"]})
+    _ensure_buffer(rules)
     rules_path = tmp_path / "scratch_rules.json"
     rules_path.write_text(json.dumps(rules), encoding="utf-8")
     msg = run("check_crs.py", "--ingestion", ing_path, "--rules", rules_path, "--site", "QRWN",
               "--out", tmp_path / "gis008.json")
     out = json.loads((tmp_path / "gis008.json").read_text())
-    if msg["result"] == "not_run" or (out.get("files") and out["files"][0].get("envelope") == "not_run"):
-        pytest.skip(f"T9-R5 envelope/boundary not available: {out.get('subchecks_not_run')}")
-    assert not any(p["pattern"] == "survey_not_covering_site" for p in out.get("patterns", [])), out.get("patterns")
-    assert msg["result"] == "pass" or not out.get("patterns")
+    assert out["files"][0].get("envelope") == "pass", out
+    # B2: LandXML epsg_code 32638 must match rules EPSG:32638 (no crs_declared_other)
+    assert out["files"][0].get("crs") == "pass", out["files"][0]
+    assert not out.get("patterns"), out.get("patterns")
+    assert msg["result"] == "pass"

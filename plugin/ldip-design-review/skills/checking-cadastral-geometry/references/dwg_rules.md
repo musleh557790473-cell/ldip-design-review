@@ -17,9 +17,9 @@ Spec: SPC-0006 Rev B §4.6 (base) + Rev P §4.18 (coordinates 0.3.0). Schedule r
 | Step | Value | Pattern |
 |---|---|---|
 | C1 units | `insunits` (6 = metres) vs `$INSUNITS` | `insunits_not_metres` |
-| C2 CRS | `crs` vs GEODATA / LandXML `CoordinateSystem`; none → `not_declared`, no finding | `crs_declared_other` |
+| C2 CRS | `crs` vs GEODATA / LandXML `CoordinateSystem` (normalised: `32638` / `EPSG:32638` / `EPSG::32638` / `urn:ogc:def:crs:EPSG::32638`); none → `not_declared`, no finding | `crs_declared_other` |
 | C3 envelope | `site_envelope[SITE]` + `envelope_buffer`; `context_layers[SITE]` (name/prefix, incl. via_block) → `profile_context_outside` only | `outside_site_envelope/<layer>` |
-| C4 displace | `known_displacements[SITE]`, `displacement_min_entities`; ≥95 % inside after undoing a known vector → finding; else candidate vector (info) | `displaced_layer_group/<layer>` |
+| C4 displace | `known_displacements[SITE]`, `displacement_min_entities`; ≥95 % inside after **adding** a known vector (`site = drawn + vector`, SRC-11) → finding; else candidate vector (info) | `displaced_layer_group/<layer>` |
 | C5 models | LandXML/IFC design → inside test; survey (`provenance` employer, or role/name NGL/EGL) → coverage vs `site_boundary` | `outside_site_envelope/<source>`, `survey_not_covering_site` |
 | C6 control | `datum_reference[SITE]` vs boundary / centroid | none (`control[]` info) |
 
@@ -58,6 +58,10 @@ Envelope polygons, context layer lists, known displacements, TBM distance, offic
 reference cadastre live in the approved rulebook (rules_v9 for envelope/context/displacement; rules_v8
 holds datum_reference / official_site_area shapes). This skill never reads an envelope from a drawing
 at run time (DP-2).
+
+**Parameter note — `known_displacements[SITE]`.** Each entry is `(dE, dN)` to **add** to the drawn
+coordinates to bring that layer group into the site frame (`site = drawn + vector`). SRC-11 §4.6 /
+SPC-0006 §4.18.3 C4. Example: NRJS `(−1107.56, +34.31)`. The wrong sign must not match.
 
 ## 7 Known limits
 

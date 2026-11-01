@@ -10,7 +10,7 @@ Sub-checks (values only from the rules file):
                `site_envelope[SITE]` + `envelope_buffer`; `context_layers[SITE]` → profile only
                → outside_site_envelope/<layer>
   C4 displace  layer groups with ≥ `displacement_min_entities` outside: known vector (≥95 % inside
-               after undoing it) → displaced_layer_group/<layer>; else candidate vector (info)
+               after adding it: site = drawn + vector) → displaced_layer_group/<layer>; else candidate
   C5 models    LandXML/IFC design surfaces & alignments → inside test; survey/existing
                (provenance employer, or role/name NGL/EGL) → site boundary inside surface extent
                → outside_site_envelope/<source>, survey_not_covering_site
@@ -26,9 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dwg_geom import (  # noqa: E402
-    MAX_SAMPLES, InputError, boundary_geom, check_out_path, displacement_vectors, envelope_geom,
-    is_context_layer, is_survey_surface, layer_list, load_model_file, load_rules, model_points,
-    model_source, need_shapely, param, pattern, surface_extent_box, write_result,
+    MAX_SAMPLES, InputError, boundary_geom, check_out_path, crs_equal, displacement_vectors,
+    envelope_geom, is_context_layer, is_survey_surface, layer_list, load_model_file, load_rules,
+    model_points, model_source, need_shapely, param, pattern, surface_extent_box, write_result,
 )
 
 RULE = "GIS-008"
@@ -70,7 +70,7 @@ def check_dwg(ing, rule, site, env_g, env_unbuf, context, known, min_ents, out_s
     elif crs_want is None:
         per_file["crs"] = "not_run"
         out_subchecks.add(("crs", "parameter crs not set [GAP]"))
-    elif str(declared).upper() != str(crs_want).upper():
+    elif not crs_equal(declared, crs_want):
         per_file["crs"] = "fail"
         pats.append(pattern("crs_declared_other", f"Declared coordinate system {declared}, expected {crs_want}",
                             [{"handles": [], "extract": f"GEODATA={declared}"}], 1, src))
@@ -116,9 +116,9 @@ def check_dwg(ing, rule, site, env_g, env_unbuf, context, known, min_ents, out_s
                     continue
                 matched = None
                 for dE, dN in known:
-                    # undo displacement: point - vector
-                    xs2 = [e["e"] - dE for e in ents]
-                    ys2 = [e["n"] - dN for e in ents]
+                    # apply displacement: site = drawn + vector (SRC-11 / §4.18.3 C4)
+                    xs2 = [e["e"] + dE for e in ents]
+                    ys2 = [e["n"] + dN for e in ents]
                     ok2 = shapely.intersects_xy(env_g, np.asarray(xs2, dtype=float), np.asarray(ys2, dtype=float))
                     if float(sum(bool(x) for x in ok2)) / len(ents) >= 0.95:
                         matched = (dE, dN)
@@ -128,7 +128,7 @@ def check_dwg(ing, rule, site, env_g, env_unbuf, context, known, min_ents, out_s
                     dE, dN = matched
                     samples = [{"handles": [e["handle"]], "layer": layer,
                                 "extract": (f"{e['kind']} {e['handle']} at E {e['e']:.3f} N {e['n']:.3f}; "
-                                            f"known displacement dE={dE:g} dN={dN:g}")}
+                                            f"known displacement dE={dE:g} dN={dN:g} (add to drawn)")}
                                for e in ents[:MAX_SAMPLES]]
                     pats.append(pattern(
                         f"displaced_layer_group/{layer}",
@@ -171,7 +171,7 @@ def _landxml_crs(ing, rule, per_file, pats, src, out_subchecks):
     elif crs_want is None:
         per_file["crs"] = "not_run"
         out_subchecks.add(("crs", "parameter crs not set [GAP]"))
-    elif str(declared).upper() != str(crs_want).upper() and str(crs_want).upper() not in str(declared).upper():
+    elif not crs_equal(declared, crs_want):
         per_file["crs"] = "fail"
         pats.append(pattern("crs_declared_other", f"Declared coordinate system {declared}, expected {crs_want}",
                             [{"handles": [], "extract": f"CoordinateSystem={declared}"}], 1, src))

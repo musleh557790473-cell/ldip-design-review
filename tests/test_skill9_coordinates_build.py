@@ -144,9 +144,9 @@ def test_t9_c1_envelope_context_and_displacement(tmp_path):
     inside = [poly("P1", "PLOT", sq(E0 + 10, N0 + 10))]
     # context parcel outside → profile only
     ctx = [poly("C1", "CTX_PARCEL", sq(E0 + 500, N0 + 500, 30.0))]
-    # displaced group (≥3) by known vector (−100, +50)
+    # displaced group (≥3): drawn = site − vector so site = drawn + vector (−100, +50)
     dE, dN = -100.0, 50.0
-    disp = [poly(f"D{i}", "2D-PR-Plot", sq(E0 + 10 + dE + i * 25, N0 + 10 + dN)) for i in range(3)]
+    disp = [poly(f"D{i}", "2D-PR-Plot", sq(E0 + 10 - dE + i * 25, N0 + 10 - dN)) for i in range(3)]
     # legend at origin (not known displacement, small group → outside finding)
     legend_p = [poly("L1", "G-ANNO", sq(0.0, 0.0, 5.0))]
     legend_t = [text("T1", "G-ANNO", "LEGEND", 1.0, 1.0)]
@@ -168,6 +168,93 @@ def test_t9_c1_envelope_context_and_displacement(tmp_path):
     assert out["files"][0]["units"] == "pass" and out["files"][0]["crs"] == "not_declared"
     # C6 control info
     assert any(c["role"] == "site_tbm" and c["inside"] for c in out["control"])
+
+
+# ------------------------------------------------------------------ C4 sign (asymmetric vector)
+def test_c4_asymmetric_vector_wrong_sign_fails(tmp_path):
+    """Asymmetric known vector: adding it matches; subtracting it (wrong sign) must not."""
+    dE, dN = -100.0, 50.0  # asymmetric — −vector ≠ +vector effect
+    rb = rules_coords(known_displacements={"SYN": [dE, dN]})
+    rb["rules"][3]["parameters"]["reference_dataset"] = {"value": None, "tag": "GAP"}
+    rules = dump(tmp_path / "rules.json", rb)
+    # drawn = site − vector → drawn + vector lands inside
+    disp = [poly(f"D{i}", "2D-PR-Plot", sq(E0 + 10 - dE + i * 25, N0 + 10 - dN)) for i in range(3)]
+    ing = dump(tmp_path / "a.dwg.json", dwg_ing(disp))
+    rc, msg = run("check_crs.py", "--ingestion", ing, "--rules", rules, "--site", "SYN",
+                  "--out", tmp_path / "ok.json")
+    out = json.loads((tmp_path / "ok.json").read_text())
+    assert rc == 0 and any(p["pattern"] == "displaced_layer_group/2D-PR-Plot" for p in out["patterns"])
+    # same drawing, negated vector in rules → must NOT match as displaced (outside finding instead)
+    rb2 = rules_coords(known_displacements={"SYN": [-dE, -dN]})
+    rb2["rules"][3]["parameters"]["reference_dataset"] = {"value": None, "tag": "GAP"}
+    rules2 = dump(tmp_path / "rules2.json", rb2)
+    rc, msg = run("check_crs.py", "--ingestion", ing, "--rules", rules2, "--site", "SYN",
+                  "--out", tmp_path / "bad.json")
+    out2 = json.loads((tmp_path / "bad.json").read_text())
+    assert rc == 0
+    assert not any(p["pattern"].startswith("displaced_layer_group/") for p in out2["patterns"])
+    assert any(p["pattern"] == "outside_site_envelope/2D-PR-Plot" for p in out2["patterns"])
+
+
+# ------------------------------------------------------------------ C2 EPSG normalisation
+@pytest.mark.parametrize("declared", [
+    "32638",
+    "EPSG:32638",
+    "EPSG::32638",
+    "urn:ogc:def:crs:EPSG::32638",
+])
+def test_epsg_normalisation_landxml_forms(tmp_path, declared):
+    """LandXML CoordinateSystem forms equal rules crs EPSG:32638 after normalisation."""
+    rb = rules_coords()
+    rb["rules"][3]["parameters"]["reference_dataset"] = {"value": None, "tag": "GAP"}
+    rules = dump(tmp_path / "rules.json", rb)
+    survey = dump(tmp_path / "egl.xml.json", _landxml(
+        "submittals/SYN/egl.xml", "employer",
+        [_surf("EGL", E0 - 50, N0 - 50, E0 + 200, N0 + 200)], epsg=declared))
+    # put declared only in header.coordinate_system.epsg_code (as parse_landxml does)
+    doc = json.loads(survey.read_text(encoding="utf-8"))
+    doc["crs"]["declared"] = None
+    doc["content"]["header"]["coordinate_system"]["epsg_code"] = declared
+    doc["content"]["header"]["coordinate_system"]["desc"] = None
+    dump(survey, doc)
+    rc, msg = run("check_crs.py", "--ingestion", survey, "--rules", rules, "--site", "SYN",
+                  "--out", tmp_path / "o.json")
+    out = json.loads((tmp_path / "o.json").read_text())
+    assert rc == 0, msg
+    assert out["files"][0]["crs"] == "pass"
+    assert not any(p["pattern"] == "crs_declared_other" for p in out["patterns"])
+
+
+@pytest.mark.parametrize("declared", [
+    "32638",
+    "EPSG:32638",
+    "EPSG::32638",
+    "urn:ogc:def:crs:EPSG::32638",
+])
+def test_epsg_normalisation_dwg_geodata_forms(tmp_path, declared):
+    """DWG GEODATA declared forms equal rules crs EPSG:32638 after normalisation."""
+    rb = rules_coords()
+    rb["rules"][3]["parameters"]["reference_dataset"] = {"value": None, "tag": "GAP"}
+    rules = dump(tmp_path / "rules.json", rb)
+    ing = dump(tmp_path / "a.dwg.json", dwg_ing([poly("P1", "PLOT", sq(E0 + 10, N0 + 10))],
+                                                 declared=declared))
+    rc, msg = run("check_crs.py", "--ingestion", ing, "--rules", rules, "--site", "SYN",
+                  "--out", tmp_path / "o.json")
+    out = json.loads((tmp_path / "o.json").read_text())
+    assert rc == 0, msg
+    assert out["files"][0]["crs"] == "pass"
+
+
+def test_normalize_crs_helper_unit():
+    sys.path.insert(0, str(SC))
+    from dwg_geom import crs_equal, normalize_crs  # noqa: E402
+    assert normalize_crs("32638") == "EPSG:32638"
+    assert normalize_crs("EPSG:32638") == "EPSG:32638"
+    assert normalize_crs("EPSG::32638") == "EPSG:32638"
+    assert normalize_crs("urn:ogc:def:crs:EPSG::32638") == "EPSG:32638"
+    assert crs_equal("32638", "EPSG:32638")
+    assert crs_equal("EPSG::32638", "urn:ogc:def:crs:EPSG::32638")
+    assert not crs_equal("32638", "EPSG:32637")
 
 
 # ------------------------------------------------------------------ T9-C2
@@ -344,7 +431,7 @@ def test_build_candidates_gis017_and_displacement(tmp_path):
     rb["rules"][0]["parameters"]["datum_reference"]["value"]["NRJS"]["site_tbm"] = None
     rules = dump(tmp_path / "rules.json", rb)
     dE, dN = -100.0, 50.0
-    disp = [poly(f"D{i}", "2D-PR-Plot", sq(E0 + 10 + dE + i * 25, N0 + 10 + dN)) for i in range(3)]
+    disp = [poly(f"D{i}", "2D-PR-Plot", sq(E0 + 10 - dE + i * 25, N0 + 10 - dN)) for i in range(3)]
     ing = dump(tmp_path / "a.dwg.json", dwg_ing(disp, path="submittals/NRJS/T9/plan.dwg",
                                                  doc="LDIP-RCRC-SAP-01-NRJS-MPL-DWG-00-10001"))
     assert run("check_crs.py", "--ingestion", ing, "--rules", rules, "--site", "NRJS",
