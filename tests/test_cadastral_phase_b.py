@@ -376,11 +376,12 @@ def test_guard_allows_gis_drawing_commands(tmp_path):
     S, E, I = f"{PLUGIN}/skills/checking-cadastral-geometry/scripts", f"{F}/evidence/gis", "0.ai_context/QRWN/T0001/b01/A-001.dwg.json"
     cmds = [
         f'python "{S}/check_crs.py" --ingestion {I} --rules {E}/rules_GIS.json --site QRWN --out {E}/gis008.json',
+        f'python "{S}/check_control.py" --rules {E}/rules_GIS.json --site QRWN --out {E}/gis017.json',
         f'python "{S}/check_topology.py" --ingestion {I} --rules {E}/rules_GIS.json --site QRWN --out {E}/gis009.json',
         f'python "{S}/match_plots.py" --ingestion {I} --dlus {E}/dlus.json --gis001 {E}/gis001.json --rules {E}/rules_GIS.json '
         f'--site QRWN --out {E}/match.json',
-        f'python "{S}/build_candidates.py" --results {E}/gis008.json {E}/gis009.json {E}/match.json --rules {E}/rules_GIS.json '
-        f'--run {R} --site QRWN --sub T0001 --out {F}/candidates/gis.json',
+        f'python "{S}/build_candidates.py" --results {E}/gis008.json {E}/gis017.json {E}/gis009.json {E}/match.json '
+        f'--rules {E}/rules_GIS.json --run {R} --site QRWN --sub T0001 --out {F}/candidates/gis.json',
     ]
     for c in cmds:
         assert guard(root, "Bash", {"command": c}, agent_type="ldip-design-review:gis-cadastral") == "allow", c

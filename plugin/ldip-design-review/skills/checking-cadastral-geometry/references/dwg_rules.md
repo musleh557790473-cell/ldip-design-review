@@ -1,60 +1,71 @@
-# Drawing rules — what the scripts check and the values they need
+# Drawing / coordinate rules — what the scripts check and the values they need
 
-Contents: 1 Inputs · 2 GIS-008 · 3 GIS-009 · 4 Matching rules · 5 Values not yet in the rulebook · 6 Known limits
+Contents: 1 Inputs · 2 GIS-008 · 3 GIS-017 · 4 GIS-009 · 5 Matching rules · 6 Values · 7 Known limits
+
+Spec: SPC-0006 Rev B §4.6 (base) + Rev P §4.18 (coordinates 0.3.0). Schedule rules are in
+`schedule_rules.md`. Rule values come only from the rules file (skill 8); never from this document.
 
 ## 1 Inputs
 
-- Ingestion files `0.ai_context/<SITE>/<sub-id>/b<nn>/<file>.dwg.json` written by skill 1. Only
-  closed model-space polylines, model-space texts and block inserts are used.
-- The rules file from `get_rules.py`. A rule that is not in it (inactive, or not a GIS rule) returns
-  `not_run`. A value that is absent, `null` or tagged GAP turns its sub-check into `not_run`.
-- Per-site values are tables keyed by the internal site key (`QRWN`, `NRJS`, `NMAR`).
+- DWG ingestion (`*.dwg.json`, skill 1) — closed polylines, texts, inserts; expanded blocks included.
+- LandXML ingestion / surface side files (skill 3) and IFC surface side files (skill 13) when present.
+- Rules file from `get_rules.py`. Absent / null / GAP value → that sub-check is `not_run`.
+- Per-site tables use internal keys `QRWN`, `NRJS`, `NMAR`.
 
-## 2 GIS-008 — `check_crs.py`
+## 2 GIS-008 — `check_crs.py` (0.2.0)
 
-| Sub-check | Value | Pattern |
+| Step | Value | Pattern |
 |---|---|---|
-| units | `insunits` (6 = metres) vs header `$INSUNITS` | `insunits_not_metres` |
-| crs | `crs` vs a declared GEODATA system; none declared → `not_declared`, no finding | `crs_declared_other` |
-| envelope | `site_envelope[SITE]` (`bbox` or `polygon`) grown by `envelope_buffer` | `outside_site_envelope/<layer>` |
+| C1 units | `insunits` (6 = metres) vs `$INSUNITS` | `insunits_not_metres` |
+| C2 CRS | `crs` vs GEODATA / LandXML `CoordinateSystem` (normalised: `32638` / `EPSG:32638` / `EPSG::32638` / `urn:ogc:def:crs:EPSG::32638`); none → `not_declared`, no finding | `crs_declared_other` |
+| C3 envelope | `site_envelope[SITE]` + `envelope_buffer`; `context_layers[SITE]` (name/prefix, incl. via_block) → `profile_context_outside` only | `outside_site_envelope/<layer>` |
+| C4 displace | `known_displacements[SITE]`, `displacement_min_entities`; ≥95 % inside after **adding** a known vector (`site = drawn + vector`, SRC-11) → finding; else candidate vector (info) | `displaced_layer_group/<layer>` |
+| C5 models | LandXML/IFC design → inside test; survey (`provenance` employer, or role/name NGL/EGL) → coverage vs `site_boundary` | `outside_site_envelope/<source>`, `survey_not_covering_site` |
+| C6 control | `datum_reference[SITE]` vs boundary / centroid | none (`control[]` info) |
 
-Extents are taken from the geometry, because `$EXTMIN` / `$EXTMAX` are empty with some converters.
-One finding per layer, with the count and ten sample handles.
+GIS-008 stays advisory → candidates capped Probable. Extents from geometry, not `$EXTMIN`/`$EXTMAX`.
 
-## 3 GIS-009 — `check_topology.py`
+## 3 GIS-017 — `check_control.py` (0.1.0)
 
-Plot polygons are the closed polylines on `plot_layers[SITE]`. Without that value no sub-check runs.
-Validity is still measured on every closed polyline and written to `profile_invalid_by_layer` as
-information only. Sub-checks: validity (`invalid_polygon/<layer>`), closure (open polylines on a plot
-layer, `open_polyline/<layer>`), overlap above `overlap_tol` (`overlap`), area below `sliver_min_area`
-(`sliver/<layer>`). The gap test is not run (site boundary and non-plot areas undefined).
+| Check | Value | Pattern |
+|---|---|---|
+| Site TBM | `datum_reference[SITE].site_tbm` (from GIS-008) | `no_site_tbm` |
+| Distance | `max_distance_tbm`; boundary from GIS-011 `site_boundary` else envelope | `tbm_too_far` |
 
-## 4 Matching rules — `match_plots.py`
+No TBM → fail with `no_site_tbm` (issue_type `missing_information`). Missing threshold or boundary → `not_run`.
 
-The plot table needs GIS-005 `plot_label_source[SITE]` = `{"polygon_layers": [...], "text_layers": [...]}`.
-A plot's ID is the single label text whose insert point lies inside the polygon. Polygons with no
-label or several labels are counted in `plots`, never matched. GIS-001 duplicates are excluded.
+## 4 GIS-009 — `check_topology.py`
+
+Plot polygons on `plot_layers[SITE]`. Validity, closure, overlap (`overlap_tol`), sliver (`sliver_min_area`). Gap test not run. Unchanged in 0.3.0.
+
+## 5 Matching rules — `match_plots.py` (0.2.0)
+
+Plot table needs GIS-005 `plot_label_source[SITE]`. GIS-001 duplicates excluded.
 
 | Rule | Value(s) | Pattern |
 |---|---|---|
 | GIS-005 | `plot_label_source` | `in_dwg_not_dlus`, `in_dlus_not_dwg` |
-| GIS-006 | `tolerance_abs` (and `tolerance_rel` %, both must be exceeded when set) | `area_differs` |
-| GIS-004 | `layer_mapping[SITE]` = {layer: DLUS Level 2} | `land_use_differs` |
-| GIS-010 | `min_area_by_land_use` = {Level 2: m2} (DLUS only) | `below_min_area/<Level 2>` |
-| GIS-011 | `tolerance_abs`, `site_boundary[SITE]` = [[E, N], ...] | `site_area_differs` |
-| GIS-007, GIS-016 | reference cadastre, CMP source | always `not_run` |
+| GIS-006 | `tolerance_abs` (+ `tolerance_rel` when set) | `area_differs` |
+| GIS-004 | `layer_mapping[SITE]` | `land_use_differs` |
+| GIS-010 | `min_area_by_land_use` | `below_min_area/<Level 2>` |
+| GIS-011 | `tolerance_abs`, `site_boundary[SITE]`; C8 also `official_site_area[SITE]` (nature/deed) vs drawn boundary | `site_area_differs` |
+| GIS-007 | `reference_dataset[SITE]`, `tolerance` (0.02 m); runs only when dataset set | `boundary_off_reference` |
+| GIS-016 | CMP source | always `not_run` |
 
-## 5 Values not yet in the rulebook
+## 6 Values
 
-`site_envelope`, `plot_layers`, `plot_label_source`, `layer_mapping` and the tolerances above are not
-in rules_v0. Their shape is a proposal (P-S3-44 and the R8 answer); the values come only from a later
-approved rulebook. Until then the scripts report the sub-checks as `not_run`.
+Envelope polygons, context layer lists, known displacements, TBM distance, official areas and the
+reference cadastre live in the approved rulebook (rules_v9 for envelope/context/displacement; rules_v8
+holds datum_reference / official_site_area shapes). This skill never reads an envelope from a drawing
+at run time (DP-2).
 
-## 6 Known limits
+**Parameter note — `known_displacements[SITE]`.** Each entry is `(dE, dN)` to **add** to the drawn
+coordinates to bring that layer group into the site frame (`site = drawn + vector`). SRC-11 §4.6 /
+SPC-0006 §4.18.3 C4. Example: NRJS `(−1107.56, +34.31)`. The wrong sign must not match.
 
-- Arcs: the ingestion keeps vertices only. Polygons with bulges are counted `not_checked_bulge` for
-  validity; their area (from the arcs) is used for sliver, and their chords for overlap.
-- Layer names depend on the converter: ezdwg renames some layers (for example `S1` → `LAYER_3F6F`).
-  Layer-based values work only with the oda or accoreconsole engine.
-- Legend and key-plan swatches drawn outside the site are reported by the envelope test. The
-  Verifier and the reviewer judge them; the script does not guess which layers are legends.
+## 7 Known limits
+
+- Arcs: vertices only; bulges → `not_checked_bulge` for validity.
+- Layer names depend on the converter; layer-based values need oda / accoreconsole (or ezdwg with care).
+- GIS-007 needs an approved reference dataset (R-P3); method is built, inactive until the value is set.
+- Vertical datum / elevation checks are out of scope for 0.3.0.

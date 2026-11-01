@@ -74,7 +74,8 @@
    "expected": [
     "check_crs.py: GIS-008 pass on units (INSUNITS 6), CRS not declared (no finding), envelope sub-check not_run with the GAP reason copied into gaps[]",
     "check_topology.py: GIS-009 not_run (plot layers GAP); no finding",
-    "match_plots.py: GIS-004 to GIS-007, GIS-010, GIS-011, GIS-016 all not_run (inactive)",
+    "match_plots.py: GIS-004 to GIS-007, GIS-010, GIS-011, GIS-016 all not_run (inactive or GAP)",
+    "check_control.py: GIS-017 not_run when max_distance_tbm GAP",
     "no --profile call; no finding written by hand"
    ]
   },
