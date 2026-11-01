@@ -559,31 +559,124 @@ def test_t11_idaho_pipe_water_reader(tmp_path):
     assert all(abs(c["roughness"] - 140) < 1e-6 for c in doc["conduits"])
 
 
+def test_t11_4b_w3_mh_spacing_threshold(tmp_path):
+    """S1: 80.0007 m no flag; 80.02 m flags (w3_threshold_tol 0.01)."""
+    def net(length):
+        return {
+            "networks_version": "1.0",
+            "network": "sewer",
+            "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+            "conduits": [{
+                "id": "C1", "element_id": 1, "source": "model", "network": "sewer",
+                "diameter_mm": 200, "length_m": length,
+                "invert_start_m": 100.0,
+                "invert_stop_m": 99.6,
+                "slope_pct": 0.50, "cover_m": 1.5,
+                "start_node_id": 1, "stop_node_id": 2,
+            }],
+            "nodes": [
+                {"element_id": 1, "label": "MH1", "element_type": "manhole"},
+                {"element_id": 2, "label": "OF", "element_type": "outfall"},
+            ],
+            "summary": {"conduit_count": 1, "length_km": length / 1000.0},
+            "plan": [],
+        }
+
+    presence = {
+        "networks": {
+            "sewer": {"plan": True, "model": True},
+            "water": {"plan": True, "model": True},
+            "irrigation": {"plan": True, "model": True},
+            "storm": {"plan": True, "model": True},
+        },
+        "hydraulic_calculations": True,
+    }
+    cons_ok, _, _ = check(tmp_path / "sp_ok", net(80.0007), presence=presence)
+    sp_ok = [r for r in cons_ok["comparisons"]
+             if r["check"] == "W3" and str(r["quantity"]).startswith("mh_spacing")]
+    assert sp_ok and sp_ok[0]["result"] == "pass"
+
+    cons_bad, cand, _ = check(tmp_path / "sp_bad", net(80.02), presence=presence)
+    sp_bad = [r for r in cons_bad["comparisons"]
+              if r["check"] == "W3" and str(r["quantity"]).startswith("mh_spacing")
+              and r["result"] == "flag"]
+    assert sp_bad and sp_bad[0]["severity"] == "Major"
+    assert any("spacing" in f["title"].casefold() for f in cand["findings"])
+
+
 def test_t11_criteria_reader(tmp_path):
-    """read_wet_criteria extracts sewer gradient table + totals from skill-2 text."""
+    """read_wet_criteria: PW §5.3, Tables 6.1/6.3 rows, Table 10.9 10-col, TOC skip."""
     text = {
         "pages": [{
-            "page": 12,
+            "page": 5,
             "text": (
-                "Sewer network design criteria §6.3\n"
-                "Table 6.1 Minimum diameter 200 mm\n"
-                "Table 6.3\n"
-                "200 mm 0.50 % 0.75 m/s\n"
-                "300 mm 0.35 % 0.75 m/s\n"
-                "Total network length 9.70 km with 173 manholes\n"
-                "Depth 1.40 – 3.50 m\n"
-                "Potable water §5.3\n"
-                "Total network length 11.0 km residual pressure 2.76 / 5.27 bar\n"
-                "Storm water drainage §10.2\n"
-                "Table 10.9\n"
-                "Return period 10-year design storm\n"
-                "300 mm 5.91 km\n"
-                "P-055 0.18 m\n"
-                "P-118 0.63 m\n"
+                "Table of Contents\n"
+                "5.3 Potable Water Design Criteria .......... 60\n"
+                "6.3.2 Manholes .............................. 64\n"
+                "6.5.1 Configuration ......................... 81\n"
             ),
         }, {
-            "page": 13,
-            "text": "P-119 1.15 m\nP-092 110.6 m\nP-088 100.7 m\n",
+            "page": 60,
+            "text": (
+                "§5.3 Potable Water Design Criteria\n"
+                "Minimum residual pressure 1.50 / 6.0 bar\n"
+                "Minimum pipe diameter 110 / 160 mm\n"
+                "Velocity 0.2 – 2.0 m/s\n"
+                "Head-loss per Table 5.3\n"
+                "Hazen-Williams C 140 / 130\n"
+                "Valve spacing 1000 m\n"
+                "Cover 1.2 / 1.0 m\n"
+                "Separation 3 m / 500 mm from sewers\n"
+            ),
+        }, {
+            "page": 64,
+            "text": (
+                "Sewer network design criteria §6.3\n"
+                "Table 6.1 Manhole spacing\n"
+                "200 mm 80 m\n"
+                "250 mm 80 m\n"
+                "300 mm 100 m\n"
+                "Table 6.3 Minimum gradients\n"
+                "200 mm 0.50 % 0.60 m/s 0.75 m/s\n"
+                "300 mm 0.35 % 0.60 m/s 0.75 m/s\n"
+            ),
+        }, {
+            "page": 70,
+            "text": (
+                "§5.5.1 Configuration\n"
+                "Total network length 11.0 km residual pressure 2.76 / 5.27 bar\n"
+            ),
+        }, {
+            "page": 81,
+            "text": (
+                "§6.5.1 Configuration\n"
+                "Total network length 9.70 km\n"
+                "Proposed No. of manholes: 173 manholes\n"
+                "Depth 1.40 – 3.50 m\n"
+            ),
+        }, {
+            "page": 100,
+            "text": (
+                "Storm water drainage §10.2\n"
+                "§10.5.5 Configuration\n"
+                "Total network length 6.14 km\n"
+            ),
+        }, {
+            "page": 142,
+            "text": (
+                "Table 10.9 Storm pipe schedule\n"
+                "Label Invert Start Invert Stop Length Slope Section Size Material n Cover\n"
+                "P-055 760.87 760.50 25.30 1.46 Circular 400 Concrete 0.013 0.18\n"
+                "P-118 758.20 757.90 40.00 0.75 Circular 500 Concrete 0.013 0.63\n"
+            ),
+        }, {
+            "page": 143,
+            "text": (
+                "Label Invert Start Invert Stop Length Slope Section Size Material n Cover\n"
+                "P-119 755.00 754.60 30.00 1.33 Circular 600 Concrete 0.013 1.15\n"
+                "P-092 750.00 749.20 110.6 0.72 Circular 800 Concrete 0.013 1.50\n"
+                "P-088 748.00 747.40 100.7 0.60 Circular 700 Concrete 0.013 1.40\n"
+            ),
         }],
     }
     src = write(tmp_path / "report.pdf.json", text)
@@ -592,19 +685,43 @@ def test_t11_criteria_reader(tmp_path):
     assert rc == 0, msg
     doc = load(out)
     Draft202012Validator(load(TPL / "criteria.schema.json")).validate(doc)
-    assert doc["criteria"]["sewer"].get("min_diameter_mm", {}).get("value") == 200
+    # S3 (a) PW §5.3
+    pw = doc["criteria"]["potable_water"]
+    assert abs(pw["pressure_pair_bar"]["min_bar"] - 1.50) < 1e-9 or abs(
+        pw["pressure_pair_bar"]["min_bar"] - 2.76) < 1e-9
+    assert pw.get("min_diameter_mm_pair") or pw.get("min_diameter_mm")
+    assert pw.get("velocity_range_ms") or pw.get("min_velocity_ms")
+    assert pw.get("hw_c_pair") or pw.get("hw_c")
+    assert abs(float(pw["valve_spacing_m"]["value"]) - 1000) < 1e-9
+    assert pw.get("cover_m_pair") or pw.get("cover_m")
+    assert pw.get("head_loss_table")
+    # S3 (b) Tables 6.1 / 6.3
+    assert len(doc["mh_spacing_table"]) >= 2
     assert len(doc["gradient_tables"]["sewer"]) >= 2
-    assert doc["declared_totals"]["total_length_km"]["value"] == 9.70
-    assert doc["storm_pipe_table"]
+    g200 = next(r for r in doc["gradient_tables"]["sewer"] if r["diameter_mm"] == 200)
+    assert abs(g200["min_slope_pct"] - 0.50) < 1e-9
+    assert g200.get("velocity_half_full_ms") is not None
+    assert g200.get("velocity_peak_ms") is not None
+    # S3 (c) totals from Configuration, not TOC
+    assert abs(doc["declared_totals"]["sewer:total_length_km"]["value"] - 9.70) < 1e-9
+    assert int(doc["declared_totals"]["sewer:manhole_count"]["value"]) == 173
+    assert abs(doc["declared_totals"]["potable_water:total_length_km"]["value"] - 11.0) < 1e-9
+    assert abs(doc["declared_totals"]["storm:total_length_km"]["value"] - 6.14) < 1e-9
+    depth = doc["declared_totals"]["sewer:depth_range_m"]
+    assert abs(depth["min_m"] - 1.40) < 1e-9 and abs(depth["max_m"] - 3.50) < 1e-9
+    assert 5 in (doc["meta"].get("toc_pages") or [])
     clauses = {t["clause"] for t in doc["declared_tables"]}
     assert "§5.3" in clauses and "§6.3" in clauses and "§10.2" in clauses
     assert "Table 6.1" in clauses and "Table 6.3" in clauses and "Table 10.9" in clauses
-    ids = {r["id"]: r["value"] for r in doc["storm_table_109"]}
-    assert abs(ids["P-055"] - 0.18) < 1e-9
-    assert abs(ids["P-118"] - 0.63) < 1e-9
-    assert abs(ids["P-119"] - 1.15) < 1e-9
-    assert abs(ids["P-092"] - 110.6) < 1e-9
-    assert abs(ids["P-088"] - 100.7) < 1e-9
+    # S2 Table 10.9 full rows, unique by label
+    by_id = {r["id"]: r for r in doc["storm_table_109"]}
+    assert len(by_id) == len(doc["storm_table_109"])
+    assert abs(by_id["P-055"]["cover_m"] - 0.18) < 1e-9
+    assert abs(by_id["P-055"]["invert_start_m"] - 760.87) < 1e-9
+    assert abs(by_id["P-118"]["cover_m"] - 0.63) < 1e-9
+    assert abs(by_id["P-119"]["cover_m"] - 1.15) < 1e-9
+    assert abs(by_id["P-092"]["length_m"] - 110.6) < 1e-9
+    assert abs(by_id["P-088"]["length_m"] - 100.7) < 1e-9
 
 
 def test_t11_params_declared_not_er():

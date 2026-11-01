@@ -406,20 +406,22 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                     "%", None, None, "pass",
                 ))
 
-        # MH spacing = conduit length vs max
+        # MH spacing = conduit length vs max (S1: flag when L > max + w3_threshold_tol)
         L = c.get("length_m")
-        if L is not None and L - thr > max_spacing:
+        if L is not None and L > max_spacing + thr:
             rows.append(comparison_row(
                 "W3", f"mh_spacing:{cid}", ["model"],
-                {"length_m": L, "max_m": max_spacing}, "m", L - max_spacing, None, "flag",
+                {"length_m": L, "max_m": max_spacing, "tol_m": thr},
+                "m", L - max_spacing, None, "flag",
                 severity="Major", status="Probable",
             ))
             findings.append(finding_stub(
                 "W3", f"Sewer {cid} exceeds MH spacing",
                 f"Segment length {L:.2f} m > ER MH spacing maximum {max_spacing:.0f} m "
-                f"(§7.5.2 30–80 m). WUT-012.",
+                f"+ {thr} m tol (§7.5.2 30–80 m). WUT-012.",
                 "design_error", "Major", "Probable",
-                [evid("E01", "script_output", f"id={cid} L={L} max={max_spacing}")],
+                [evid("E01", "script_output",
+                      f"id={cid} L={L} max={max_spacing} tol={thr}")],
                 meta["site"], meta["sub"], meta["run"],
                 status_cap=status_cap, required_value=max_spacing, unit="m",
                 source_doc="ER §7.5.2 p.32",
@@ -427,7 +429,8 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
         elif L is not None:
             rows.append(comparison_row(
                 "W3", f"mh_spacing:{cid}", ["model"],
-                {"length_m": L, "max_m": max_spacing}, "m", None, None, "pass",
+                {"length_m": L, "max_m": max_spacing, "tol_m": thr},
+                "m", None, None, "pass",
             ))
 
         # cover (declared §6.3.3 — soffit < 1.0 m → special protection)
@@ -717,6 +720,41 @@ def run_w6(networks, criteria, plan_doc, params, rows, findings, meta, status_ca
                 [evid("E01", "script_output", f"cover={cover}")],
                 meta["site"], meta["sub"], meta["run"],
                 status_cap=status_cap,
+            ))
+
+    # S2: report Table 10.9 — cover from cover_m column only (never invert)
+    for row in (criteria or {}).get("storm_table_109") or []:
+        cover = row.get("cover_m")
+        if cover is None:
+            continue
+        cid = row.get("id") or "?"
+        if cover + params["w3_threshold_tol"] < cover_min:
+            findings.append(finding_stub(
+                "W6", "Storm report cover below minimum",
+                f"Table 10.9 {cid} average cover {cover:.3f} m < {cover_min} m "
+                f"(ER §7.5.8). WUT-032.",
+                "design_error", "Minor", "Probable",
+                [evid("E01", "script_output",
+                      f"id={cid} cover_m={cover} "
+                      f"invert_start_m={row.get('invert_start_m')}")],
+                meta["site"], meta["sub"], meta["run"],
+                status_cap=status_cap, source_doc="report Table 10.9",
+            ))
+            rows.append(comparison_row(
+                "W6", f"report_cover:{cid}", ["report"],
+                {"cover_m": cover, "min_m": cover_min,
+                 "invert_start_m": row.get("invert_start_m"),
+                 "length_m": row.get("length_m")},
+                "m", None, None, "flag",
+                severity="Minor", status="Probable",
+            ))
+        else:
+            rows.append(comparison_row(
+                "W6", f"report_cover:{cid}", ["report"],
+                {"cover_m": cover, "min_m": cover_min,
+                 "invert_start_m": row.get("invert_start_m"),
+                 "length_m": row.get("length_m")},
+                "m", None, None, "pass",
             ))
 
     # Outfalls / ponds drawn

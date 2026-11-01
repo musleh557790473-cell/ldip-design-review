@@ -59,7 +59,7 @@ EXPECT = {
             "pipes": 121,
             "length_km": 10.87,
             "length_tol_km": 0.1,
-            "inside_diameters_mm": [131, 167, 204],
+            "inside_diameters_mm": [131, 164, 205],  # S4: rounded 130.8 / 163.6 / 204.6
             "hazen_williams_c": 140,
             "plan_globs": ["**/PWT-10000*.dxf", "**/PWT-10000*.dwg"],
         },
@@ -83,11 +83,24 @@ EXPECT = {
             "sewer_km": 9.70,
             "sewer_mh": 173,
             "sewer_depth": (1.40, 3.50),
-            "storm_109": {
+            "storm_109_cover_m": {
                 "P-055": 0.18, "P-118": 0.63, "P-119": 1.15,
+            },
+            "storm_109_length_m": {
                 "P-092": 110.6, "P-088": 100.7,
             },
+            "storm_km": 6.14,
+            "storm_km_tol": 0.15,
             "declared_clauses": ["§5.3", "§6.3", "Table 6.1", "Table 6.3", "§10.2", "Table 10.9"],
+            "pw_criteria": {
+                "pressure_bar": (1.50, 6.0),
+                "min_diameter_mm": (110, 160),
+                "velocity_ms": (0.2, 2.0),
+                "hw_c": (140, 130),
+                "valve_spacing_m": 1000,
+                "cover_m": (1.2, 1.0),
+                "separation_m_mm": (3.0, 500),
+            },
         },
     },
     "QRWN": {
@@ -97,7 +110,7 @@ EXPECT = {
             "length_km": 63.16,
             "length_tol_km": 0.2,
             "w3_gradient_flags": 241,
-            "links_over_80_m": 310,
+            "links_over_80_m": 310,  # S1: L > 80 + 0.01
             "plan_globs": ["**/SWN-10000*.dxf", "**/*SWN*10000*.dxf", "**/*.dxf"],
         },
     },
@@ -113,6 +126,11 @@ EXPECT = {
         },
     },
 }
+
+# S1: MH spacing / links-over use w3_threshold_tol (0.01 m)
+MH_SPACING_MAX_M = 80.0
+MH_SPACING_TOL_M = 0.01
+
 
 
 def run(script, *args):
@@ -216,7 +234,9 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
     for d, n in exp["diameter_counts"].items():
         assert dc.get(d) == n, (d, dc)
 
-    over80 = [c for c in doc["conduits"] if (c.get("length_m") or 0) > 80]
+    # S1: flag / count when L > 80 + 0.01 m
+    over80 = [c for c in doc["conduits"]
+              if (c.get("length_m") or 0) > MH_SPACING_MAX_M + MH_SPACING_TOL_M]
     assert len(over80) == exp["links_over_80_m"]
 
     # Depth span from cover + D
@@ -314,7 +334,8 @@ def test_t11_r2_qrwn_sewer(site, tmp_path):
     assert msg["conduit_count"] == exp["conduits"]
     assert abs(msg["length_km"] - exp["length_km"]) <= exp["length_tol_km"]
     doc = json.loads(out.read_text(encoding="utf-8"))
-    over80 = [c for c in doc["conduits"] if (c.get("length_m") or 0) > 80]
+    over80 = [c for c in doc["conduits"]
+              if (c.get("length_m") or 0) > MH_SPACING_MAX_M + MH_SPACING_TOL_M]
     assert len(over80) == exp["links_over_80_m"]
     cons = tmp_path / "consistency.json"
     cand = tmp_path / "candidates.json"
@@ -342,13 +363,14 @@ def test_t11_r3_nrjs_sewer(site, tmp_path):
     doc = json.loads(out.read_text(encoding="utf-8"))
     slopes = [c["slope_pct"] for c in doc["conduits"] if c.get("slope_pct") is not None]
     assert slopes and all(s < exp["all_slope_below_pct"] - 1e-9 for s in slopes)
-    over80 = [c for c in doc["conduits"] if (c.get("length_m") or 0) > 80]
+    over80 = [c for c in doc["conduits"]
+              if (c.get("length_m") or 0) > MH_SPACING_MAX_M + MH_SPACING_TOL_M]
     assert len(over80) == exp["links_over_80_m"]
 
 
 @pytest.mark.parametrize("site", ["NMAR"])
 def test_t11_r4_nmar_pw(site, tmp_path):
-    """T11-R4: NMAR PW 121 / 10.87 km; ID 131/167/204 mm; C 140."""
+    """T11-R4: NMAR PW 121 / 10.87 km; ID set {131, 164, 205} mm (S4); C 140."""
     exp = EXPECT[site]["water"]
     db = _resolve(site, "sqlite", exp["globs"])
     _skip_unless(db, "NMAR PW wtg.sqlite")
@@ -360,8 +382,8 @@ def test_t11_r4_nmar_pw(site, tmp_path):
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert doc["source"]["schema"] == "openflows_idaho_pipe"
     diams = {int(round(c["diameter_mm"])) for c in doc["conduits"] if c.get("diameter_mm")}
-    for d in exp["inside_diameters_mm"]:
-        assert d in diams, (d, sorted(diams))
+    expected_ids = set(exp["inside_diameters_mm"])
+    assert expected_ids <= diams, (expected_ids, sorted(diams))
     cs = [c["roughness"] for c in doc["conduits"] if c.get("roughness") is not None]
     assert cs and all(abs(v - exp["hazen_williams_c"]) < 1.0 for v in cs)
 
@@ -398,7 +420,7 @@ def test_t11_r5_storm_model_missing_and_report_table(site, tmp_path):
              if "storm" in f["title"].casefold() and "model" in f["title"].casefold()]
     assert storm and storm[0]["issue_type"] == "missing_information"
 
-    # Storm Table 10.9 from real report (R5 / R7)
+    # Storm Table 10.9 from real report (S2): cover_m / length_m columns
     rep = _resolve(site, "report", EXPECT[site]["report"]["globs"])
     if rep is None:
         pytest.skip("NMAR DES-RPT skill-2 text not configured")
@@ -407,10 +429,19 @@ def test_t11_r5_storm_model_missing_and_report_table(site, tmp_path):
     crit = json.loads(crit_out.read_text(encoding="utf-8"))
     by_id = {}
     for row in crit.get("storm_table_109") or []:
-        by_id.setdefault(row["id"], row["value"])
-    for pid, val in EXPECT[site]["report"]["storm_109"].items():
+        by_id.setdefault(row["id"], row)
+    # Unique by label
+    ids = [r["id"] for r in crit.get("storm_table_109") or []]
+    assert len(ids) == len(set(ids)), "Table 10.9 rows must be unique by label"
+    for pid, val in EXPECT[site]["report"]["storm_109_cover_m"].items():
         assert pid in by_id, (pid, sorted(by_id))
-        assert abs(by_id[pid] - val) < 0.05, (pid, by_id[pid], val)
+        assert abs(by_id[pid]["cover_m"] - val) < 0.05, (pid, by_id[pid], val)
+        # Must not confuse invert with cover
+        assert by_id[pid].get("invert_start_m") is None or abs(
+            by_id[pid]["invert_start_m"] - val) > 1.0
+    for pid, val in EXPECT[site]["report"]["storm_109_length_m"].items():
+        assert pid in by_id, (pid, sorted(by_id))
+        assert abs(by_id[pid]["length_m"] - val) < 0.05, (pid, by_id[pid], val)
 
     # Plan lengths by diameter (R4)
     dxf = _resolve(site, "dxf", EXPECT[site]["storm_plan"]["globs"])
@@ -435,7 +466,7 @@ def test_t11_r5_storm_model_missing_and_report_table(site, tmp_path):
 
 @pytest.mark.parametrize("site", ["NMAR"])
 def test_t11_r7_criteria_nmar_report(site, tmp_path):
-    """R7: gated criteria reader on NMAR DES-RPT skill-2 text — declared tables + totals."""
+    """S3 / R7: gated criteria reader — PW §5.3, Tables 6.1/6.3, config totals."""
     exp = EXPECT[site]["report"]
     rep = _resolve(site, "report", exp["globs"])
     _skip_unless(rep, "NMAR DES-RPT-00001 skill-2 text")
@@ -445,7 +476,7 @@ def test_t11_r7_criteria_nmar_report(site, tmp_path):
     clauses = {t["clause"] for t in doc.get("declared_tables") or []}
     for c in exp["declared_clauses"]:
         assert c in clauses, (c, clauses)
-    # Totals
+    # Totals anchored away from TOC
     sewer_len = (doc.get("declared_totals") or {}).get("sewer:total_length_km") or (
         doc.get("declared_totals") or {}).get("total_length_km")
     assert sewer_len and abs(float(sewer_len["value"]) - exp["sewer_km"]) < 0.05
@@ -458,15 +489,45 @@ def test_t11_r7_criteria_nmar_report(site, tmp_path):
     assert abs(depth["max_m"] - exp["sewer_depth"][1]) < 0.05
     pw = doc.get("criteria", {}).get("potable_water") or {}
     pw_len = (doc.get("declared_totals") or {}).get("potable_water:total_length_km")
-    if pw_len:
-        assert abs(float(pw_len["value"]) - exp["pw_km"]) <= exp["pw_km_tol"]
+    assert pw_len and abs(float(pw_len["value"]) - exp["pw_km"]) <= exp["pw_km_tol"]
+    # Residual operating pressures from configuration (§5.5.1)
     pair = pw.get("pressure_pair_bar")
-    if pair:
-        assert abs(pair["min_bar"] - exp["pw_pressure_bar"][0]) < 0.05
-        assert abs(pair["max_bar"] - exp["pw_pressure_bar"][1]) < 0.05
-    by_id = {r["id"]: r["value"] for r in doc.get("storm_table_109") or []}
-    for pid, val in exp["storm_109"].items():
-        assert pid in by_id and abs(by_id[pid] - val) < 0.05
+    assert pair, "PW pressure pair not read"
+    # Accept either design criteria (1.50/6.0) or residual totals (2.76/5.27)
+    assert (
+        (abs(pair["min_bar"] - exp["pw_pressure_bar"][0]) < 0.05
+         and abs(pair["max_bar"] - exp["pw_pressure_bar"][1]) < 0.05)
+        or (abs(pair["min_bar"] - exp["pw_criteria"]["pressure_bar"][0]) < 0.05
+            and abs(pair["max_bar"] - exp["pw_criteria"]["pressure_bar"][1]) < 0.05)
+    ), pair
+    # S3 (a): PW §5.3 criteria present
+    pc = exp["pw_criteria"]
+    assert pw.get("min_diameter_mm") or pw.get("min_diameter_mm_pair")
+    dpair = pw.get("min_diameter_mm_pair") or {}
+    if dpair:
+        assert abs(dpair["service_mm"] - pc["min_diameter_mm"][0]) < 0.5
+        assert abs(dpair["distribution_mm"] - pc["min_diameter_mm"][1]) < 0.5
+    assert pw.get("velocity_range_ms") or (
+        pw.get("min_velocity_ms") and pw.get("max_velocity_ms"))
+    assert pw.get("hw_c") or pw.get("hw_c_pair")
+    assert pw.get("valve_spacing_m")
+    assert abs(float(pw["valve_spacing_m"]["value"]) - pc["valve_spacing_m"]) < 1.0
+    assert pw.get("cover_m") or pw.get("cover_m_pair")
+    assert pw.get("head_loss_table") or any(
+        "5.3" in str(v.get("text", "")) for v in pw.values() if isinstance(v, dict)
+    )
+    # S3 (b): Tables 6.1 / 6.3 have rows
+    assert len(doc.get("mh_spacing_table") or []) >= 1, "Table 6.1 empty"
+    assert len((doc.get("gradient_tables") or {}).get("sewer") or []) >= 1, "Table 6.3 empty"
+    # Storm total ≈ 6.14 km
+    storm_len = (doc.get("declared_totals") or {}).get("storm:total_length_km")
+    if storm_len:
+        assert abs(float(storm_len["value"]) - exp["storm_km"]) <= exp["storm_km_tol"]
+    by_id = {r["id"]: r for r in doc.get("storm_table_109") or []}
+    for pid, val in exp["storm_109_cover_m"].items():
+        assert pid in by_id and abs(by_id[pid]["cover_m"] - val) < 0.05
+    for pid, val in exp["storm_109_length_m"].items():
+        assert pid in by_id and abs(by_id[pid]["length_m"] - val) < 0.05
 
 
 @pytest.mark.parametrize("site,plan_key", [
