@@ -3,12 +3,9 @@
 
 SPC-0006 Rev Q §4.19 / DQ-3:
   - base alternative = lowest AlternativeID
-  - internal US feet → SI (length / levels → m; diameters → mm)
-  - optional SHP export cross-check (NMAR Co-17 style)
-  - writes networks.json + source sha256
-
-Supports (a) the skill's synthetic schema used by T11 tests and (b) discovery of
-Haestad tables that carry DomainElementID + AlternativeID physical rows.
+  - storage is US feet **always** → SI (× 0.3048 for lengths/levels; × 304.8 for diameters mm)
+  - real OpenFlows tables (HMIModelingElement / Conduit / IdahoPipe …) — no invented schema
+  - optional SHP export cross-check (NMAR Co-17: D / L / inverts)
 
 Usage:
   python read_bentley_sqlite.py --sqlite <model.stsw.sqlite|.wtg.sqlite>
@@ -35,18 +32,6 @@ from wet_common import (  # noqa: E402
 
 SCHEMA_PATH = SKILL_ROOT / "templates" / "networks.schema.json"
 
-# Synthetic / documented column aliases (feet storage)
-DIAM_COLS = ("Diameter_ft", "Diameter", "diameter", "DiameterIn", "InsideDiameter")
-LEN_COLS = ("Length_ft", "Length", "length", "LengthUserDefined", "UserDefinedLength")
-INV_S = ("InvertStart_ft", "InvertElevationStart", "StartInvert", "Invert (Start)", "InvertStart")
-INV_E = ("InvertStop_ft", "InvertElevationStop", "StopInvert", "Invert (Stop)", "InvertStop")
-GROUND = ("Ground_ft", "GroundElevation", "RimElevation", "GroundElevation_ft", "Rim_ft")
-X_COLS = ("X_ft", "GeometryX", "X", "Easting", "x")
-Y_COLS = ("Y_ft", "GeometryY", "Y", "Northing", "y")
-MAT_COLS = ("Material", "material")
-ROUGH_COLS = ("Roughness", "HazenWilliamsC", "ManningsN", "RoughnessCoefficient", "HW_C")
-ROUGH_TYPE = ("RoughnessType", "roughness_type")
-
 
 def _cols(cur, table):
     return [r[1] for r in cur.execute(f'PRAGMA table_info("{table}")').fetchall()]
@@ -58,15 +43,8 @@ def _tables(cur):
     ).fetchall()]
 
 
-def _pick(row, names, cols):
-    lower = {c.casefold(): c for c in cols}
-    for n in names:
-        if n in row:
-            return row[n]
-        c = lower.get(n.casefold())
-        if c is not None and c in row.keys():
-            return row[c]
-    return None
+def _has(tables, name):
+    return name in tables
 
 
 def _as_float(v):
@@ -76,6 +54,14 @@ def _as_float(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _col(cols, *names):
+    lower = {c.casefold(): c for c in cols}
+    for n in names:
+        if n.casefold() in lower:
+            return lower[n.casefold()]
+    return None
 
 
 def detect_kind(path, network_arg):
@@ -96,276 +82,452 @@ def choose_base_alternative(cur, tables):
     alt_ids = set()
     for t in tables:
         cols = _cols(cur, t)
-        if any(c.casefold() == "alternativeid" for c in cols):
-            col = next(c for c in cols if c.casefold() == "alternativeid")
-            for (aid,) in cur.execute(f'SELECT DISTINCT "{col}" FROM "{t}"').fetchall():
-                if aid is not None:
-                    try:
-                        alt_ids.add(int(aid))
-                    except (TypeError, ValueError):
-                        pass
+        col = _col(cols, "AlternativeID")
+        if not col:
+            continue
+        for (aid,) in cur.execute(f'SELECT DISTINCT "{col}" FROM "{t}"').fetchall():
+            if aid is None:
+                continue
+            try:
+                alt_ids.add(int(aid))
+            except (TypeError, ValueError):
+                pass
     if not alt_ids:
         return None, []
     return min(alt_ids), sorted(alt_ids)
 
 
-def read_synthetic(cur, base_alt, network):
-    """Schema used by T11 synthetic fixtures (Elements / Links / Physical / Alternatives)."""
-    tables = set(_tables(cur))
-    if not {"Elements", "Physical"}.issubset(tables):
+def _index_by_domain(cur, table, base_alt, required_cols=()):
+    """Map DomainElementID → row for base alternative (or all rows if no AlternativeID)."""
+    if not table:
+        return {}, []
+    cols = _cols(cur, table)
+    id_col = _col(cols, "DomainElementID", "ElementID")
+    if not id_col:
+        return {}, cols
+    for need in required_cols:
+        if not _col(cols, need):
+            return {}, cols
+    alt_col = _col(cols, "AlternativeID")
+    out = {}
+    if alt_col is not None and base_alt is not None:
+        rows = cur.execute(
+            f'SELECT * FROM "{table}" WHERE "{alt_col}" = ?', (base_alt,)
+        ).fetchall()
+    else:
+        rows = cur.execute(f'SELECT * FROM "{table}"').fetchall()
+    for r in rows:
+        try:
+            eid = int(r[id_col])
+        except (TypeError, ValueError, KeyError):
+            continue
+        out[eid] = r
+    return out, cols
+
+
+def _safe_index(cur, table, base_alt, required_cols=()):
+    if not table:
+        return {}, []
+    try:
+        return _index_by_domain(cur, table, base_alt, required_cols=required_cols)
+    except sqlite3.Error:
+        return {}, []
+
+
+def read_live_elements(cur, tables):
+    """HMIModelingElement where IsDeleted = 0, with Label."""
+    if not _has(tables, "HMIModelingElement"):
         return None
-    alts = []
-    if "Alternatives" in tables:
-        for r in cur.execute("SELECT AlternativeID, Label FROM Alternatives ORDER BY AlternativeID"):
-            alts.append({"alternative_id": int(r[0]), "label": r[1]})
+    cols = _cols(cur, "HMIModelingElement")
+    id_col = _col(cols, "ElementID", "DomainElementID")
+    lab_col = _col(cols, "Label")
+    del_col = _col(cols, "IsDeleted")
+    if not id_col or not lab_col:
+        return None
+    q = f'SELECT * FROM "HMIModelingElement"'
+    if del_col:
+        q += f' WHERE "{del_col}" = 0'
     elements = {}
-    for r in cur.execute("SELECT * FROM Elements"):
-        cols = r.keys()
-        eid = int(r["ElementID"])
+    for r in cur.execute(q):
+        try:
+            eid = int(r[id_col])
+        except (TypeError, ValueError, KeyError):
+            continue
         elements[eid] = {
             "element_id": eid,
-            "element_type": r["ElementType"] if "ElementType" in cols else "unknown",
-            "label": r["Label"] if "Label" in cols else str(eid),
-            "e_m": ft_to_m(_as_float(_pick(r, X_COLS, cols))),
-            "n_m": ft_to_m(_as_float(_pick(r, Y_COLS, cols))),
-            "ground_m": ft_to_m(_as_float(_pick(r, GROUND, cols))),
+            "label": str(r[lab_col]) if r[lab_col] is not None else str(eid),
+            "is_deleted": 0,
             "source": "model",
         }
-    links = {}
-    if "Links" in tables:
-        for r in cur.execute("SELECT * FROM Links"):
-            links[int(r["ElementID"])] = {
-                "start_node_id": int(r["StartNodeID"]) if r["StartNodeID"] is not None else None,
-                "stop_node_id": int(r["StopNodeID"]) if r["StopNodeID"] is not None else None,
-            }
+    return elements
+
+
+def _ground_map(cur, tables, base_alt):
+    """Ground / node elevations from BaseNode / BaseDirectedNode / BaseIdahoNode (US ft → m)."""
+    ground = {}
+    for table, elev_names in (
+        ("BaseNode_Physical_Data", ("Physical_GroundElevation", "Physical_RimElevation")),
+        ("BaseDirectedNode_Physical_Data", ("Physical_GroundElevation", "Physical_RimElevation")),
+        ("BaseIdahoNode_Physical_Data", ("Physical_NodeElevation", "Physical_GroundElevation")),
+    ):
+        if not _has(tables, table):
+            continue
+        rows, cols = _safe_index(cur, table, base_alt)
+        elev_col = _col(cols, *elev_names)
+        if not elev_col:
+            continue
+        for eid, r in rows.items():
+            v = ft_to_m(_as_float(r[elev_col]))
+            if v is not None and eid not in ground:
+                ground[eid] = v
+    return ground
+
+
+def _alternatives_list(cur, tables, base_alt, all_alts):
+    alts = []
+    if _has(tables, "Alternatives"):
+        cols = _cols(cur, "Alternatives")
+        id_col = _col(cols, "AlternativeID")
+        lab_col = _col(cols, "Label")
+        if id_col:
+            for r in cur.execute(
+                f'SELECT * FROM "Alternatives" ORDER BY "{id_col}"'
+            ):
+                try:
+                    aid = int(r[id_col])
+                except (TypeError, ValueError):
+                    continue
+                alts.append({
+                    "alternative_id": aid,
+                    "label": r[lab_col] if lab_col else None,
+                })
+    if not alts:
+        alts = [{"alternative_id": a, "label": "base" if a == base_alt else None}
+                for a in all_alts]
+    return alts
+
+
+def read_sewer_network(cur, tables, elements, base_alt, network):
+    """Conduit DomainElementID live in HMIModelingElement + physical / topology / geometry."""
+    if not _has(tables, "Conduit"):
+        return None
+    conduit_ids = set()
+    c_cols = _cols(cur, "Conduit")
+    id_col = _col(c_cols, "DomainElementID", "ElementID")
+    if not id_col:
+        return None
+    for r in cur.execute('SELECT * FROM "Conduit"'):
+        try:
+            eid = int(r[id_col])
+        except (TypeError, ValueError):
+            continue
+        if eid in elements:
+            conduit_ids.add(eid)
+    if not conduit_ids:
+        return None
+
+    diam, diam_cols = _safe_index(
+        cur, "Conduit_Physical_Data" if _has(tables, "Conduit_Physical_Data") else None,
+        base_alt, required_cols=("ConduitDiameter",),
+    )
+    diam_col = _col(diam_cols, "ConduitDiameter")
+
+    inv, inv_cols = _safe_index(
+        cur,
+        "PhysicalLink_Physical_Data" if _has(tables, "PhysicalLink_Physical_Data") else None,
+        base_alt,
+    )
+    inv_s_col = _col(inv_cols, "Physical_UpstreamInvert")
+    inv_e_col = _col(inv_cols, "Physical_DownstreamInvert")
+
+    topo, topo_cols = _safe_index(
+        cur,
+        "BaseLink_HMIDataSetTopology_Data"
+        if _has(tables, "BaseLink_HMIDataSetTopology_Data") else None,
+        base_alt,
+    )
+    start_col = _col(topo_cols, "HMITopologyStartNodeID")
+    stop_col = _col(topo_cols, "HMITopologyStopNodeID")
+
+    geom, geom_cols = _safe_index(
+        cur,
+        "BaseLink_HmiDataSetGeometry_Data"
+        if _has(tables, "BaseLink_HmiDataSetGeometry_Data") else None,
+        base_alt,
+    )
+    len_col = _col(geom_cols, "HMIGeometryScaledLength")
+
+    grav, grav_cols = _safe_index(
+        cur,
+        "GravityLinkBase_Physical_Data"
+        if _has(tables, "GravityLinkBase_Physical_Data") else None,
+        base_alt,
+    )
+    mat_col = _col(grav_cols, "Physical_Material", "Material", "material")
+    n_col = _col(grav_cols, "Physical_ManningsN", "ManningsN")
+
+    ground = _ground_map(cur, tables, base_alt)
     conduits = []
-    phys_cols = _cols(cur, "Physical")
-    q = 'SELECT * FROM Physical WHERE AlternativeID = ?' if base_alt is not None else 'SELECT * FROM Physical'
-    rows = cur.execute(q, (base_alt,) if base_alt is not None else ()).fetchall()
-    for r in rows:
-        eid = int(r["DomainElementID"])
-        el = elements.get(eid, {"element_id": eid, "label": str(eid), "element_type": "conduit"})
-        link = links.get(eid, {})
-        d_ft = _as_float(_pick(r, DIAM_COLS, phys_cols))
-        l_ft = _as_float(_pick(r, LEN_COLS, phys_cols))
-        inv_s = _as_float(_pick(r, INV_S, phys_cols))
-        inv_e = _as_float(_pick(r, INV_E, phys_cols))
+    for eid in sorted(conduit_ids):
+        el = elements[eid]
+        d_ft = _as_float(diam[eid][diam_col]) if eid in diam and diam_col else None
+        l_ft = _as_float(geom[eid][len_col]) if eid in geom and len_col else None
+        inv_s_ft = _as_float(inv[eid][inv_s_col]) if eid in inv and inv_s_col else None
+        inv_e_ft = _as_float(inv[eid][inv_e_col]) if eid in inv and inv_e_col else None
         d_mm = ft_to_mm(d_ft)
         length_m = ft_to_m(l_ft)
-        inv_s_m = ft_to_m(inv_s)
-        inv_e_m = ft_to_m(inv_e)
-        drop = None
-        if inv_s_m is not None and inv_e_m is not None:
-            drop = inv_s_m - inv_e_m
-        start_id = link.get("start_node_id")
-        stop_id = link.get("stop_node_id")
-        start = elements.get(start_id) if start_id is not None else None
-        stop = elements.get(stop_id) if stop_id is not None else None
+        inv_s_m = ft_to_m(inv_s_ft)
+        inv_e_m = ft_to_m(inv_e_ft)
+        drop = (inv_s_m - inv_e_m) if inv_s_m is not None and inv_e_m is not None else None
+        start_id = stop_id = None
+        if eid in topo:
+            if start_col and topo[eid][start_col] is not None:
+                start_id = int(topo[eid][start_col])
+            if stop_col and topo[eid][stop_col] is not None:
+                stop_id = int(topo[eid][stop_col])
+        g = ground.get(start_id) if start_id is not None else None
         cover = None
-        if start and start.get("ground_m") is not None and inv_s_m is not None and d_mm is not None:
-            # soffit cover ≈ ground − (invert + diameter)
-            cover = start["ground_m"] - (inv_s_m + d_mm / 1000.0)
+        if g is not None and inv_s_m is not None and d_mm is not None:
+            cover = g - (inv_s_m + d_mm / 1000.0)
+        material = None
+        roughness = None
+        if eid in grav:
+            if mat_col:
+                material = grav[eid][mat_col]
+            if n_col:
+                roughness = _as_float(grav[eid][n_col])
         conduits.append({
-            "id": el.get("label") or str(eid),
+            "id": el["label"],
             "element_id": eid,
             "network": network,
             "source": "model",
-            "kind": el.get("element_type") or "conduit",
+            "kind": "conduit",
             "diameter_mm": round(d_mm, 3) if d_mm is not None else None,
             "length_m": round(length_m, 6) if length_m is not None else None,
             "invert_start_m": round(inv_s_m, 6) if inv_s_m is not None else None,
             "invert_stop_m": round(inv_e_m, 6) if inv_e_m is not None else None,
-            "slope_pct": round(slope_pct(length_m, drop), 6) if slope_pct(length_m, drop) is not None else None,
+            "slope_pct": (
+                round(slope_pct(length_m, drop), 6)
+                if slope_pct(length_m, drop) is not None else None
+            ),
             "cover_m": round(cover, 6) if cover is not None else None,
-            "material": _pick(r, MAT_COLS, phys_cols),
-            "roughness": _as_float(_pick(r, ROUGH_COLS, phys_cols)),
-            "roughness_type": _pick(r, ROUGH_TYPE, phys_cols),
+            "material": material,
+            "roughness": roughness,
+            "roughness_type": "Manning" if roughness is not None else None,
             "start_node_id": start_id,
             "stop_node_id": stop_id,
-            "start_label": (start or {}).get("label"),
-            "stop_label": (stop or {}).get("label"),
-            "e_m": (start or {}).get("e_m"),
-            "n_m": (start or {}).get("n_m"),
+            "start_label": (elements.get(start_id) or {}).get("label"),
+            "stop_label": (elements.get(stop_id) or {}).get("label"),
+            "e_m": None,
+            "n_m": None,
             "alternative_id": base_alt,
             "units_source": "US_feet",
         })
-    nodes = [v for v in elements.values() if (v.get("element_type") or "").lower()
-             in ("manhole", "junction", "node", "outfall", "catchbasin", "hydrant", "valve", "tank", "reservoir")]
-    if not nodes:
-        nodes = [v for v in elements.values() if v["element_id"] not in {c["element_id"] for c in conduits}]
-    loads = []
-    if "Loads" in tables:
-        lq = 'SELECT * FROM Loads WHERE AlternativeID = ?' if base_alt is not None else 'SELECT * FROM Loads'
-        for r in cur.execute(lq, (base_alt,) if base_alt is not None else ()).fetchall():
-            loads.append({
-                "element_id": int(r["DomainElementID"]),
-                "load": _as_float(r["Load_cms"] if "Load_cms" in r.keys() else r[list(r.keys())[-1]]),
-                "alternative_id": base_alt,
+
+    used = {c["element_id"] for c in conduits}
+    node_ids = set()
+    for c in conduits:
+        if c["start_node_id"] is not None:
+            node_ids.add(c["start_node_id"])
+        if c["stop_node_id"] is not None:
+            node_ids.add(c["stop_node_id"])
+    nodes = []
+    for eid in sorted(node_ids):
+        el = elements.get(eid) or {"element_id": eid, "label": str(eid)}
+        nodes.append({
+            "element_id": eid,
+            "label": el.get("label") or str(eid),
+            "element_type": "manhole",
+            "e_m": None,
+            "n_m": None,
+            "ground_m": ground.get(eid),
+            "source": "model",
+        })
+    # orphan live elements that are not conduits (optional manholes without links)
+    for eid, el in elements.items():
+        if eid in used or eid in node_ids:
+            continue
+        # skip if nothing else references — keep only those with ground data
+        if eid in ground:
+            nodes.append({
+                "element_id": eid,
+                "label": el["label"],
+                "element_type": "node",
+                "e_m": None,
+                "n_m": None,
+                "ground_m": ground[eid],
+                "source": "model",
             })
     return {
         "conduits": conduits,
         "nodes": nodes,
-        "loads": loads,
-        "alternatives": alts,
-        "schema": "synthetic",
+        "loads": [],
+        "schema": "openflows_conduit",
+        "physical_tables": [
+            t for t in (
+                "Conduit", "Conduit_Physical_Data", "PhysicalLink_Physical_Data",
+                "BaseLink_HMIDataSetTopology_Data", "BaseLink_HmiDataSetGeometry_Data",
+                "GravityLinkBase_Physical_Data",
+            ) if _has(tables, t)
+        ],
     }
 
 
-def read_haestad_discovery(cur, base_alt, network):
-    """Best-effort discovery of Haestad DomainElementID / AlternativeID physical tables."""
-    tables = _tables(cur)
-    phys_tables = []
-    for t in tables:
-        cols = _cols(cur, t)
-        cf = {c.casefold() for c in cols}
-        if "domainElementid".casefold() in cf and "alternativeid" in cf:
-            if any(x in cf for x in ("diameter", "diameter_ft", "length", "length_ft",
-                                     "invertelevationstart", "invertstart_ft", "hazenwilliamsc")):
-                phys_tables.append(t)
-    if not phys_tables:
+def read_pressure_network(cur, tables, elements, base_alt, network):
+    """IdahoPipe DomainElementID live in HMIModelingElement + IdahoPipe_Physical_Data."""
+    if not _has(tables, "IdahoPipe"):
         return None
-    # Element label tables: prefer Pipe / Conduit
-    label_map = {}
-    geom_map = {}
-    for t in tables:
-        cols = _cols(cur, t)
-        cf = {c.casefold(): c for c in cols}
-        id_col = cf.get("elementid") or cf.get("id") or cf.get("domainelementid")
-        lab_col = cf.get("label")
-        if not id_col or not lab_col:
-            continue
-        x_col = next((cf[k] for k in ("geometryx", "x", "easting", "x_ft") if k in cf), None)
-        y_col = next((cf[k] for k in ("geometryy", "y", "northing", "y_ft") if k in cf), None)
-        g_col = next((cf[k] for k in ("groundelevation", "rimelevation", "ground_ft", "rim_ft") if k in cf), None)
-        for r in cur.execute(f'SELECT * FROM "{t}"'):
-            try:
-                eid = int(r[id_col])
-            except (TypeError, ValueError, KeyError):
-                continue
-            label_map[eid] = str(r[lab_col])
-            if x_col or y_col or g_col:
-                geom_map[eid] = {
-                    "e_m": ft_to_m(_as_float(r[x_col])) if x_col else None,
-                    "n_m": ft_to_m(_as_float(r[y_col])) if y_col else None,
-                    "ground_m": ft_to_m(_as_float(r[g_col])) if g_col else None,
-                }
-    # Start/stop from Conduit / Pipe tables
-    ends = {}
-    for t in tables:
-        cols = _cols(cur, t)
-        cf = {c.casefold(): c for c in cols}
-        id_col = cf.get("elementid") or cf.get("id") or cf.get("domainelementid")
-        s_col = cf.get("startnodeid") or cf.get("startnode") or cf.get("fromnodeid")
-        e_col = cf.get("stopnodeid") or cf.get("stopnode") or cf.get("tonodeid")
-        if not (id_col and s_col and e_col):
-            continue
-        for r in cur.execute(f'SELECT * FROM "{t}"'):
-            try:
-                eid = int(r[id_col])
-                ends[eid] = {
-                    "start_node_id": int(r[s_col]) if r[s_col] is not None else None,
-                    "stop_node_id": int(r[e_col]) if r[e_col] is not None else None,
-                }
-            except (TypeError, ValueError, KeyError):
-                continue
-    conduits = []
-    for t in phys_tables:
-        cols = _cols(cur, t)
-        cf = {c.casefold(): c for c in cols}
-        id_col = cf["domainelementid"]
-        alt_col = cf["alternativeid"]
-        q = f'SELECT * FROM "{t}" WHERE "{alt_col}" = ?' if base_alt is not None else f'SELECT * FROM "{t}"'
-        for r in cur.execute(q, (base_alt,) if base_alt is not None else ()):
+    pipe_ids = set()
+    p_cols = _cols(cur, "IdahoPipe")
+    id_col = _col(p_cols, "DomainElementID", "ElementID")
+    if not id_col:
+        return None
+    for r in cur.execute('SELECT * FROM "IdahoPipe"'):
+        try:
             eid = int(r[id_col])
-            d_ft = _as_float(_pick(r, DIAM_COLS, cols))
-            # Haestad often stores diameter already in inches or feet — detect: if > 5 treat as inches? 
-            # DQ-3 / probe: US feet internal. If value looks like mm (> 50 and < 5000) leave as mm.
-            d_mm = None
-            if d_ft is not None:
-                if d_ft > 50:  # already mm-ish
-                    d_mm = d_ft
-                elif d_ft > 5:  # inches
-                    d_mm = d_ft * 25.4
-                else:
-                    d_mm = ft_to_mm(d_ft)
-            l_ft = _as_float(_pick(r, LEN_COLS, cols))
-            length_m = ft_to_m(l_ft) if l_ft is not None and l_ft < 1e5 else (_as_float(l_ft) if l_ft else None)
-            # if length already metres (typical Haestad SI project) values are hundreds–thousands
-            if l_ft is not None and l_ft > 500 and d_ft is not None and d_ft > 50:
-                length_m = float(l_ft)
-            inv_s = _as_float(_pick(r, INV_S, cols))
-            inv_e = _as_float(_pick(r, INV_E, cols))
-            # elevations: if absolute > 1000 assume feet
-            def elev_m(v):
-                if v is None:
-                    return None
-                return ft_to_m(v) if abs(v) > 200 or abs(v) < 50 else float(v)
-            # Prefer feet→m always for US models (DQ-3); if value looks like UTM Z in metres (~400–800) keep.
-            def elev_auto(v):
-                if v is None:
-                    return None
-                if 200 <= abs(v) <= 2000:
-                    return float(v)  # metres elevation band for KSA
-                return ft_to_m(v)
-            inv_s_m = elev_auto(inv_s)
-            inv_e_m = elev_auto(inv_e)
-            drop = (inv_s_m - inv_e_m) if inv_s_m is not None and inv_e_m is not None else None
-            end = ends.get(eid, {})
-            geom = geom_map.get(end.get("start_node_id")) or geom_map.get(eid) or {}
-            cover = None
-            g = geom.get("ground_m")
-            if g is not None and inv_s_m is not None and d_mm is not None:
-                cover = g - (inv_s_m + d_mm / 1000.0)
-            conduits.append({
-                "id": label_map.get(eid, str(eid)),
-                "element_id": eid,
-                "network": network,
-                "source": "model",
-                "kind": "conduit" if "conduit" in t.casefold() else "pipe",
-                "diameter_mm": round(d_mm, 3) if d_mm is not None else None,
-                "length_m": round(length_m, 6) if length_m is not None else None,
-                "invert_start_m": round(inv_s_m, 6) if inv_s_m is not None else None,
-                "invert_stop_m": round(inv_e_m, 6) if inv_e_m is not None else None,
-                "slope_pct": round(slope_pct(length_m, drop), 6) if slope_pct(length_m, drop) is not None else None,
-                "cover_m": round(cover, 6) if cover is not None else None,
-                "material": _pick(r, MAT_COLS, cols),
-                "roughness": _as_float(_pick(r, ROUGH_COLS, cols)),
-                "roughness_type": _pick(r, ROUGH_TYPE, cols),
-                "start_node_id": end.get("start_node_id"),
-                "stop_node_id": end.get("stop_node_id"),
-                "start_label": label_map.get(end.get("start_node_id")) if end.get("start_node_id") else None,
-                "stop_label": label_map.get(end.get("stop_node_id")) if end.get("stop_node_id") else None,
-                "e_m": geom.get("e_m"),
-                "n_m": geom.get("n_m"),
-                "alternative_id": base_alt,
-                "units_source": "US_feet_or_detected",
-                "physical_table": t,
-            })
-    nodes = []
-    for eid, lab in label_map.items():
-        if any(c["element_id"] == eid for c in conduits):
+        except (TypeError, ValueError):
             continue
-        g = geom_map.get(eid) or {}
+        if eid in elements:
+            pipe_ids.add(eid)
+    if not pipe_ids:
+        return None
+
+    phys, phys_cols = _safe_index(
+        cur,
+        "IdahoPipe_Physical_Data" if _has(tables, "IdahoPipe_Physical_Data") else None,
+        base_alt,
+    )
+    diam_col = _col(phys_cols, "Physical_PipeDiameter")
+    mat_col = _col(phys_cols, "Physical_PipeMaterial", "Physical_Material")
+    c_col = _col(phys_cols, "Physical_HazenWilliamsC")
+
+    topo, topo_cols = _safe_index(
+        cur,
+        "BaseLink_HMIDataSetTopology_Data"
+        if _has(tables, "BaseLink_HMIDataSetTopology_Data") else None,
+        base_alt,
+    )
+    start_col = _col(topo_cols, "HMITopologyStartNodeID")
+    stop_col = _col(topo_cols, "HMITopologyStopNodeID")
+
+    geom, geom_cols = _safe_index(
+        cur,
+        "BaseLink_HmiDataSetGeometry_Data"
+        if _has(tables, "BaseLink_HmiDataSetGeometry_Data") else None,
+        base_alt,
+    )
+    len_col = _col(geom_cols, "HMIGeometryScaledLength")
+
+    ground = _ground_map(cur, tables, base_alt)
+    conduits = []
+    for eid in sorted(pipe_ids):
+        el = elements[eid]
+        d_ft = _as_float(phys[eid][diam_col]) if eid in phys and diam_col else None
+        l_ft = _as_float(geom[eid][len_col]) if eid in geom and len_col else None
+        d_mm = ft_to_mm(d_ft)
+        length_m = ft_to_m(l_ft)
+        material = phys[eid][mat_col] if eid in phys and mat_col else None
+        hw_c = _as_float(phys[eid][c_col]) if eid in phys and c_col else None
+        start_id = stop_id = None
+        if eid in topo:
+            if start_col and topo[eid][start_col] is not None:
+                start_id = int(topo[eid][start_col])
+            if stop_col and topo[eid][stop_col] is not None:
+                stop_id = int(topo[eid][stop_col])
+        g_start = ground.get(start_id) if start_id is not None else None
+        cover = None
+        # pressure: cover ≈ ground − node elevation when available; else None
+        if g_start is not None and start_id is not None and ground.get(start_id) is not None:
+            # Node elevation used as centreline; without diameter soffit skip cover
+            if d_mm is not None and g_start is not None:
+                # Prefer Idaho node elevation as invert proxy when present
+                cover = None
+        conduits.append({
+            "id": el["label"],
+            "element_id": eid,
+            "network": network,
+            "source": "model",
+            "kind": "pipe",
+            "diameter_mm": round(d_mm, 3) if d_mm is not None else None,
+            "length_m": round(length_m, 6) if length_m is not None else None,
+            "invert_start_m": None,
+            "invert_stop_m": None,
+            "slope_pct": None,
+            "cover_m": cover,
+            "material": material,
+            "roughness": hw_c,
+            "roughness_type": "HazenWilliams" if hw_c is not None else None,
+            "start_node_id": start_id,
+            "stop_node_id": stop_id,
+            "start_label": (elements.get(start_id) or {}).get("label"),
+            "stop_label": (elements.get(stop_id) or {}).get("label"),
+            "e_m": None,
+            "n_m": None,
+            "alternative_id": base_alt,
+            "units_source": "US_feet",
+        })
+
+    node_ids = set()
+    for c in conduits:
+        if c["start_node_id"] is not None:
+            node_ids.add(c["start_node_id"])
+        if c["stop_node_id"] is not None:
+            node_ids.add(c["stop_node_id"])
+    nodes = []
+    for eid in sorted(node_ids):
+        el = elements.get(eid) or {"element_id": eid, "label": str(eid)}
         nodes.append({
-            "element_id": eid, "label": lab, "element_type": "node",
-            "e_m": g.get("e_m"), "n_m": g.get("n_m"), "ground_m": g.get("ground_m"),
+            "element_id": eid,
+            "label": el.get("label") or str(eid),
+            "element_type": "junction",
+            "e_m": None,
+            "n_m": None,
+            "ground_m": ground.get(eid),
             "source": "model",
         })
     return {
         "conduits": conduits,
         "nodes": nodes,
         "loads": [],
-        "alternatives": [{"alternative_id": base_alt, "label": "base"}] if base_alt is not None else [],
-        "schema": "haestad_discovery",
-        "physical_tables": phys_tables,
+        "schema": "openflows_idaho_pipe",
+        "physical_tables": [
+            t for t in (
+                "IdahoPipe", "IdahoPipe_Physical_Data",
+                "BaseLink_HMIDataSetTopology_Data", "BaseLink_HmiDataSetGeometry_Data",
+                "BaseIdahoNode_Physical_Data",
+            ) if _has(tables, t)
+        ],
     }
 
 
-def read_shp_points(path):
-    """Minimal SHP point reader, or JSON [{label,e,n}, ...] (metres).
+def read_openflows(cur, base_alt, all_alts, network):
+    """Read real OpenFlows tables; returns None if HMIModelingElement missing."""
+    tables = _tables(cur)
+    elements = read_live_elements(cur, tables)
+    if elements is None:
+        return None
+    data = None
+    if network in ("sewer", "storm", "force_main"):
+        data = read_sewer_network(cur, tables, elements, base_alt, network)
+    if data is None and network in ("water", "irrigation"):
+        data = read_pressure_network(cur, tables, elements, base_alt, network)
+    if data is None:
+        # Fall back: try the other family when --network mismatched the tables
+        data = read_sewer_network(cur, tables, elements, base_alt, network)
+        if data is None:
+            data = read_pressure_network(cur, tables, elements, base_alt, network)
+    if data is None:
+        return None
+    data["alternatives"] = _alternatives_list(cur, tables, base_alt, all_alts)
+    data["warnings"] = []
+    return data
 
-    Returns (points, units) where units is ``metres`` (JSON / GeoJSON) or
-    ``shp`` (binary — may still be feet when coordinates are small).
+
+def read_shp_points(path):
+    """Minimal SHP / JSON reader for Co-17-style cross-check.
+
+    JSON may carry D / L / invert attributes (metres / mm). Binary SHP uses DBF
+    fields when present. Coordinates in JSON are metres; binary SHP may be feet.
     """
     p = Path(path)
     if not p.is_file():
@@ -379,19 +541,17 @@ def read_shp_points(path):
                 props = f.get("properties") or {}
                 geom = f.get("geometry") or {}
                 coords = geom.get("coordinates") or [None, None]
-                out.append({
-                    "label": str(props.get("label") or props.get("Label") or props.get("ID") or ""),
-                    "e": coords[0], "n": coords[1],
-                })
+                out.append(_attrs_from_props(props, coords[0], coords[1]))
             return out, "metres"
-        pts = data if isinstance(data, list) else data.get("points") or []
-        return pts, "metres"
-    # Binary SHP — points only (shape type 1 / 11) or first vertex of polyline
+        pts = data if isinstance(data, list) else data.get("points") or data.get("conduits") or []
+        out = []
+        for item in pts:
+            out.append(_attrs_from_props(item, item.get("e"), item.get("n")))
+        return out, "metres"
     with p.open("rb") as f:
         header = f.read(100)
         if len(header) < 100:
             raise ValueError("SHP too short")
-        shape_type = struct.unpack("<i", header[32:36])[0]
         records = []
         while True:
             rec_hdr = f.read(8)
@@ -406,10 +566,7 @@ def read_shp_points(path):
                 x, y = struct.unpack("<2d", payload[4:20])
                 records.append({"label": "", "e": x, "n": y, "record": _num})
             elif st in (3, 13, 23) and len(payload) >= 44:
-                # polyline — take first vertex as representative
-                # after box(32) + numParts(4) + numPoints(4) + parts...
                 try:
-                    _xmin, _ymin, _xmax, _ymax = struct.unpack("<4d", payload[4:36])
                     n_parts, n_points = struct.unpack("<2i", payload[36:44])
                     off = 44 + 4 * n_parts
                     if len(payload) >= off + 16:
@@ -417,17 +574,42 @@ def read_shp_points(path):
                         records.append({"label": "", "e": x, "n": y, "record": _num})
                 except struct.error:
                     pass
-        # DBF labels when present
         dbf = p.with_suffix(".dbf")
         if dbf.is_file() and records:
-            labels = _read_dbf_labels(dbf)
+            rows = _read_dbf_rows(dbf)
             for i, rec in enumerate(records):
-                if i < len(labels):
-                    rec["label"] = labels[i]
+                if i < len(rows):
+                    rec.update(_attrs_from_props(rows[i], rec.get("e"), rec.get("n")))
         return records, "shp"
 
 
-def _read_dbf_labels(path):
+def _attrs_from_props(props, e=None, n=None):
+    def g(*names):
+        for name in names:
+            if name in props and props[name] not in (None, ""):
+                return props[name]
+            for k, v in props.items():
+                if str(k).casefold() == name.casefold() and v not in (None, ""):
+                    return v
+        return None
+
+    label = g("label", "Label", "ID", "Name", "TEXT", "Handle")
+    return {
+        "label": str(label) if label is not None else "",
+        "e": e if e is not None else _as_float(g("e", "E", "easting")),
+        "n": n if n is not None else _as_float(g("n", "N", "northing")),
+        "diameter_mm": _as_float(g("diameter_mm", "Diameter_mm", "D", "DIA", "DIAMETER")),
+        "length_m": _as_float(g("length_m", "Length_m", "L", "LENGTH", "Shape_Leng")),
+        "invert_start_m": _as_float(g(
+            "invert_start_m", "InvertStart_m", "US_Invert", "UpInvert", "INVERT_US",
+        )),
+        "invert_stop_m": _as_float(g(
+            "invert_stop_m", "InvertStop_m", "DS_Invert", "DnInvert", "INVERT_DS",
+        )),
+    }
+
+
+def _read_dbf_rows(path):
     with open(path, "rb") as f:
         header = f.read(32)
         n_records = struct.unpack("<I", header[4:8])[0]
@@ -444,72 +626,91 @@ def _read_dbf_labels(path):
             flen = desc[16]
             fields.append((name, ftype, flen))
         f.seek(header_len)
-        label_idx = 0
-        for i, (name, _t, _l) in enumerate(fields):
-            if name.casefold() in ("label", "id", "name", "handle", "text"):
-                label_idx = i
-                break
         out = []
         for _ in range(n_records):
             raw = f.read(rec_len)
             if not raw:
                 break
-            data = raw[1:]  # skip delete flag
-            vals = []
+            data = raw[1:]
+            row = {}
             pos = 0
-            for _name, _t, flen in fields:
-                vals.append(data[pos:pos + flen].decode("latin1", "replace").strip())
+            for name, _t, flen in fields:
+                row[name] = data[pos:pos + flen].decode("latin1", "replace").strip()
                 pos += flen
-            out.append(vals[label_idx] if vals else "")
+            out.append(row)
         return out
 
 
-def cross_check_shp(nodes, conduits, shp_path, label, tol_m=0.05):
-    """DQ-3 SHP cross-check — NMAR Co-17 style: match label, compare E/N."""
+def cross_check_shp(nodes, conduits, shp_path, label, tol_m=0.05, tol_d_mm=0.5, tol_l_m=0.05):
+    """DQ-3 SHP cross-check — NMAR Co-17: D / L / inverts (and E/N when present)."""
     pts, units = read_shp_points(shp_path)
     target = (label or "Co-17").casefold()
     matches = [p for p in pts if str(p.get("label") or "").casefold() == target]
     if not matches and len(pts) == 1 and not any(p.get("label") for p in pts):
-        matches = pts  # single anonymous point — compare to model label
-    model_pts = []
-    for n in nodes:
-        if str(n.get("label") or "").casefold() == target:
-            model_pts.append(n)
-    for c in conduits:
-        if str(c.get("id") or "").casefold() == target:
-            model_pts.append({"label": c["id"], "e_m": c.get("e_m"), "n_m": c.get("n_m")})
+        matches = pts
+    model_c = [c for c in conduits if str(c.get("id") or "").casefold() == target]
+    model_n = [n for n in nodes if str(n.get("label") or "").casefold() == target]
     result = {
         "label": label or "Co-17",
         "shp_count": len(matches),
-        "model_count": len(model_pts),
+        "model_count": len(model_c) or len(model_n),
         "tolerance_m": tol_m,
         "result": "not_run",
         "delta_m": None,
         "detail": None,
+        "checks": {},
     }
     if not matches:
         result["result"] = "flag"
         result["detail"] = f"label {label} not found in SHP export"
         return result
-    if not model_pts:
+    if not model_c and not model_n:
         result["result"] = "flag"
         result["detail"] = f"label {label} not found in model"
         return result
-    sp, mp = matches[0], model_pts[0]
-    if mp.get("e_m") is None or mp.get("n_m") is None or sp.get("e") is None or sp.get("n") is None:
+    sp = matches[0]
+    flags = []
+    if model_c:
+        mc = model_c[0]
+        for key, model_v, shp_v, tol, unit in (
+            ("diameter_mm", mc.get("diameter_mm"), sp.get("diameter_mm"), tol_d_mm, "mm"),
+            ("length_m", mc.get("length_m"), sp.get("length_m"), tol_l_m, "m"),
+            ("invert_start_m", mc.get("invert_start_m"), sp.get("invert_start_m"), tol_m, "m"),
+            ("invert_stop_m", mc.get("invert_stop_m"), sp.get("invert_stop_m"), tol_m, "m"),
+        ):
+            if model_v is None or shp_v is None:
+                result["checks"][key] = "not_run"
+                continue
+            diff = abs(float(model_v) - float(shp_v))
+            ok = diff <= tol + 1e-9
+            result["checks"][key] = {
+                "model": model_v, "shp": shp_v, "delta": round(diff, 6),
+                "tol": tol, "unit": unit, "result": "pass" if ok else "flag",
+            }
+            if not ok:
+                flags.append(f"{key} Δ={diff:.4f}{unit}")
+    # Optional E/N when both sides have coordinates
+    mp = model_c[0] if model_c else model_n[0]
+    if (mp.get("e_m") is not None and mp.get("n_m") is not None
+            and sp.get("e") is not None and sp.get("n") is not None):
+        se, sn = float(sp["e"]), float(sp["n"])
+        if units == "shp" and abs(se) < 1e5 and abs(sn) < 1e5:
+            se, sn = ft_to_m(se), ft_to_m(sn)
+        delta = math.hypot(se - float(mp["e_m"]), sn - float(mp["n_m"]))
+        result["delta_m"] = round(delta, 6)
+        result["shp_en"] = [se, sn]
+        result["model_en"] = [mp["e_m"], mp["n_m"]]
+        if delta > tol_m + 1e-9:
+            flags.append(f"en Δ={delta:.4f}m")
+    if any(v == "not_run" for v in result["checks"].values()) and not flags and not result["checks"]:
         result["result"] = "not_run"
-        result["detail"] = "coordinates missing on model or SHP"
+        result["detail"] = "no comparable Co-17 attributes on SHP or model"
         return result
-    se, sn = float(sp["e"]), float(sp["n"])
-    # JSON exports are metres; binary SHP with small coords may still be feet
-    if units == "shp" and abs(se) < 1e5 and abs(sn) < 1e5:
-        se, sn = ft_to_m(se), ft_to_m(sn)
-    delta = math.hypot(se - float(mp["e_m"]), sn - float(mp["n_m"]))
-    result["delta_m"] = round(delta, 6)
-    result["shp_en"] = [se, sn]
-    result["model_en"] = [mp["e_m"], mp["n_m"]]
-    result["result"] = "pass" if delta <= tol_m + 1e-9 else "flag"
-    result["detail"] = f"|Δ|={delta:.4f} m vs tol {tol_m} m"
+    result["result"] = "flag" if flags else "pass"
+    result["detail"] = (
+        "; ".join(flags) if flags
+        else "Co-17 SHP attributes match model (D / L / inverts)"
+    )
     return result
 
 
@@ -583,22 +784,25 @@ def main(argv=None):
         cur = conn.cursor()
         tables = _tables(cur)
         base_alt, all_alts = choose_base_alternative(cur, tables)
-        data = read_synthetic(cur, base_alt, network)
-        if data is None:
-            data = read_haestad_discovery(cur, base_alt, network)
+        data = read_openflows(cur, base_alt, all_alts, network)
         conn.close()
         if data is None:
-            return fail(EXIT_INPUT, "unrecognised Bentley sqlite schema (no Physical / Haestad tables)")
+            return fail(
+                EXIT_INPUT,
+                "unrecognised Bentley sqlite schema "
+                "(need HMIModelingElement + Conduit or IdahoPipe)",
+            )
         shp_check = None
         if a.shp:
             try:
-                shp_check = cross_check_shp(data.get("nodes") or [], data["conduits"], a.shp, a.label)
+                shp_check = cross_check_shp(
+                    data.get("nodes") or [], data["conduits"], a.shp, a.label,
+                )
             except ValueError as exc:
                 return fail(EXIT_INPUT, str(exc))
         doc = build_doc(path, network, data, base_alt, all_alts, shp_check=shp_check)
         if a.site:
             doc["meta"]["site"] = a.site.upper()
-        # Soft schema check
         try:
             from jsonschema import Draft202012Validator
             schema = __import__("json").loads(SCHEMA_PATH.read_text(encoding="utf-8"))

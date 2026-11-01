@@ -28,11 +28,25 @@ SCHEMA_PATH = SKILL_ROOT / "templates" / "criteria.schema.json"
 LINE_TOL = 2.5
 
 SECTION_HINTS = {
-    "potable_water": re.compile(r"potable\s+water|water\s+supply|fire\s+fighting|PW\b", re.I),
-    "sewer": re.compile(r"sewer|wastewater|foul|gravity\s+sewer|force\s+main", re.I),
-    "storm": re.compile(r"storm\s*water|stormwater|drainage\s+network|surface\s+water", re.I),
+    "potable_water": re.compile(
+        r"potable\s+water|water\s+supply|fire\s+fighting|\bPW\b|§\s*5\.3\b", re.I),
+    "sewer": re.compile(
+        r"sewer|wastewater|foul|gravity\s+sewer|force\s+main|§\s*6\.3\b|Table\s*6\.[13]\b",
+        re.I),
+    "storm": re.compile(
+        r"storm\s*water|stormwater|drainage\s+network|surface\s+water|§\s*10\.2\b|Table\s*10\.9\b",
+        re.I),
     "irrigation": re.compile(r"irrigation|TSE|treated\s+sewage", re.I),
 }
+
+CLAUSE_HINTS = [
+    ("potable_water", "§5.3", re.compile(r"§\s*5\.3\b|section\s+5\.3\b", re.I)),
+    ("sewer", "§6.3", re.compile(r"§\s*6\.3\b|section\s+6\.3\b", re.I)),
+    ("sewer", "Table 6.1", re.compile(r"Table\s*6\.1\b", re.I)),
+    ("sewer", "Table 6.3", re.compile(r"Table\s*6\.3\b", re.I)),
+    ("storm", "§10.2", re.compile(r"§\s*10\.2\b|section\s+10\.2\b", re.I)),
+    ("storm", "Table 10.9", re.compile(r"Table\s*10\.9\b", re.I)),
+]
 
 CRITERION_PATTERNS = [
     ("min_diameter_mm", re.compile(r"min(?:imum)?\s+(?:pipe\s+)?diam(?:eter)?[^0-9]{0,20}(\d+(?:\.\d+)?)\s*mm", re.I)),
@@ -54,6 +68,11 @@ CRITERION_PATTERNS = [
         r"depth[^0-9]{0,10}(\d+(?:\.\d+)?)\s*(?:–|-|to)\s*(\d+(?:\.\d+)?)\s*m", re.I)),
 ]
 
+PRESSURE_PAIR = re.compile(
+    r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*bar",
+    re.I,
+)
+
 # Gradient table row: "200 mm  0.50 %  0.75 m/s"
 GRAD_ROW = re.compile(
     r"(?P<d>\d{2,4})\s*mm\s+(?P<slope>\d+(?:\.\d+)?)\s*%(?:\s+(?P<v>\d+(?:\.\d+)?)\s*m\s*/?\s*s)?",
@@ -61,6 +80,11 @@ GRAD_ROW = re.compile(
 )
 STORM_PIPE_ROW = re.compile(
     r"(?P<d>\d{2,4})\s*mm\s+(?P<len>\d+(?:\.\d+)?)\s*(?:m|km)",
+    re.I,
+)
+# Table 10.9 style: pipe id then a numeric value (depth / velocity / length)
+STORM_ID_ROW = re.compile(
+    r"\b(?P<id>P-\d{2,4})\b[^0-9]{0,40}(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>m(?:/?s)?|km|%)?",
     re.I,
 )
 
@@ -151,14 +175,25 @@ def extract(lines):
     criteria = {k: {} for k in SECTION_HINTS}
     gradient_tables = {k: [] for k in ("sewer", "storm")}
     storm_pipe_table = []
+    storm_table_109 = []
     declared_totals = {}
+    declared_tables = []
     current = None
+    in_table_109 = False
     for ln in lines:
         text = ln["text"]
         current = section_of(text, current)
         page = ln["page"]
+        for net, clause, rx in CLAUSE_HINTS:
+            if rx.search(text):
+                if not any(t.get("clause") == clause for t in declared_tables):
+                    declared_tables.append({
+                        "network": net, "clause": clause, "page": page, "text": text[:200],
+                    })
+                if clause == "Table 10.9":
+                    in_table_109 = True
+                    current = "storm"
         if current is None:
-            # Still try global patterns for totals
             for key, rx in CRITERION_PATTERNS:
                 if key in ("total_length_km", "manhole_count", "depth_range_m"):
                     m = rx.search(text)
@@ -187,6 +222,16 @@ def extract(lines):
                 bucket.setdefault(key, {
                     "value": float(m.group(1)), "page": page, "text": text, "clause": current,
                 })
+        # Pressure pair e.g. 2.76 / 5.27 bar (PW totals)
+        pm = PRESSURE_PAIR.search(text)
+        if pm and current == "potable_water":
+            bucket.setdefault("pressure_pair_bar", {
+                "min_bar": float(pm.group(1)),
+                "max_bar": float(pm.group(2)),
+                "page": page,
+                "text": text,
+                "clause": current,
+            })
         if current in ("sewer", "storm"):
             for m in GRAD_ROW.finditer(text):
                 gradient_tables[current].append({
@@ -206,21 +251,44 @@ def extract(lines):
                     "page": page,
                     "text": m.group(0),
                 })
+            if in_table_109 or "P-" in text:
+                for m in STORM_ID_ROW.finditer(text):
+                    storm_table_109.append({
+                        "id": m.group("id").upper(),
+                        "value": float(m.group("val")),
+                        "unit": (m.group("unit") or "m").casefold(),
+                        "page": page,
+                        "text": m.group(0),
+                    })
+        # Network-scoped totals (keep first per network+key)
         for key, rx in CRITERION_PATTERNS:
-            if key in ("total_length_km", "manhole_count", "depth_range_m"):
-                m = rx.search(text)
-                if m and key not in declared_totals:
-                    if key == "depth_range_m":
-                        declared_totals[key] = {
-                            "min_m": float(m.group(1)), "max_m": float(m.group(2)),
-                            "page": page, "text": text, "network": current,
-                        }
-                    else:
-                        declared_totals[key] = {
-                            "value": float(m.group(1)), "page": page, "text": text,
-                            "network": current,
-                        }
-    return criteria, gradient_tables, storm_pipe_table, declared_totals
+            if key not in ("total_length_km", "manhole_count", "depth_range_m"):
+                continue
+            m = rx.search(text)
+            if not m:
+                continue
+            scoped = f"{current}:{key}"
+            if key == "depth_range_m":
+                if key not in declared_totals:
+                    declared_totals[key] = {
+                        "min_m": float(m.group(1)), "max_m": float(m.group(2)),
+                        "page": page, "text": text, "network": current,
+                    }
+                declared_totals.setdefault(scoped, {
+                    "min_m": float(m.group(1)), "max_m": float(m.group(2)),
+                    "page": page, "text": text, "network": current,
+                })
+            else:
+                if key not in declared_totals:
+                    declared_totals[key] = {
+                        "value": float(m.group(1)), "page": page, "text": text,
+                        "network": current,
+                    }
+                declared_totals.setdefault(scoped, {
+                    "value": float(m.group(1)), "page": page, "text": text,
+                    "network": current,
+                })
+    return criteria, gradient_tables, storm_pipe_table, declared_totals, declared_tables, storm_table_109
 
 
 def main(argv=None):
@@ -240,13 +308,15 @@ def main(argv=None):
         lo, hi = parse_pages_arg(a.pages)
         spans = spans_of(ingestion, lo, hi)
         lines = lines_of(spans)
-        criteria, grads, storm_pipes, totals = extract(lines)
+        criteria, grads, storm_pipes, totals, declared_tables, storm_109 = extract(lines)
         doc = {
             "criteria_version": "1.0",
             "source": {"path": str(path), "kind": "skill2_pdf_json"},
             "criteria": criteria,
             "gradient_tables": grads,
             "storm_pipe_table": storm_pipes,
+            "storm_table_109": storm_109,
+            "declared_tables": declared_tables,
             "declared_totals": totals,
             "meta": {
                 "reader": f"read_wet_criteria/{__version__}",
@@ -271,6 +341,8 @@ def main(argv=None):
             "criteria_values": n_vals,
             "gradient_rows": sum(len(v) for v in grads.values()),
             "storm_pipe_rows": len(storm_pipes),
+            "storm_table_109_rows": len(storm_109),
+            "declared_tables": [t["clause"] for t in declared_tables],
         })
         return EXIT_OK
 

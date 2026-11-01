@@ -93,14 +93,16 @@ def load_wet_layers(path=None, site=None):
     if raw_layers == "shared" or raw_layers is None:
         layer_src = shared
     elif isinstance(raw_layers, dict) and raw_layers:
-        layer_src = raw_layers
+        layer_src = {**shared, **raw_layers}
     else:
         layer_src = shared
     layers = {}
     for name, meta in layer_src.items():
         layers[name.casefold()] = dict(meta)
         layers[name] = dict(meta)
-    return {"site": site_key, "layers": layers, "raw": doc}
+    patterns = list(doc.get("layer_patterns") or [])
+    patterns.extend(site_doc.get("layer_patterns") or [])
+    return {"site": site_key, "layers": layers, "patterns": patterns, "raw": doc}
 
 
 def layer_short(name):
@@ -109,11 +111,31 @@ def layer_short(name):
     return name.rsplit("$", 1)[-1].strip()
 
 
+def _match_layer_pattern(short_name, patterns):
+    for pat in patterns or []:
+        rx = pat.get("regex")
+        if not rx:
+            continue
+        m = re.search(rx, short_name)
+        if not m:
+            continue
+        meta = {k: v for k, v in pat.items() if k not in ("regex", "diameter_group", "note")}
+        g = pat.get("diameter_group")
+        if g is not None:
+            try:
+                meta["diameter_mm"] = float(m.group(int(g)))
+            except (IndexError, TypeError, ValueError):
+                pass
+        return meta
+    return None
+
+
 def resolve_layer(layer_name, layers_map):
     if not layer_name:
         return None
     layers = layers_map.get("layers") or {}
-    for cand in (layer_name, layer_short(layer_name), (layer_name or "").strip()):
+    short = layer_short(layer_name)
+    for cand in (layer_name, short, (layer_name or "").strip()):
         if cand in layers:
             return dict(layers[cand])
         cf = cand.casefold()
@@ -122,8 +144,12 @@ def resolve_layer(layer_name, layers_map):
         for key, meta in layers.items():
             if isinstance(key, str) and key.casefold() == cf:
                 return dict(meta)
-            if isinstance(key, str) and cf in key.casefold():
+            if isinstance(key, str) and (cf in key.casefold() or key.casefold() in cf):
                 return dict(meta)
+    # Diameter / utility from Pipe Dia (N) / %%c(N)mm patterns (DQ-6)
+    matched = _match_layer_pattern(short, layers_map.get("patterns"))
+    if matched:
+        return matched
     return None
 
 

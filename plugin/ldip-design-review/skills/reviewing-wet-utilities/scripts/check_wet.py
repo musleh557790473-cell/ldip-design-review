@@ -317,10 +317,14 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
     raw = params.get("raw") or {}
     er = raw.get("er") or {}
     sewer = er.get("sewer") or {}
+    declared_vals = (raw.get("declared") or {}).get("sewer") or {}
     min_d = float(sewer.get("min_diameter_mm", 200))
     max_mh = sewer.get("mh_spacing_m") or {"min": 30, "max": 80}
     max_spacing = float(max_mh.get("max", 80))
-    cover_min = float(sewer.get("cover_m", 1.2))
+    # DQ-7: sewer cover is declared (ER silent) — soffit < 1.0 m → protection §6.3.3
+    cover_min = float(declared_vals.get("cover_m", 1.0))
+    cover_source = declared_vals.get("source") or "declared"
+    cover_clause = declared_vals.get("clause") or "§6.3.3"
     max_depth = sewer.get("max_depth_m")
     er_grad = sewer.get("min_slope_by_d_mm") or []
     declared = ((criteria or {}).get("gradient_tables") or {}).get("sewer") or []
@@ -426,26 +430,34 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 {"length_m": L, "max_m": max_spacing}, "m", None, None, "pass",
             ))
 
-        # cover
+        # cover (declared §6.3.3 — soffit < 1.0 m → special protection)
         cover = c.get("cover_m")
         if cover is not None and cover + thr < cover_min:
             rows.append(comparison_row(
-                "W3", f"cover:{cid}", ["model"],
-                {"cover_m": cover, "min_m": cover_min}, "m", cover_min - cover, None, "flag",
+                "W3", f"cover:{cid}", ["model", cover_source],
+                {"cover_m": cover, "min_m": cover_min, "source": cover_source,
+                 "clause": cover_clause},
+                "m", cover_min - cover, None, "flag",
                 severity="Minor", status="Probable",
+                note=f"declared cover {cover_clause} (ER silent)",
             ))
             findings.append(finding_stub(
-                "W3", f"Sewer {cid} cover below minimum",
-                f"Soffit cover {cover:.3f} m < {cover_min} m. WUT-013.",
+                "W3", f"Sewer {cid} soffit cover below declared",
+                f"Soffit cover {cover:.3f} m < {cover_min} m → special protection "
+                f"(declared {cover_clause}; source={cover_source}; ER silent on numeric cover). "
+                f"WUT-013.",
                 "design_error", "Minor", "Probable",
-                [evid("E01", "script_output", f"id={cid} cover={cover}")],
+                [evid("E01", "script_output",
+                      f"id={cid} cover={cover} min={cover_min} source={cover_source}")],
                 meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap,
+                status_cap=status_cap, source_doc=f"declared {cover_clause}",
             ))
         elif cover is not None:
             rows.append(comparison_row(
-                "W3", f"cover:{cid}", ["model"],
-                {"cover_m": cover, "min_m": cover_min}, "m", None, None, "pass",
+                "W3", f"cover:{cid}", ["model", cover_source],
+                {"cover_m": cover, "min_m": cover_min, "source": cover_source},
+                "m", None, None, "pass",
+                note=f"declared cover {cover_clause}",
             ))
 
         # adverse grade: invert rises in flow direction (start → stop toward outfall)
@@ -493,8 +505,14 @@ def run_w5_geom(networks, plan_doc, params, rows, findings, meta, status_cap):
     """W5 geometry only — min D, hydrant spacing, valves / washouts / air-valves, cover."""
     raw = params.get("raw") or {}
     er = (raw.get("er") or {}).get("water") or {}
-    min_d = float(er.get("min_diameter_mm", 100))
+    declared_w = (raw.get("declared") or {}).get("water") or {}
+    # DQ-7: water min D is declared (§5.3.7 110/160 mm); ER silent
+    min_d = float(declared_w.get("min_diameter_mm", 110))
+    min_d_source = declared_w.get("source") or "declared"
+    min_d_clause = declared_w.get("clause") or "§5.3.7"
+    # ER ~1.2 m in roads — keep as ER, advisory
     cover_min = float(er.get("cover_m", 1.2))
+    cover_advisory = bool(er.get("cover_advisory", True))
     hyd_res = float((er.get("hydrant_spacing_m") or {}).get("residential", 150))
     hyd_com = float((er.get("hydrant_spacing_m") or {}).get("commercial", 90))
     # use residential default unless plan says commercial
@@ -519,25 +537,33 @@ def run_w5_geom(networks, plan_doc, params, rows, findings, meta, status_cap):
         if d is not None and d + params["w3_threshold_tol"] < min_d:
             findings.append(finding_stub(
                 "W5", f"Pressure pipe {cid} below min D",
-                f"Diameter {d} mm < ER minimum ~{min_d} mm (§7.5.1). WUT-020 (geometry).",
+                f"Diameter {d} mm < declared minimum {min_d} mm "
+                f"({min_d_clause}; source={min_d_source}; ER silent on min D). "
+                f"WUT-020 (geometry).",
                 "design_error", "Minor", "Probable",
-                [evid("E01", "script_output", f"id={cid} D={d}")],
+                [evid("E01", "script_output",
+                      f"id={cid} D={d} min={min_d} source={min_d_source}")],
                 meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap, source_doc="ER §7.5.1 p.31",
+                status_cap=status_cap, source_doc=f"declared {min_d_clause}",
             ))
             rows.append(comparison_row(
-                "W5", f"min_D:{cid}", ["model"], {"diameter_mm": d, "min_mm": min_d},
+                "W5", f"min_D:{cid}", ["model", min_d_source],
+                {"diameter_mm": d, "min_mm": min_d, "source": min_d_source,
+                 "clause": min_d_clause},
                 "mm", None, None, "flag", severity="Minor", status="Probable",
+                note=f"declared min D {min_d_clause}",
             ))
         cover = c.get("cover_m")
         if cover is not None and cover + params["w3_threshold_tol"] < cover_min:
             findings.append(finding_stub(
                 "W5", f"Pressure pipe {cid} cover low",
-                f"Cover {cover:.3f} m < ~{cover_min} m in roads (ER §7.5.1). WUT-020.",
+                f"Cover {cover:.3f} m < ~{cover_min} m in roads "
+                f"(ER §7.5.1 advisory). WUT-020.",
                 "design_error", "Minor", "Probable",
-                [evid("E01", "script_output", f"id={cid} cover={cover}")],
+                [evid("E01", "script_output",
+                      f"id={cid} cover={cover} advisory={cover_advisory}")],
                 meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap,
+                status_cap=status_cap, source_doc="ER §7.5.1 (advisory cover)",
             ))
 
     # Hydrant spacing

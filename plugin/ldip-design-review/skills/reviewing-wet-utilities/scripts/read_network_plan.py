@@ -28,23 +28,35 @@ from wet_common import (  # noqa: E402
 
 SCHEMA_PATH = SKILL_ROOT / "templates" / "networks.schema.json"
 
-# Node MTEXT: "MH-01 / CL=412.50 / IL=410.20 / E=456789.12 / N=2734567.89"
+# Node MTEXT after plain_text(): ID then CL: / IL: / E: / N: on separate lines
+# (or joined with " / "). Colon + optional `m` suffix. Example:
+#   MH-01\nCL: 779.45m\nIL: 777.40m\nE: 656670.49\nN: 2714078.99
 NODE_RE = re.compile(
-    r"(?P<id>[A-Za-z0-9._-]+)\s*/\s*"
-    r"(?:CL\s*=\s*(?P<cl>-?\d+(?:\.\d+)?)\s*/\s*)?"
-    r"(?:IL\s*=\s*(?P<il>-?\d+(?:\.\d+)?)\s*/\s*)?"
-    r"(?:E\s*=\s*(?P<e>-?\d+(?:\.\d+)?)\s*/\s*)?"
-    r"(?:N\s*=\s*(?P<n>-?\d+(?:\.\d+)?)?)?",
+    r"(?P<id>[A-Za-z0-9._-]+)"
+    r"(?:\s*/\s*|\s+)"
+    r"CL\s*:\s*(?P<cl>-?\d+(?:\.\d+)?)\s*m?"
+    r"(?:\s*/\s*|\s+)"
+    r"IL\s*:\s*(?P<il>-?\d+(?:\.\d+)?)\s*m?"
+    r"(?:\s*/\s*|\s+)"
+    r"E\s*:\s*(?P<e>-?\d+(?:\.\d+)?)"
+    r"(?:\s*/\s*|\s+)"
+    r"N\s*:\s*(?P<n>-?\d+(?:\.\d+)?)",
     re.I,
 )
-# Pipe label fragments
-L_RE = re.compile(r"\bL\s*=\s*(?P<l>-?\d+(?:\.\d+)?)\s*m?\b", re.I)
-S_RE = re.compile(r"\bS\s*=\s*(?P<s>-?\d+(?:\.\d+)?)\s*%?\b", re.I)
-D_RE = re.compile(
-    r"(?:Ø|⌀|D\s*=?\s*|DN\s*)(?P<d>\d{2,4}(?:\.\d+)?)\s*(?:mm)?",
+# Pipe labels: optional diameter prefix with NO space before L= ; then S=
+#   "L=63.01\nS=1.50%"  or  "200L=7.58\nS=0.63%"
+PIPE_RE = re.compile(
+    r"(?:(?P<d>\d{2,4})(?=\s*L\s*=))?"
+    r"\s*L\s*=\s*(?P<l>-?\d+(?:\.\d+)?)\s*m?"
+    r"(?:\s*/\s*|\s+)"
+    r"S\s*=\s*(?P<s>-?\d+(?:\.\d+)?)\s*%?",
     re.I,
 )
-LAYER_D_RE = re.compile(r"(?:DN|D|Ø|⌀)?\s*(?P<d>\d{2,4})\s*(?:mm)?", re.I)
+L_RE = re.compile(r"(?<![A-Za-z0-9.])L\s*=\s*(?P<l>-?\d+(?:\.\d+)?)\s*m?\b", re.I)
+S_RE = re.compile(r"(?<![A-Za-z0-9.])S\s*=\s*(?P<s>-?\d+(?:\.\d+)?)\s*%?", re.I)
+D_PREFIX_RE = re.compile(r"^(?P<d>\d{2,4})(?=L\s*=)", re.I)
+LAYER_PIPE_DIA_RE = re.compile(r"Pipe\s*Dia\s*(\d+)", re.I)
+LAYER_PCT_C_RE = re.compile(r"%%c(\d+)\s*mm", re.I)
 
 
 def _require_ezdxf():
@@ -74,35 +86,55 @@ def _insert_xy(entity):
         return None, None
 
 
+def _normalize_label_text(text):
+    """Join MTEXT paragraph breaks to spaces so slash-or-newline forms match."""
+    t = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    t = t.replace("\\P", "\n").replace("\\p", "\n")
+    # Collapse whitespace but keep a single space between fields
+    return " ".join(t.split())
+
+
 def parse_node_label(text):
-    t = " ".join(str(text).split())
+    raw = str(text)
+    t = _normalize_label_text(text)
     m = NODE_RE.search(t)
     if not m:
         return None
+
     def num(g):
         v = m.group(g)
         return float(v) if v is not None else None
+
     return {
         "id": m.group("id"),
         "cl_m": num("cl"),
         "il_m": num("il"),
         "e_m": num("e"),
         "n_m": num("n"),
-        "raw": t,
+        "raw": raw.strip(),
     }
 
 
 def parse_pipe_label(text):
-    t = " ".join(str(text).split())
-    out = {"raw": t, "length_m": None, "slope_pct": None, "diameter_mm": None}
+    raw = str(text)
+    t = _normalize_label_text(text)
+    out = {"raw": raw.strip(), "length_m": None, "slope_pct": None, "diameter_mm": None}
+    m = PIPE_RE.search(t)
+    if m:
+        if m.group("d"):
+            out["diameter_mm"] = float(m.group("d"))
+        out["length_m"] = float(m.group("l"))
+        out["slope_pct"] = float(m.group("s"))
+        return out
+    # Partial labels (L= only or S= only) still count as pipe labels (W2)
     m = L_RE.search(t)
     if m:
         out["length_m"] = float(m.group("l"))
     m = S_RE.search(t)
     if m:
         out["slope_pct"] = float(m.group("s"))
-    m = D_RE.search(t)
-    if m:
+    m = D_PREFIX_RE.search(t.replace(" ", ""))
+    if m and out["diameter_mm"] is None:
         out["diameter_mm"] = float(m.group("d"))
     if out["length_m"] is None and out["slope_pct"] is None and out["diameter_mm"] is None:
         return None
@@ -113,11 +145,10 @@ def diameter_from_layer(layer_name, meta):
     if meta and meta.get("diameter_mm") is not None:
         return float(meta["diameter_mm"])
     short = layer_short(layer_name)
-    m = LAYER_D_RE.search(short.replace("-", " "))
-    if m:
-        d = float(m.group("d"))
-        if 50 <= d <= 3000:
-            return d
+    for rx in (LAYER_PIPE_DIA_RE, LAYER_PCT_C_RE):
+        m = rx.search(short)
+        if m:
+            return float(m.group(1))
     return None
 
 
