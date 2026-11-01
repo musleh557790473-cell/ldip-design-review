@@ -133,6 +133,36 @@ def test_skill_md_0_3_0_under_500_lines():
     assert '__version__ = "0.1.0"' in (SC / "check_control.py").read_text(encoding="utf-8")
 
 
+# ------------------------------------------------------------------ D1 — NMAR envelope: key-plan vs UTM
+def test_nmar_envelope_skips_keyplan_prefers_utm(tmp_path):
+    """Two equal-area closed polys: G-KEYP sheet coords skipped; UTM matching S7 chosen (D1)."""
+    from test_skill9_coordinates_real import _nmar_envelope_from_ing_or_sites  # noqa: E402
+
+    s7 = sq(E0, N0, 100.0)  # 10_000 m²
+    # Key-plan first (old helper took this) — sheet coords, context layer
+    key = poly("10A0", "Title Block_A1$0$G-KEYP-BNDY", sq(115.0, 2.0, 100.0))
+    utm = poly("10B6", "ROAD-LAYOUT-BNDY", sq(E0, N0, 100.0))
+    assert abs(key["area"] - 10000.0) <= 1.0 and abs(utm["area"] - 10000.0) <= 1.0
+    ing = dump(tmp_path / "nmar.dwg.json", dwg_ing([key, utm]))
+    rb = dump(tmp_path / "rules_v8.json", {
+        "rules": [{
+            "rule_id": "GIS-011",
+            "parameters": {
+                "official_site_area": {
+                    "value": {"NMAR": {"nature": 10000.0, "deed": 10000.0}},
+                    "tag": "PROPOSED",
+                },
+            },
+        }],
+    })
+    sites = {"S7": {"polygon": [list(v) for v in s7]}}
+    env = _nmar_envelope_from_ing_or_sites(ing, rb, sites)
+    assert env is not None
+    assert env["polygon"] == [list(map(float, v[:2])) for v in utm["vertices"]]
+    # sheet key-plan must not win
+    assert env["polygon"][0][0] == pytest.approx(E0)
+
+
 # ------------------------------------------------------------------ T9-C1
 def test_t9_c1_envelope_context_and_displacement(tmp_path):
     """T9-C1: envelope + context layer (profile only) + displaced copy + legend at origin."""

@@ -278,22 +278,64 @@ def _poly_by_handle(ing_path, handle: str):
     return None
 
 
+def _is_context_nmar_poly(p) -> bool:
+    """Skip key-plan / title-block context (G-KEYP, G-TTLB, title-block chains; DP-4)."""
+    tokens = []
+    for raw in (p.get("layer"), *(p.get("via_block") or [])):
+        s = str(raw or "")
+        tokens.append(s)
+        tokens.extend(s.split("$"))
+    for t in tokens:
+        cf = " ".join(t.split()).casefold()
+        if not cf:
+            continue
+        if cf.startswith("g-keyp") or cf.startswith("g-ttlb"):
+            return True
+        if "title block" in cf or cf.startswith("title"):
+            return True
+    return False
+
+
+def _s7_corners_on_polyline_edge(corners, verts, tol=0.02) -> bool:
+    """DP-2: every S7 corner lies within tol metres of the closed polyline edge."""
+    from shapely.geometry import LineString, Point
+
+    if not corners or len(verts) < 2:
+        return False
+    ring = [tuple(map(float, v[:2])) for v in verts]
+    if ring[0] != ring[-1]:
+        ring = ring + [ring[0]]
+    edge = LineString(ring)
+    for c in corners:
+        if edge.distance(Point(float(c[0]), float(c[1]))) > tol:
+            return False
+    return True
+
+
 def _nmar_envelope_from_ing_or_sites(ing_path, rb_path, sites):
-    """Closed polyline whose area ≈ official NMAR nature (±1 m²), else S7 corners from sites JSON."""
+    """Closed polyline ≈ official NMAR (±1 m²), not context, DP-2 S7 corners ≤0.02 m; else S7.
+
+    Rejects equal-area key-plan copies (e.g. handle 10A0 on G-KEYP-BNDY, sheet coords) and
+    accepts the road-layout UTM boundary (e.g. 10B6) when every S7 corner is on its edge.
+    """
     want = _official_nmar_area(rb_path)
+    s7 = _site_polygon(sites, "S7", "NMAR")
+    corners = s7["polygon"] if s7 else None
     data = json.loads(Path(ing_path).read_text(encoding="utf-8"))
-    if want is not None:
-        best = None
+    if want is not None and corners is not None:
         for p in data.get("content", {}).get("polylines", []):
             a = float(p.get("area") or 0)
-            if abs(a - want) <= 1.0:
-                if best is None or abs(a - want) < abs(best[0] - want):
-                    best = (a, p)
-        if best is not None:
-            return {"polygon": [list(map(float, v[:2])) for v in best[1]["vertices"]]}
-    env = _site_polygon(sites, "S7", "NMAR")
-    if env is not None:
-        return env
+            if abs(a - want) > 1.0:
+                continue
+            if _is_context_nmar_poly(p):
+                continue
+            verts = [list(map(float, v[:2])) for v in p.get("vertices") or []]
+            if len(verts) < 3:
+                continue
+            if _s7_corners_on_polyline_edge(corners, verts, tol=0.02):
+                return {"polygon": verts}
+    if s7 is not None:
+        return s7
     return None
 
 
