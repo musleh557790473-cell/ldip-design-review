@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/reviewing-wet-utilities/criteria.schema.json",
+  "title": "LDIP wet criteria (skill 11) — SPC-0006 Rev Q §4.19",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["criteria_version", "criteria", "source"],
+  "properties": {
+    "criteria_version": {"const": "1.0"},
+    "source": {"type": "object"},
+    "criteria": {
+      "type": "object",
+      "properties": {
+        "potable_water": {"type": "object"},
+        "sewer": {"type": "object"},
+        "storm": {"type": "object"},
+        "irrigation": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "gradient_tables": {"type": "object"},
+    "storm_pipe_table": {"type": "array"},
+    "declared_totals": {"type": "object"},
+    "meta": {"type": "object"}
+  }
+}

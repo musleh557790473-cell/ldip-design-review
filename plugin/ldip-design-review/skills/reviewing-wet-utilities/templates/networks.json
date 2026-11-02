@@ -1,0 +1,20 @@
+{
+  "networks_version": "1.0",
+  "network": "sewer",
+  "source": {
+    "path": "synthetic.stsw.sqlite",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "kind": "bentley_sqlite"
+  },
+  "base_alternative_id": 1,
+  "alternatives": [{"alternative_id": 1, "label": "Base"}, {"alternative_id": 2, "label": "Alt"}],
+  "units": {"length": "m", "diameter": "mm", "source_storage": "US_feet"},
+  "conduits": [],
+  "nodes": [],
+  "loads": [],
+  "plan": [],
+  "summary": {"conduit_count": 0, "node_count": 0, "length_m": 0, "length_km": 0, "diameter_counts": {}},
+  "shp_cross_check": null,
+  "warnings": [],
+  "meta": {"reader": "read_bentley_sqlite/0.1.0"}
+}

@@ -1,0 +1,67 @@
+{
+  "skill": "reviewing-wet-utilities",
+  "note": "Data paths only; SewerGEMS / WaterGEMS models and STO/SWN/PWT/IRR drawings live under LDIP_Review scratch (never in Git, brief §10.2). Expectations from SPC-0006 Rev Q §4.19 phase A (DQ-1…DQ-15).",
+  "evals": [
+    {
+      "id": "T11-units-base-alt",
+      "query": "Synthetic sewer sqlite stores diameters and lengths in US feet with two alternatives — which alternative and units does the reader emit?",
+      "files": [
+        "findings/<run>/evidence/intake/networks.json"
+      ],
+      "expected": [
+        "read_bentley_sqlite.py selects lowest AlternativeID as base",
+        "lengths in metres, diameters in mm (feet→SI)",
+        "source.sha256 present; networks.json validates"
+      ]
+    },
+    {
+      "id": "T11-w3-gradient-adverse",
+      "query": "A 200 mm sewer at 0.49 % and another with rising invert toward the outfall — what does W3 raise?",
+      "files": [
+        "findings/<run>/evidence/intake/networks.json"
+      ],
+      "expected": [
+        "W3 min-gradient design_error Probable Major for 0.49 % vs 0.50 % (± 0.01)",
+        "W3 adverse-grade design_error Probable Major",
+        "findings report_only with rule_id null (DQ-11); agent WUT"
+      ]
+    },
+    {
+      "id": "T11-w2-tolerance-edge",
+      "query": "Plan label L differs from the model by 0.05 m — is that a W2 finding?",
+      "files": [
+        "findings/<run>/evidence/intake/networks.json",
+        "findings/<run>/evidence/intake/wet_plan.json"
+      ],
+      "expected": [
+        "L Δ = 0.05 m → pass (DQ-9 edge)",
+        "L Δ = 0.06 m → inconsistency Minor Confirmed (DWG vs model)",
+        "both values quoted in the statement"
+      ]
+    },
+    {
+      "id": "T11-w6-er-observations",
+      "query": "What does W6 report about the ER storm return-period conflict?",
+      "files": [
+        "plugin/ldip-design-review/skills/reviewing-wet-utilities/references/params.json"
+      ],
+      "expected": [
+        "Observation findings for return period / velocity / MH spacing / cover (DQ-15)",
+        "W6 applies Table 7-8 / 7-11 and §7.5.7–7.5.8 until RFI answered",
+        "issue_type er_ambiguity; rule_id null"
+      ]
+    },
+    {
+      "id": "T11-r1-nmar-sewer",
+      "query": "On NMAR SWN-MOD-00001, how many conduits and D200 / D250 counts does the reader report?",
+      "files": [
+        "scratch/NMAR/SWN-MOD-00001/*.stsw.sqlite"
+      ],
+      "expected": [
+        "164 conduits, 9.26 km; D200 149 / D250 15",
+        "W3 gradient flags 22 (200 mm); spacing 0; cover 0",
+        "gated by LDIP_SKILL11_NMAR — never commit real data"
+      ]
+    }
+  ]
+}

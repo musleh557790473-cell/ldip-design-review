@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/reviewing-wet-utilities/candidates.schema.json",
+  "title": "LDIP wet candidates (skill 11) — SPC-0003 stage candidate, agent WUT",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidates_version", "stage", "agent", "findings", "counts", "meta"],
+  "properties": {
+    "candidates_version": {"const": "1.0"},
+    "stage": {"const": "candidate"},
+    "agent": {"const": "WUT"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "agent", "issue_type", "reference", "report_only"],
+        "properties": {
+          "stage": {"const": "candidate"},
+          "agent": {"const": "WUT"},
+          "reference": {
+            "type": "object",
+            "properties": {
+              "rule_id": {"type": "null"}
+            }
+          },
+          "report_only": {"const": true},
+          "owner": {
+            "type": "object",
+            "properties": {"role": {"const": "DMR"}}
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["findings"],
+      "additionalProperties": true
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

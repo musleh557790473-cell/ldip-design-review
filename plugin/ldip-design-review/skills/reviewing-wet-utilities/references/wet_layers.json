@@ -1,0 +1,58 @@
+{
+  "tag": "[AGREED 21:55]",
+  "note": "Wet-network plan layers for STO / SWN / PWT / IRR-10000 drawings (skill 11, DQ-6). Match on short name after the last '$'. Diameter from layer via Pipe Dia (\\d+) or %%c(\\d+)mm. Per-site entries added when QRWN / NRJS plans differ.",
+  "default_site": "NMAR",
+  "shared_layers": {
+    "CI-Ss_50_35_08_30-P-SS_Annotation Main Sewer": {"utility": "sewer", "feature": "label"},
+    "C-SSWR-MNHL-P": {"utility": "sewer", "feature": "manhole"},
+    "Xref-Storm CB": {"utility": "storm", "feature": "catch_basin"},
+    "HP": {"utility": "storm", "feature": "catch_basin"},
+    "LP": {"utility": "storm", "feature": "catch_basin"},
+    "outlet Stru": {"utility": "storm", "feature": "outfall"},
+    "Catchments": {"utility": "storm", "feature": "catchment"},
+    "C-PW-BUTTERFLY VALVE": {"utility": "water", "feature": "valve"},
+    "C-PW-VALVE": {"utility": "water", "feature": "valve"},
+    "C-PW-FIRE HYDRANT COVER CATCH": {"utility": "water", "feature": "hydrant", "block": "Fire Hydrant"}
+  },
+  "layer_patterns": [
+    {
+      "regex": "(?i)SS_Pipe Dia (\\d+)",
+      "utility": "sewer",
+      "feature": "pipe",
+      "diameter_group": 1,
+      "note": "CI-Ss_50_35_08_30-P-SS_Pipe Dia <D>"
+    },
+    {
+      "regex": "(?i)SW_Pipe Dia (\\d+)",
+      "utility": "storm",
+      "feature": "pipe",
+      "diameter_group": 1,
+      "note": "CI-Ss_50_35_08_85-M-SW_Pipe Dia <D> (400…1100)"
+    },
+    {
+      "regex": "(?i)%%c(\\d+)mm",
+      "utility": "water",
+      "feature": "pipe",
+      "diameter_group": 1,
+      "note": "potable water pipe layers e.g. %%c160mm"
+    },
+    {
+      "regex": "(?i)Pipe Dia (\\d+)",
+      "utility": null,
+      "feature": "pipe",
+      "diameter_group": 1,
+      "note": "generic Pipe Dia fallback when SS_/SW_ prefix absent"
+    }
+  ],
+  "sites": {
+    "NMAR": {"layers": "shared"},
+    "QRWN": {
+      "layers": "shared",
+      "note": "Real T11 tests list wet layers found on QRWN plans and assert pipes per plan; extend layers here when they differ from NMAR."
+    },
+    "NRJS": {
+      "layers": "shared",
+      "note": "Real T11 tests list wet layers found on NRJS plans and assert pipes per plan; extend layers here when they differ from NMAR."
+    }
+  }
+}

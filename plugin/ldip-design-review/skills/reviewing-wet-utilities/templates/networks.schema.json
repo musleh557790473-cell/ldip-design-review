@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ldip-design-review/reviewing-wet-utilities/networks.schema.json",
+  "title": "LDIP wet networks (skill 11) — SPC-0006 Rev Q §4.19",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["networks_version", "conduits", "summary", "source"],
+  "properties": {
+    "networks_version": {"const": "1.0"},
+    "network": {
+      "type": ["string", "null"],
+      "enum": ["sewer", "water", "storm", "irrigation", "force_main", null]
+    },
+    "source": {
+      "type": "object",
+      "required": ["sha256"],
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "kind": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "base_alternative_id": {"type": ["integer", "null"]},
+    "alternatives": {"type": "array"},
+    "units": {"type": "object"},
+    "conduits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source"],
+        "properties": {
+          "id": {"type": ["string", "integer", "null"]},
+          "source": {"type": "string"},
+          "diameter_mm": {"type": ["number", "null"]},
+          "length_m": {"type": ["number", "null"]},
+          "invert_start_m": {"type": ["number", "null"]},
+          "invert_stop_m": {"type": ["number", "null"]},
+          "slope_pct": {"type": ["number", "null"]},
+          "cover_m": {"type": ["number", "null"]},
+          "e_m": {"type": ["number", "null"]},
+          "n_m": {"type": ["number", "null"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "nodes": {"type": "array"},
+    "loads": {"type": "array"},
+    "plan": {"type": "array"},
+    "plan_nodes": {"type": "array"},
+    "fixtures": {"type": "array"},
+    "summary": {
+      "type": "object",
+      "required": ["conduit_count"],
+      "additionalProperties": true
+    },
+    "shp_cross_check": {"type": ["object", "null"]},
+    "warnings": {"type": "array"},
+    "meta": {"type": "object"}
+  }
+}

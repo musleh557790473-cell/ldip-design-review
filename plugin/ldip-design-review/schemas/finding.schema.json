@@ -14,13 +14,13 @@
     "schema_version": { "const": "1.0" },
     "finding_id": {
       "type": "string",
-      "pattern": "^(QRWN|NMAR|NRJS)-[A-Za-z0-9._-]+-[0-9]{8}T[0-9]{4}/(INT|GIS|RDE|WET|DRY|COO|VER|CON|OUT|STR)-[0-9]{3}$"
+      "pattern": "^(QRWN|NMAR|NRJS)-[A-Za-z0-9._-]+-[0-9]{8}T[0-9]{4}/(INT|GIS|RDE|WET|WUT|DRY|COO|VER|CON|OUT|STR)-[0-9]{3}$"
     },
     "stage": { "enum": ["candidate", "verified", "classified", "registered"] },
     "run_id": { "type": "string", "pattern": "^(QRWN|NMAR|NRJS)-[A-Za-z0-9._-]+-[0-9]{8}T[0-9]{4}$" },
     "site": { "enum": ["QRWN", "NMAR", "NRJS"] },
     "sub_id": { "type": "string", "minLength": 1 },
-    "agent": { "enum": ["INT", "GIS", "RDE", "WET", "DRY", "COO", "STR"] },
+    "agent": { "enum": ["INT", "GIS", "RDE", "WET", "WUT", "DRY", "COO", "STR"] },
     "agent_versions": {
       "type": "object",
       "additionalProperties": { "type": "string" },
