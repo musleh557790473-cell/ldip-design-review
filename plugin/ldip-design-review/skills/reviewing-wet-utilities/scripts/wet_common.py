@@ -83,6 +83,72 @@ def load_params(path=None):
     }
 
 
+def threshold_entry(params, key):
+    """Return the DQ-7a threshold dict for ``key`` (value / source_tier / source)."""
+    raw = (params.get("raw") if isinstance(params, dict) else None) or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    thr = (raw.get("thresholds") or {}).get(key)
+    return dict(thr) if isinstance(thr, dict) else None
+
+
+def governing_threshold(params, key, *fallback_keys):
+    """Governing = lowest source_tier that supplies a value for key (DQ-7a).
+
+    Returns ``{value, source_tier, source, ...}`` or None.
+    """
+    keys = (key,) + fallback_keys
+    best = None
+    for k in keys:
+        entry = threshold_entry(params, k)
+        if entry is None or entry.get("value") is None:
+            continue
+        tier = int(entry.get("source_tier") or 99)
+        if best is None or tier < best["source_tier"]:
+            best = {**entry, "key": k, "source_tier": tier}
+    return best
+
+
+def format_threshold_value(value, *, approx=False):
+    """Human-readable threshold value for finding text."""
+    if value is None:
+        return "—"
+    prefix = "~" if approx else ""
+    if isinstance(value, dict):
+        if "min" in value and "max" in value:
+            return f"{prefix}{value['min']}–{value['max']}"
+        if "residential" in value:
+            com = value.get("commercial_max") or value.get("commercial")
+            return (
+                f"{value.get('residential')} res / "
+                f"{value.get('commercial_min', value.get('commercial'))}–{com} commercial"
+            )
+        parts = [f"{k}={v}" for k, v in value.items()]
+        return ", ".join(parts)
+    if isinstance(value, float) and value == int(value):
+        return f"{prefix}{int(value)}"
+    return f"{prefix}{value}"
+
+
+def scalar_threshold_value(value, *, prefer="max"):
+    """Reduce a threshold value to one comparable float when possible."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        if prefer == "min" and value.get("min") is not None:
+            return float(value["min"])
+        if prefer == "max" and value.get("max") is not None:
+            return float(value["max"])
+        if value.get("value") is not None:
+            return float(value["value"])
+        for k in ("max", "min", "residential"):
+            if value.get(k) is not None:
+                return float(value[k])
+    return None
+
+
 def load_wet_layers(path=None, site=None):
     doc = read_json(path or LAYERS_PATH)
     site_key = (site or doc.get("default_site") or "NMAR").upper()

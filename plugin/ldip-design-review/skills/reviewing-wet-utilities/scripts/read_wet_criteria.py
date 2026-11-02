@@ -175,6 +175,34 @@ VALVE_SPACING = re.compile(
     r"(?:every|maximum\s+distance\s+of\s+every)?\s*(\d+(?:\.\d+)?)\s*m(?:eters?)?\b",
     re.I,
 )
+# §5.5 p.63 — fire residual at hydrant (NMAR declared 1.40 bar)
+FIRE_RESIDUAL_BAR = re.compile(
+    r"(?:fire|hydrant)[^.]{0,100}?"
+    r"(?:residual\s+)?pressure[^0-9.]{0,40}"
+    r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|minimum(?:\s+of)?|≥|>=)?"
+    r"[^0-9]{0,20}(\d+(?:\.\d+)?)\s*bars?\b|"
+    r"(?:residual\s+)?pressure\s+at\s+(?:the\s+)?(?:fire\s+)?hydrants?[^0-9]{0,40}"
+    r"(\d+(?:\.\d+)?)\s*bars?\b|"
+    r"fire\s+residual[^0-9]{0,30}(\d+(?:\.\d+)?)\s*bars?\b",
+    re.I,
+)
+SEWER_SOFFIT_COVER = re.compile(
+    r"(?:soffit\s+)?cover[^0-9]{0,40}(?:of\s+|≥|>=|minimum(?:\s+of)?\s+)?"
+    r"(\d+(?:\.\d+)?)\s*m\b|"
+    r"cover\s+(?:to\s+)?soffit[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+    re.I,
+)
+SEWER_MAX_DEPTH = re.compile(
+    r"(?:max(?:imum)?\s+)?(?:sewer\s+)?(?:network\s+)?depth[^0-9]{0,40}"
+    r"(\d+(?:\.\d+)?)\s*m?\s*(?:–|-|to|/)\s*(\d+(?:\.\d+)?)\s*m\b|"
+    r"max(?:imum)?\s+depth[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+    re.I,
+)
+D_OVER_D = re.compile(
+    r"(?:d\s*/\s*D|depth\s*/\s*diameter|proportional\s+depth)[^0-9]{0,25}"
+    r"(?:≤|<=|max(?:imum)?(?:\s+of)?|=|:)?\s*(\d+(?:\.\d+)?)",
+    re.I,
+)
 SEWER_GRAVITY_MIN_D = re.compile(
     r"(?:gravity|sewer|foul).{0,40}min(?:imum)?\s+(?:pipe\s+)?diam(?:eter)?[^0-9]{0,20}"
     r"(\d{2,4})\s*mm|"
@@ -720,6 +748,75 @@ def _extract_pw_criteria(bucket, text, page):
                          "min_velocity_ms", "max_velocity_ms"):
             _set_criterion(bucket, key, float(m.group(1)), page, text, "§5.3")
 
+    # §5.5 fire residual at hydrant (p.63) — keep separate from §5.3 distribution min P
+    fr = FIRE_RESIDUAL_BAR.search(text)
+    if fr and (
+        re.search(r"5\.5|fire|hydrant", text, re.I)
+        or "fire_residual_bar" not in bucket
+    ):
+        val = float(next(g for g in fr.groups() if g is not None))
+        # Prefer ~1.4 design residual over unrelated larger pressures
+        existing = bucket.get("fire_residual_bar")
+        take = existing is None or (
+            abs(val - 1.4) < 0.15
+            and abs(float(existing.get("value", 0)) - 1.4) > 0.15
+        ) or (existing is not None and abs(float(existing["value"]) - 1.4) > 0.15
+              and abs(val - 1.4) < abs(float(existing["value"]) - 1.4))
+        if take and 0.5 <= val <= 3.0:
+            clause = "§5.5" if re.search(r"5\.5", text) else "§5.5"
+            if re.search(r"5\.5", text) or "hydrant" in text.casefold() or "fire" in text.casefold():
+                bucket["fire_residual_bar"] = {
+                    "value": val, "page": page, "text": text[:240],
+                    "clause": "§5.5",
+                }
+
+
+def _extract_sewer_criteria(bucket, text, page):
+    """Fill sewer declared design criteria used by W8 (cover, max depth, d/D)."""
+    if re.search(r"soffit|§\s*6\.3\.3|6\.3\.3", text, re.I) or (
+        re.search(r"cover", text, re.I) and re.search(r"1\.0\s*m", text)
+        and re.search(r"sewer|protection|special", text, re.I)
+    ):
+        sm = SEWER_SOFFIT_COVER.search(text)
+        if sm:
+            val = float(next(g for g in sm.groups() if g is not None))
+            if 0.5 <= val <= 2.0:
+                existing = bucket.get("cover_m")
+                if existing is None or abs(val - 1.0) < 0.05:
+                    bucket["cover_m"] = {
+                        "value": val, "page": page, "text": text[:240],
+                        "clause": "§6.3.3", "note": "soffit",
+                    }
+
+    dm = SEWER_MAX_DEPTH.search(text)
+    if dm and re.search(r"max|depth", text, re.I):
+        nums = [g for g in dm.groups() if g is not None]
+        if len(nums) >= 2:
+            lo, hi = float(nums[0]), float(nums[1])
+            # Design max depth band (e.g. 8–10 m), not configuration 1.4–3.5
+            if hi >= 6.0 and lo >= 4.0:
+                bucket["max_depth_m"] = {
+                    "value": {"min": lo, "max": hi},
+                    "min_m": lo, "max_m": hi,
+                    "page": page, "text": text[:240], "clause": "§6.3",
+                }
+        elif len(nums) == 1:
+            val = float(nums[0])
+            if val >= 6.0:
+                bucket.setdefault("max_depth_m", {
+                    "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+                })
+
+    dd = D_OVER_D.search(text) or re.search(
+        r"d\s*/\s*D[^0-9]{0,15}(\d+(?:\.\d+)?)", text, re.I,
+    )
+    if dd and re.search(r"d\s*/\s*D|proportional\s+depth", text, re.I):
+        val = float(dd.group(1))
+        if 0.5 <= val <= 0.95:
+            bucket["d_over_d_max"] = {
+                "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+            }
+
 
 def _store_total(declared_totals, key, network, value, page, text, *, force=False):
     scoped = f"{network}:{key}" if network else key
@@ -835,18 +932,40 @@ def extract(lines):
 
         bucket = criteria[current]
 
-        # PW §5.3 structured criteria (force section on §5.3.x sub-clauses).
+        # PW §5.3 / §5.5 structured criteria (force section on §5.3.x / §5.5.x).
         # V1: require section lookbehind so lengths like "25.30" do not match "5.3",
         # and never steal the cursor while Table 10.9 is open.
         if (
             not in_table_109
             and current != "sewer"
-            and re.search(rf"(?:§\s*)?{_SEC}5\.3(?:\.\d+)?\b", text)
+            and re.search(rf"(?:§\s*)?{_SEC}5\.[35](?:\.\d+)?\b", text)
         ):
             current = "potable_water"
             bucket = criteria[current]
         if current == "potable_water":
             _extract_pw_criteria(bucket, text, page)
+        if current == "sewer":
+            _extract_sewer_criteria(bucket, text, page)
+        if current == "storm":
+            # Declared storm return / cover for W8 equal checks
+            rp = re.search(
+                r"(?:return\s+period|design\s+storm)[^0-9]{0,20}(\d+)\s*(?:[- ]?year|yr)",
+                text, re.I,
+            )
+            if rp:
+                bucket.setdefault("return_period_yr", {
+                    "value": int(rp.group(1)), "page": page, "text": text[:240],
+                    "clause": "§10.2",
+                })
+            sc = re.search(
+                r"(?:min(?:imum)?\s+)?cover[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+                text, re.I,
+            )
+            if sc and 0.8 <= float(sc.group(1)) <= 2.0:
+                bucket.setdefault("cover_m", {
+                    "value": float(sc.group(1)), "page": page, "text": text[:240],
+                    "clause": "§10.2",
+                })
 
         for key, rx in CRITERION_PATTERNS:
             m = rx.search(text)

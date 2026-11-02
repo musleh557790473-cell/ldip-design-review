@@ -1,4 +1,4 @@
-"""Skill 11 0.1.0 — synthetic T11-1…T11-6 (SPC-0006 Rev Q §4.19 phase A).
+"""Skill 11 0.1.1 — synthetic T11-1…T11-6 + DQ-7a / W3 crown / W8 (SPC-0006 Rev Q §4.19).
 
 No real project data. Synthetic fixture uses the real OpenFlows table/column names
 (HMIModelingElement / Conduit / …), not invented Elements/Physical (R1).
@@ -1137,19 +1137,30 @@ def test_t11_criteria_reader(tmp_path):
     assert total_109_km > 0.3  # synthetic subset; real ≈ 6.07 km
 
 
-def test_t11_params_declared_not_er():
-    """R6: sewer cover and water min D are declared, not ER; water cover stays ER advisory."""
+def test_t11_params_source_tiers_dq7a():
+    """DQ-7a: every governing threshold has source_tier / source / value; crown from CMP."""
     p = load(REF / "params.json")
-    assert "cover_m" not in (p["er"].get("sewer") or {})
-    assert "min_diameter_mm" not in (p["er"].get("water") or {})
-    assert p["er"]["water"]["cover_m"] == 1.2
-    assert p["er"]["water"].get("cover_advisory") is True
-    assert p["declared"]["sewer"]["source"] == "declared"
-    assert p["declared"]["sewer"]["cover_m"] == 1.0
-    assert "6.3.3" in p["declared"]["sewer"]["clause"]
-    assert p["declared"]["water"]["source"] == "declared"
-    assert p["declared"]["water"]["min_diameter_mm"] == 110
-    assert "5.3.7" in p["declared"]["water"]["clause"]
+    thr = p["thresholds"]
+    for key, row in thr.items():
+        assert "source_tier" in row, key
+        assert 1 <= int(row["source_tier"]) <= 5, key
+        assert row.get("source"), key
+        # other-D gradient may be null until CMP confirmed [GAP]
+        if key != "sewer.min_slope_pct.other":
+            assert row.get("value") is not None, key
+    assert thr["sewer.cover_to_crown_m"]["value"] == 1.2
+    assert thr["sewer.cover_to_crown_m"]["source_tier"] == 1
+    assert "CMP Q185" in thr["sewer.cover_to_crown_m"]["source"]
+    assert thr["sewer.max_depth_to_crown_m"]["value"] == 6.0
+    assert thr["water.valve_spacing_m"]["value"] == 500
+    assert thr["water.pressure_min_bar"].get("approx") is True
+    assert p["er"]["sewer"]["cover_to_crown_m"] == 1.2
+    assert p["er"]["sewer"]["max_depth_to_crown_m"] == 6.0
+    assert p["declared"]["sewer"]["cover_m"] == 1.0  # soffit — W8 only
+    assert p["declared"]["sewer"]["source_tier"] == 5
+    assert "W8" in p["phase_scope"]
+    assert len(p["same_tier_alternatives"]) >= 4
+    assert len(p["w8_comparisons"]) >= 8
 
 
 def test_t11_wet_layers_agreed_real_names():
@@ -1224,8 +1235,8 @@ def test_t11_w1_missing_storm_model(tmp_path):
     assert calc
 
 
-def test_t11_w3_declared_cover_and_w5_declared_min_d(tmp_path):
-    """R6: W3 cover uses declared 1.0 m; W5 min D uses declared 110 mm."""
+def test_t11_w3_crown_cover_cmp_and_w5_declared_min_d(tmp_path):
+    """DQ-7a: W3 crown cover uses CMP 1.2 m; 0.8 → Minor; W5 min D stays declared 110."""
     sewer = {
         "networks_version": "1.0",
         "network": "sewer",
@@ -1252,8 +1263,12 @@ def test_t11_w3_declared_cover_and_w5_declared_min_d(tmp_path):
     cover = [r for r in cons["comparisons"]
              if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
              and r["result"] == "flag"]
-    assert cover and cover[0]["values"].get("source") == "declared"
-    assert any("6.3.3" in f["statement"] for f in cand["findings"])
+    assert cover and "CMP Q185" in str(cover[0]["values"].get("source"))
+    assert cover[0]["severity"] == "Minor"
+    assert any(
+        "allowed to 0.5 m if protected" in f["statement"].casefold()
+        for f in cand["findings"]
+    )
 
     water = {
         "networks_version": "1.0",
@@ -1287,5 +1302,272 @@ def test_skill_md_under_500_and_frontmatter():
     assert text.startswith("---\n")
     assert len(text.splitlines()) < 500
     assert 'name: reviewing-wet-utilities' in text
-    assert 'version: "0.1.0"' in text
+    assert 'version: "0.1.1"' in text
     assert "WUT" in text
+    assert "DQ-7a" in text or "source_tier" in text or "W8" in text
+
+
+PRESENCE_OK = {
+    "networks": {
+        "sewer": {"plan": True, "model": True},
+        "water": {"plan": True, "model": True},
+        "irrigation": {"plan": True, "model": True},
+        "storm": {"plan": True, "model": True},
+    },
+    "hydraulic_calculations": True,
+}
+
+
+def _sewer_net(cover, *, slope=0.5, length=40.0, d_mm=200):
+    return {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "C1", "element_id": 1, "source": "model", "network": "sewer",
+            "diameter_mm": d_mm, "length_m": length,
+            "invert_start_m": 100.0,
+            "invert_stop_m": 100.0 - length * slope / 100.0,
+            "slope_pct": slope, "cover_m": cover,
+            "start_node_id": 1, "stop_node_id": 2,
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": length / 1000.0},
+        "plan": [],
+    }
+
+
+def test_t11_source_tier_wins(tmp_path):
+    """DQ-7a: governing = lowest source_tier (CMP/ER tier 1 over declared tier 5)."""
+    sys.path.insert(0, str(SK))
+    from wet_common import governing_threshold, load_params
+    params = load_params(REF / "params.json")
+    cover = governing_threshold(params, "sewer.cover_to_crown_m")
+    assert cover and cover["source_tier"] == 1 and abs(cover["value"] - 1.2) < 1e-9
+    assert "CMP" in cover["source"]
+    depth = governing_threshold(params, "sewer.max_depth_to_crown_m")
+    assert depth and depth["source_tier"] == 1 and abs(depth["value"] - 6.0) < 1e-9
+    # Declared soffit 1.0 must not govern W3
+    cons, _, _ = check(tmp_path, _sewer_net(1.05), presence=PRESENCE_OK)
+    cover_rows = [r for r in cons["comparisons"]
+                  if r["check"] == "W3" and str(r["quantity"]).startswith("cover")]
+    assert cover_rows and cover_rows[0]["result"] == "flag"
+    assert abs(cover_rows[0]["values"]["min_m"] - 1.2) < 1e-9
+
+
+def test_t11_er_over_differing_cmp_observation(tmp_path):
+    """Same-tier CMP≠ER → Observation findings (DQ-15 style); ER remains governing."""
+    _cons, cand, _ = check(tmp_path, _sewer_net(1.5), presence=PRESENCE_OK)
+    alts = [
+        f for f in cand["findings"]
+        if f["issue_type"] == "er_ambiguity"
+        and ("same-tier" in f["statement"].casefold() or "Same-tier" in f["title"])
+        and "CMP" in f["statement"]
+    ]
+    assert len(alts) >= 4, [f["title"] for f in cand["findings"] if f["issue_type"] == "er_ambiguity"]
+    assert all(f["severity"] == "Observation" for f in alts)
+    # Governing MH spacing still ER 80 (not CMP 100–200)
+    cons2, _cand2, _ = check(tmp_path / "mh", _sewer_net(1.5, length=80.02), presence=PRESENCE_OK)
+    sp = [r for r in cons2["comparisons"]
+          if r["check"] == "W3" and str(r["quantity"]).startswith("mh_spacing")
+          and r["result"] == "flag"]
+    assert sp and abs(sp[0]["values"]["max_m"] - 80) < 1e-9
+
+
+def test_t11_w8_equal_stricter_weaker(tmp_path):
+    """W8: equal → no finding; stricter → Observation; weaker → Minor Confirmed."""
+    criteria = {
+        "criteria": {
+            "potable_water": {
+                "pressure_min_bar": {
+                    "value": 1.50, "page": 72, "clause": "§5.3", "text": "1.50 bars",
+                },
+                "valve_spacing_m": {
+                    "value": 1000, "page": 72, "clause": "§5.3.11", "text": "1000 m",
+                },
+                "max_velocity_ms": {
+                    "value": 2.0, "page": 72, "clause": "§5.3", "text": "2.0 m/s",
+                },
+                "head_loss_table": {
+                    "lt_600_mm_m_per_km": 20, "page": 72, "clause": "Table 5.3",
+                },
+                "fire_residual_bar": {
+                    "value": 1.40, "page": 63, "clause": "§5.5", "text": "1.40 bars",
+                },
+            },
+            "sewer": {
+                "cover_m": {"value": 1.0, "page": 64, "clause": "§6.3.3", "note": "soffit"},
+                "max_depth_m": {
+                    "value": {"min": 8.0, "max": 10.0},
+                    "min_m": 8.0, "max_m": 10.0,
+                    "page": 64, "clause": "§6.3",
+                },
+                "d_over_d_max": {"value": 0.70, "page": 64, "clause": "§6.3"},
+            },
+            "storm": {
+                "return_period_yr": {"value": 10, "page": 100, "clause": "§10.2"},
+                "cover_m": {"value": 1.2, "page": 100, "clause": "§10.2"},
+            },
+        },
+        "mh_spacing_table": [{
+            "diameter_mm": 150, "diameter_min_mm": 150, "diameter_max_mm": 200,
+            "mh_spacing_m": 100, "page": 64, "text": "150-200 → 100",
+        }],
+        "gradient_tables": {
+            "sewer": [{
+                "diameter_mm": 200, "min_slope_mm_per_m": 5.0,
+                "min_slope_pct": 0.50, "page": 64, "text": "200: 5.00 / 3.20",
+            }],
+        },
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path, _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    w8 = [f for f in cand["findings"] if f["issue_type"] == "inconsistency"
+          and "governing" in f["statement"].casefold()]
+    titles = " | ".join(f["title"] for f in w8)
+    stmts = " | ".join(f["statement"] for f in w8)
+    # weaker
+    assert any("pressure" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("head loss" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("isolation" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("fire residual" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("mh spacing" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("cover" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("max depth" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    # stricter
+    assert any("d/d" in f["title"].casefold() and "stricter" in f["statement"]
+               for f in w8), titles
+    assert all(
+        f["severity"] == ("Observation" if "stricter" in f["statement"] else "Minor")
+        and f["proposed_status"] == "Confirmed"
+        for f in w8
+    )
+    # equal / inside range → no finding
+    assert "max velocity" not in titles.casefold()
+    assert "min gradient 200" not in titles.casefold()
+    assert "return period" not in titles.casefold()
+    assert "storm cover" not in titles.casefold()
+    # pass rows for equals
+    eq = [r for r in cons["comparisons"]
+          if r["check"] == "W8" and r["result"] == "pass"
+          and r["values"].get("relation") == "equal"]
+    assert any(r["values"].get("criterion") == "pw_velocity_max" for r in eq)
+    assert any(r["values"].get("criterion") == "sewer_min_grad_200" for r in eq)
+    assert "1.50" in stmts and "~3.5" in stmts or "3.5" in stmts
+
+
+def test_t11_w8_range_edge(tmp_path):
+    """Declared value on governing range edge counts as equal (no W8 finding)."""
+    criteria = {
+        "criteria": {
+            "potable_water": {
+                "max_velocity_ms": {"value": 3.0, "page": 1, "clause": "§5.3"},
+            },
+        },
+        "gradient_tables": {"sewer": []},
+        "mh_spacing_table": [],
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path, _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    assert not any(
+        "max velocity" in f["title"].casefold() and "governing" in f["statement"].casefold()
+        for f in cand["findings"]
+    )
+    row = next(
+        r for r in cons["comparisons"]
+        if r["check"] == "W8" and r["values"].get("criterion") == "pw_velocity_max"
+    )
+    assert row["result"] == "pass" and row["values"]["relation"] == "equal"
+
+
+def test_t11_w3_crown_cover_1_19_and_0_49(tmp_path):
+    """Crown cover 1.19 → Minor; 0.49 → Major (CMP Q185)."""
+    cons119, cand119, _ = check(
+        tmp_path / "c119", _sewer_net(1.19), presence=PRESENCE_OK,
+    )
+    c119 = [r for r in cons119["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
+            and r["result"] == "flag"]
+    assert c119 and c119[0]["severity"] == "Minor"
+    assert any("protected — confirm" in f["statement"] for f in cand119["findings"])
+
+    cons049, cand049, _ = check(
+        tmp_path / "c049", _sewer_net(0.49), presence=PRESENCE_OK,
+    )
+    c049 = [r for r in cons049["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
+            and r["result"] == "flag"]
+    assert c049 and c049[0]["severity"] == "Major"
+    assert any("protected minimum" in f["title"].casefold() for f in cand049["findings"])
+
+
+def test_t11_w3_depth_6_00_and_6_02(tmp_path):
+    """Depth to crown 6.00 pass; 6.02 Major (max 6.0 + 0.01 tol)."""
+    cons600, _, _ = check(tmp_path / "d600", _sewer_net(6.00), presence=PRESENCE_OK)
+    d600 = [r for r in cons600["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")]
+    assert d600 and d600[0]["result"] == "pass"
+
+    cons602, cand602, _ = check(tmp_path / "d602", _sewer_net(6.02), presence=PRESENCE_OK)
+    d602 = [r for r in cons602["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")
+            and r["result"] == "flag"]
+    assert d602 and d602[0]["severity"] == "Major"
+    assert any(
+        f["issue_type"] == "design_error" and "depth to crown" in f["title"].casefold()
+        and "CMP" in (f["reference"].get("source_doc") or "")
+        for f in cand602["findings"]
+    )
+
+
+def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
+    """read_wet_criteria: fire residual §5.5; sewer soffit / max depth / d/D."""
+    text = {
+        "pages": [{
+            "page": 63,
+            "text": (
+                "§5.5 Fire fighting\n"
+                "The residual pressure at the fire hydrants shall not be less than "
+                "1.40 bars under fire conditions.\n"
+            ),
+        }, {
+            "page": 64,
+            "text": (
+                "Sewer network design criteria §6.3\n"
+                "§6.3.3 Soffit cover 1.0 m — special protection if shallower.\n"
+                "Maximum depth 8 – 10 m\n"
+                "d/D ≤ 0.70\n"
+                "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
+            ),
+        }],
+    }
+    src = write(tmp_path / "report.pdf.json", text)
+    out = tmp_path / "criteria.json"
+    rc, msg = run("read_wet_criteria.py", "--text", src, "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    fr = doc["criteria"]["potable_water"].get("fire_residual_bar")
+    assert fr and abs(float(fr["value"]) - 1.40) < 1e-9
+    assert "5.5" in str(fr.get("clause"))
+    sewer = doc["criteria"]["sewer"]
+    assert abs(float(sewer["cover_m"]["value"]) - 1.0) < 1e-9
+    md = sewer["max_depth_m"]
+    assert abs(float(md.get("min_m") or md["value"]["min"]) - 8.0) < 1e-9
+    assert abs(float(md.get("max_m") or md["value"]["max"]) - 10.0) < 1e-9
+    assert abs(float(sewer["d_over_d_max"]["value"]) - 0.70) < 1e-9

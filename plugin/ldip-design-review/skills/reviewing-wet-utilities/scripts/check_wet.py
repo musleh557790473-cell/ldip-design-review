@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""W1 / W2 / W3 / W5-geometry / W6-plan checks (skill 11 phase A, SPC-0006 Rev Q §4.19).
+"""W1 / W2 / W3 / W5-geometry / W6-plan / W8 checks (skill 11, SPC-0006 Rev Q §4.19).
 
-DQ-11: report only — findings carry issue_type but **no rule_id** (rule IDs in text).
-DQ-12 severity; DQ-9 W2 tolerances; DQ-15 ER storm Observations; status Confirmed/Probable.
-OUT of phase A: W4, W5 hydraulics, W7, W8, wntr, binary .out.
+DQ-7a source tiers; DQ-11 report only (no rule_id); DQ-12 severity; DQ-9 W2 tolerances;
+DQ-15 ER storm Observations; W8 declared vs governing; status Confirmed/Probable.
+OUT of this version: W4, W5 hydraulics, W7, wntr, binary .out.
 
 Usage:
   python check_wet.py --networks <networks.json> --out-consistency <consistency.json>
@@ -15,7 +15,7 @@ Usage:
 
 Exit: 0 done · 2 input · 4 schema. No network, no shell.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import json
@@ -26,8 +26,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wet_common import (  # noqa: E402
     EXIT_OK, EXIT_SCHEMA, FINDING_SCHEMA, PARAMS_PATH, SKILL_ROOT, atomic_write_json,
-    comparison_row, emit, evid, fail, finding_stub, load_params, main_guard,
-    match_conduits_to_labels, read_json, stage_pct,
+    comparison_row, emit, evid, fail, finding_stub, format_threshold_value,
+    governing_threshold, load_params, main_guard, match_conduits_to_labels,
+    read_json, scalar_threshold_value, stage_pct,
 )
 
 CONS_SCHEMA = SKILL_ROOT / "templates" / "consistency.schema.json"
@@ -519,24 +520,46 @@ def _outfall_distances(conduits, nodes=None):
 
 
 def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
-    """W3 — gravity sewer geometry (min D, min gradient, MH spacing, cover, adverse)."""
+    """W3 — gravity sewer geometry (min D, min gradient, MH spacing, crown cover/depth, adverse)."""
     raw = params.get("raw") or {}
     er = raw.get("er") or {}
     sewer = er.get("sewer") or {}
-    declared_vals = (raw.get("declared") or {}).get("sewer") or {}
-    # Prefer ER min D; declared gravity min D (§6.3.4) if present — never house-connection 160
+    # Prefer ER/CMP governing min D; declared gravity min D (§6.3.4) if present — never house-connection 160
     crit_sewer = ((criteria or {}).get("criteria") or {}).get("sewer") or {}
     declared_min_d = None
     if crit_sewer.get("min_diameter_mm"):
         declared_min_d = float(crit_sewer["min_diameter_mm"]["value"])
-    min_d = float(sewer.get("min_diameter_mm") or declared_min_d or 200)
-    max_mh = sewer.get("mh_spacing_m") or {"min": 30, "max": 80}
-    max_spacing = float(max_mh.get("max", 80))
-    # DQ-7: sewer cover is declared (ER silent) — soffit < 1.0 m → protection §6.3.3
-    cover_min = float(declared_vals.get("cover_m", 1.0))
-    cover_source = declared_vals.get("source") or "declared"
-    cover_clause = declared_vals.get("clause") or "§6.3.3"
-    max_depth = sewer.get("max_depth_m")
+    gov_d = governing_threshold(params, "sewer.min_diameter_mm")
+    min_d = float(
+        (gov_d or {}).get("value")
+        or sewer.get("min_diameter_mm")
+        or declared_min_d
+        or 200
+    )
+    gov_mh = governing_threshold(params, "sewer.mh_spacing_m")
+    max_mh = (gov_mh or {}).get("value") or sewer.get("mh_spacing_m") or {"min": 30, "max": 80}
+    max_spacing = float(max_mh.get("max", 80) if isinstance(max_mh, dict) else max_mh)
+    # DQ-7a: crown cover / max depth from CMP Q185 (tier 1) — cover_m = GL−(IL+D)
+    gov_cover = governing_threshold(params, "sewer.cover_to_crown_m")
+    cover_min = float(
+        (gov_cover or {}).get("value")
+        or sewer.get("cover_to_crown_m")
+        or 1.2
+    )
+    cover_protected = float(
+        (gov_cover or {}).get("protected_min_m")
+        or sewer.get("cover_protected_min_m")
+        or 0.5
+    )
+    cover_source = (gov_cover or {}).get("source") or "CMP Q185"
+    cover_tier = (gov_cover or {}).get("source_tier") or 1
+    gov_depth = governing_threshold(params, "sewer.max_depth_to_crown_m")
+    max_depth = float(
+        (gov_depth or {}).get("value")
+        or sewer.get("max_depth_to_crown_m")
+        or 6.0
+    )
+    depth_source = (gov_depth or {}).get("source") or "CMP Q185"
     er_grad = sewer.get("min_slope_by_d_mm") or []
     declared = ((criteria or {}).get("gradient_tables") or {}).get("sewer") or []
     thr = params["w3_threshold_tol"]
@@ -652,34 +675,93 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 "m", None, None, "pass",
             ))
 
-        # cover (declared §6.3.3 — soffit < 1.0 m → special protection)
+        # Crown cover = GL−(IL+D) already stored as cover_m (reader).
+        # Strict <1.2 → Minor ("allowed to 0.5 m if protected — confirm"); <0.5 → Major.
         cover = c.get("cover_m")
-        if cover is not None and cover + thr < cover_min:
+        if cover is not None and cover < cover_protected - 1e-12:
             rows.append(comparison_row(
                 "W3", f"cover:{cid}", ["model", cover_source],
-                {"cover_m": cover, "min_m": cover_min, "source": cover_source,
-                 "clause": cover_clause},
+                {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
+                 "source": cover_source, "source_tier": cover_tier,
+                 "measure": "crown_cover"},
                 "m", cover_min - cover, None, "flag",
-                severity="Minor", status="Probable",
-                note=f"declared cover {cover_clause} (ER silent)",
+                severity="Major", status="Probable",
+                note="crown cover < 0.5 m (CMP Q185)",
             ))
             findings.append(finding_stub(
-                "W3", f"Sewer {cid} soffit cover below declared",
-                f"Soffit cover {cover:.3f} m < {cover_min} m → special protection "
-                f"(declared {cover_clause}; source={cover_source}; ER silent on numeric cover). "
+                "W3", f"Sewer {cid} crown cover below protected minimum",
+                f"Crown cover {cover:.3f} m = GL−(IL+D) < {cover_protected} m protected "
+                f"minimum (governing {cover_min} m; source={cover_source}, tier {cover_tier}). "
                 f"WUT-013.",
+                "design_error", "Major", "Probable",
+                [evid("E01", "script_output",
+                      f"id={cid} crown_cover={cover} min={cover_min} "
+                      f"protected={cover_protected} source={cover_source}")],
+                meta["site"], meta["sub"], meta["run"],
+                status_cap=status_cap, source_doc=cover_source,
+                required_value=cover_protected, unit="m",
+            ))
+        elif cover is not None and cover < cover_min - 1e-12:
+            rows.append(comparison_row(
+                "W3", f"cover:{cid}", ["model", cover_source],
+                {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
+                 "source": cover_source, "source_tier": cover_tier,
+                 "measure": "crown_cover"},
+                "m", cover_min - cover, None, "flag",
+                severity="Minor", status="Probable",
+                note="crown cover < 1.2 m; allowed to 0.5 m if protected — confirm",
+            ))
+            findings.append(finding_stub(
+                "W3", f"Sewer {cid} crown cover below 1.2 m",
+                f"Crown cover {cover:.3f} m = GL−(IL+D) < {cover_min} m "
+                f"(source={cover_source}, tier {cover_tier}). "
+                f"Allowed to {cover_protected} m if protected — confirm. WUT-013.",
                 "design_error", "Minor", "Probable",
                 [evid("E01", "script_output",
-                      f"id={cid} cover={cover} min={cover_min} source={cover_source}")],
+                      f"id={cid} crown_cover={cover} min={cover_min} "
+                      f"protected={cover_protected} source={cover_source}")],
                 meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap, source_doc=f"declared {cover_clause}",
+                status_cap=status_cap, source_doc=cover_source,
+                required_value=cover_min, unit="m",
             ))
         elif cover is not None:
             rows.append(comparison_row(
                 "W3", f"cover:{cid}", ["model", cover_source],
-                {"cover_m": cover, "min_m": cover_min, "source": cover_source},
+                {"cover_m": cover, "min_m": cover_min, "source": cover_source,
+                 "source_tier": cover_tier, "measure": "crown_cover"},
                 "m", None, None, "pass",
-                note=f"declared cover {cover_clause}",
+                note=f"crown cover ≥ {cover_min} m ({cover_source})",
+            ))
+
+        # Max depth to crown = GL−(IL+D) (= cover_m). Flag when > 6.0 + w3_threshold_tol.
+        if cover is not None and cover > max_depth + thr:
+            rows.append(comparison_row(
+                "W3", f"max_depth:{cid}", ["model", depth_source],
+                {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
+                 "source": depth_source, "measure": "depth_to_crown"},
+                "m", cover - max_depth, None, "flag",
+                severity="Major", status="Probable",
+                note="depth to crown > 6.0 m (CMP Q185; DQ-12)",
+            ))
+            findings.append(finding_stub(
+                "W3", f"Sewer {cid} depth to crown exceeds maximum",
+                f"Depth to crown {cover:.3f} m = GL−(IL+D) > {max_depth:.1f} m + {thr} m tol "
+                f"(source={depth_source}). WUT-015.",
+                "design_error", "Major", "Probable",
+                [evid("E01", "script_output",
+                      f"id={cid} depth_to_crown={cover} max={max_depth} "
+                      f"tol={thr} source={depth_source}")],
+                meta["site"], meta["sub"], meta["run"],
+                status_cap=status_cap, source_doc=depth_source,
+                required_value=max_depth, unit="m",
+            ))
+        elif cover is not None:
+            rows.append(comparison_row(
+                "W3", f"max_depth:{cid}", ["model", depth_source],
+                {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
+                 "source": depth_source, "measure": "depth_to_crown"},
+                "m", None, None, "pass",
+                note=f"depth to crown ≤ {max_depth} m ({depth_source})",
             ))
 
         # T1 adverse: invert rises along flow toward outfall (topology walk)
@@ -1091,6 +1173,357 @@ def run_w6(networks, criteria, plan_doc, params, rows, findings, meta, status_ca
             ))
 
 
+def _declared_lookup(criteria, path):
+    """Resolve a dotted declared path from criteria.json (W8).
+
+    Special paths:
+      - mh_spacing_table.min_d_row → MH spacing for smallest D row (Table 6.1)
+      - gradient_tables.sewer.200 → min_slope_pct for D≈200
+      - *.value unwrapped automatically
+    """
+    if not criteria or not path:
+        return None
+    if path == "mh_spacing_table.min_d_row":
+        rows = criteria.get("mh_spacing_table") or []
+        if not rows:
+            return None
+        best = None
+        for r in rows:
+            d = r.get("diameter_min_mm")
+            if d is None:
+                d = r.get("diameter_mm")
+            if d is None:
+                continue
+            if best is None or float(d) < float(best[0]):
+                best = (d, r)
+        if best is None:
+            return None
+        r = best[1]
+        return {
+            "value": float(r["mh_spacing_m"]),
+            "page": r.get("page"),
+            "clause": "Table 6.1",
+            "text": r.get("text"),
+            "source": "declared Table 6.1",
+        }
+    if path.startswith("gradient_tables.sewer."):
+        d_s = path.rsplit(".", 1)[-1]
+        try:
+            want = float(d_s)
+        except ValueError:
+            return None
+        for r in ((criteria.get("gradient_tables") or {}).get("sewer") or []):
+            if abs(float(r.get("diameter_mm") or 0) - want) < 0.6:
+                pct = r.get("min_slope_pct")
+                if pct is None and r.get("min_slope_mm_per_m") is not None:
+                    pct = float(r["min_slope_mm_per_m"]) / 10.0
+                if pct is None:
+                    return None
+                return {
+                    "value": float(pct),
+                    "page": r.get("page"),
+                    "clause": "Table 6.3",
+                    "text": r.get("text"),
+                    "source": "declared Table 6.3",
+                }
+        return None
+
+    parts = path.split(".")
+    # Walk criteria.criteria first, then top-level (mh tables already handled)
+    roots = []
+    if isinstance(criteria.get("criteria"), dict):
+        roots.append(criteria["criteria"])
+    roots.append(criteria)
+    node = None
+    for root in roots:
+        cur = root
+        ok = True
+        for part in parts:
+            if not isinstance(cur, dict) or part not in cur:
+                ok = False
+                break
+            cur = cur[part]
+        if ok:
+            node = cur
+            break
+    if node is None:
+        return None
+    if isinstance(node, dict) and "value" in node:
+        val = node["value"]
+        # max_depth stored as {value: {min,max}, min_m, max_m}
+        if isinstance(val, dict) and "min" in val and "max" in val:
+            return {
+                "value": {"min": float(val["min"]), "max": float(val["max"])},
+                "page": node.get("page"),
+                "clause": node.get("clause"),
+                "text": node.get("text"),
+                "source": f"declared {node.get('clause') or path}",
+            }
+        return {
+            "value": val,
+            "page": node.get("page"),
+            "clause": node.get("clause"),
+            "text": node.get("text"),
+            "source": f"declared {node.get('clause') or path}",
+        }
+    if isinstance(node, (int, float)):
+        return {"value": float(node), "source": f"declared {path}"}
+    if isinstance(node, dict):
+        if node.get("min_m") is not None and node.get("max_m") is not None:
+            return {
+                "value": {"min": float(node["min_m"]), "max": float(node["max_m"])},
+                "page": node.get("page"),
+                "clause": node.get("clause"),
+                "text": node.get("text"),
+                "source": f"declared {node.get('clause') or path}",
+            }
+        if node.get("min_bar") is not None:
+            return {
+                "value": float(node["min_bar"]),
+                "page": node.get("page"),
+                "clause": node.get("clause"),
+                "text": node.get("text"),
+                "source": f"declared {node.get('clause') or path}",
+            }
+        if "lt_600_mm_m_per_km" in node:
+            return {
+                "value": float(node["lt_600_mm_m_per_km"]),
+                "page": node.get("page"),
+                "clause": node.get("clause") or "Table 5.3",
+                "text": node.get("text"),
+                "source": "declared Table 5.3",
+            }
+    return None
+
+
+def _w8_relation(sense, declared_val, governing_val):
+    """Return 'equal' | 'stricter' | 'weaker' | None (incomparable).
+
+    Range equal if declared sits inside the governing range (DQ-7a W8).
+    """
+    if declared_val is None or governing_val is None:
+        return None
+
+    # Normalise declared range → compare both ends / use max for max-sense
+    dec_range = isinstance(declared_val, dict) and "min" in declared_val and "max" in declared_val
+    gov_range = isinstance(governing_val, dict) and "min" in governing_val and "max" in governing_val
+
+    if sense == "equal":
+        d = scalar_threshold_value(declared_val, prefer="min")
+        g = scalar_threshold_value(governing_val, prefer="min")
+        if d is None or g is None:
+            return None
+        return "equal" if abs(d - g) < 1e-9 else ("stricter" if d > g else "weaker")
+
+    if sense == "max_in_range":
+        # Declared single max inside governing [min,max] → equal (no finding)
+        d = scalar_threshold_value(declared_val, prefer="max")
+        if d is None or not gov_range:
+            return None
+        lo, hi = float(governing_val["min"]), float(governing_val["max"])
+        if lo - 1e-12 <= d <= hi + 1e-12:
+            return "equal"
+        return "stricter" if d < lo else "weaker"
+
+    if sense == "max_range":
+        # Declared single (e.g. head loss 20) vs governing range 2–5: > max → weaker
+        d = scalar_threshold_value(declared_val, prefer="max")
+        if d is None:
+            return None
+        if gov_range:
+            lo, hi = float(governing_val["min"]), float(governing_val["max"])
+            if lo - 1e-12 <= d <= hi + 1e-12:
+                return "equal"
+            return "stricter" if d < lo else "weaker"
+        g = scalar_threshold_value(governing_val, prefer="max")
+        if g is None:
+            return None
+        if abs(d - g) < 1e-9:
+            return "equal"
+        return "stricter" if d < g else "weaker"
+
+    if sense == "min":
+        if dec_range:
+            # Declared range vs governing scalar — use declared min (most permissive for min-criteria)
+            d_lo, d_hi = float(declared_val["min"]), float(declared_val["max"])
+            g = scalar_threshold_value(governing_val, prefer="min")
+            if g is None:
+                return None
+            if d_lo - 1e-12 <= g <= d_hi + 1e-12 or abs(d_lo - g) < 1e-9:
+                # overlapping / equal band
+                if abs(d_lo - g) < 1e-9 and abs(d_hi - g) < 1e-9:
+                    return "equal"
+            if d_lo + 1e-12 < g:
+                return "weaker"  # allows lower than governing min
+            if d_lo > g + 1e-12:
+                return "stricter"
+            return "equal"
+        d = scalar_threshold_value(declared_val, prefer="min")
+        g = scalar_threshold_value(governing_val, prefer="min")
+        if d is None or g is None:
+            return None
+        if abs(d - g) < 1e-9:
+            return "equal"
+        return "stricter" if d > g else "weaker"
+
+    if sense == "max":
+        if dec_range:
+            d_lo, d_hi = float(declared_val["min"]), float(declared_val["max"])
+            g = scalar_threshold_value(governing_val, prefer="max")
+            if g is None:
+                return None
+            # Use declared max (most permissive for max-criteria)
+            d = d_hi
+            if abs(d - g) < 1e-9:
+                return "equal"
+            return "stricter" if d < g else "weaker"
+        d = scalar_threshold_value(declared_val, prefer="max")
+        g = scalar_threshold_value(governing_val, prefer="max")
+        if d is None or g is None:
+            return None
+        if abs(d - g) < 1e-9:
+            return "equal"
+        return "stricter" if d < g else "weaker"
+
+    return None
+
+
+def run_same_tier_alternatives(params, rows, findings, meta, status_cap):
+    """DQ-7a: same-tier CMP≠ER → Observation (DQ-15 style)."""
+    raw = params.get("raw") or {}
+    for alt in raw.get("same_tier_alternatives") or []:
+        findings.append(finding_stub(
+            "W8", alt.get("title") or "Same-tier source alternative",
+            alt.get("statement") or (
+                f"Same-tier alternative: governing {alt.get('governing_source')} vs "
+                f"{alt.get('alt_source')} {alt.get('alt_value')} (DQ-7a / DQ-15 style)."
+            ),
+            "er_ambiguity", "Observation", "Probable",
+            [evid("E01", "script_output", json.dumps({
+                "id": alt.get("id"), "governing": alt.get("governing_source"),
+                "alt": alt.get("alt_source"), "alt_value": alt.get("alt_value"),
+            }, ensure_ascii=False)[:500])],
+            meta["site"], meta["sub"], meta["run"],
+            status_cap=status_cap,
+            source_doc=alt.get("governing_source") or "ER / CMP",
+            note="DQ-7a same-tier CMP≠ER alternative Observation",
+        ))
+        rows.append(comparison_row(
+            "W8", f"same_tier_alt:{alt.get('id', 'alt')}", ["ER", "CMP"],
+            alt, None, None, None, "observation",
+            severity="Observation", status="Probable",
+        ))
+
+
+def run_w8(networks, criteria, params, rows, findings, meta, status_cap):
+    """W8 — each declared (tier 5) criterion ≠ governing → inconsistency finding.
+
+    Observation if declared stricter; Minor if weaker; Confirmed; quote both
+    values/sources/pages + 'stricter'/'weaker'. One finding per criterion.
+    Range equal if declared inside governing — no finding.
+    """
+    raw = params.get("raw") or {}
+    comparisons = raw.get("w8_comparisons") or []
+    # Also surface Parsons declared cover from params when criteria omit it
+    declared_params = raw.get("declared") or {}
+
+    for spec in comparisons:
+        path = spec.get("declared_from")
+        declared = _declared_lookup(criteria, path) if criteria else None
+        # Fallbacks from params.declared for sewer cover soffit when report silent
+        if declared is None and spec.get("id") == "sewer_cover":
+            sev = (declared_params.get("sewer") or {})
+            if sev.get("cover_m") is not None:
+                declared = {
+                    "value": float(sev["cover_m"]),
+                    "clause": sev.get("clause") or "§6.3.3",
+                    "source": f"declared {sev.get('clause') or '§6.3.3'} (soffit)",
+                    "page": None,
+                }
+        if declared is None:
+            rows.append(comparison_row(
+                "W8", f"declared_vs_gov:{spec.get('id')}", ["declared", "governing"],
+                {"criterion": spec.get("id"), "declared": None},
+                None, None, None, "not_run",
+                note="declared value not present in criteria",
+            ))
+            continue
+
+        gov = governing_threshold(params, spec["governing_key"])
+        if gov is None:
+            rows.append(comparison_row(
+                "W8", f"declared_vs_gov:{spec.get('id')}", ["declared", "governing"],
+                {"criterion": spec.get("id")}, None, None, None, "not_run",
+                note="no governing threshold",
+            ))
+            continue
+
+        rel = _w8_relation(spec.get("sense") or "min", declared.get("value"), gov.get("value"))
+        dec_txt = format_threshold_value(declared.get("value"))
+        gov_txt = format_threshold_value(
+            gov.get("value"), approx=bool(gov.get("approx") or gov.get("advisory")),
+        )
+        dec_src = declared.get("source") or f"declared {declared.get('clause') or path}"
+        gov_src = gov.get("source") or spec["governing_key"]
+        page = declared.get("page")
+        page_bit = f" p.{page}" if page is not None else ""
+        d_note = spec.get("declared_note")
+        g_note = spec.get("governing_note")
+        if d_note:
+            dec_txt = f"{dec_txt} ({d_note})"
+        if g_note:
+            gov_txt = f"{gov_txt} ({g_note})"
+
+        values = {
+            "criterion": spec.get("id"),
+            "label": spec.get("label"),
+            "declared": declared.get("value"),
+            "declared_text": dec_txt,
+            "declared_source": dec_src,
+            "declared_page": page,
+            "governing": gov.get("value"),
+            "governing_text": gov_txt,
+            "governing_source": gov_src,
+            "governing_tier": gov.get("source_tier"),
+            "relation": rel,
+            "sense": spec.get("sense"),
+        }
+        if rel in (None, "equal"):
+            rows.append(comparison_row(
+                "W8", f"declared_vs_gov:{spec.get('id')}", ["declared", "governing"],
+                values, spec.get("unit"), None, None, "pass" if rel == "equal" else "not_run",
+                note=("declared inside / equal to governing" if rel == "equal"
+                      else "incomparable"),
+            ))
+            continue
+
+        # Observation if declared stricter; Minor if weaker; Confirmed
+        sev = "Observation" if rel == "stricter" else "Minor"
+        title = f"Declared {spec.get('label')} {rel} than governing"
+        statement = (
+            f"Declared {spec.get('label')} {dec_txt} ({dec_src}{page_bit}) is {rel} than "
+            f"governing {gov_txt} ({gov_src}, tier {gov.get('source_tier')}). "
+            f"W8 declared vs governing (DQ-7a). WUT-040."
+        )
+        findings.append(finding_stub(
+            "W8", title, statement,
+            "inconsistency", sev, "Confirmed",
+            [evid("E01", "script_output",
+                  f"id={spec.get('id')} declared={dec_txt} gov={gov_txt} "
+                  f"relation={rel} dec_src={dec_src} gov_src={gov_src}")],
+            meta["site"], meta["sub"], meta["run"],
+            status_cap=status_cap,
+            source_doc=f"{dec_src} vs {gov_src}",
+            note="W8: one finding per criterion; Confirmed (text)",
+        ))
+        rows.append(comparison_row(
+            "W8", f"declared_vs_gov:{spec.get('id')}", ["declared", "governing"],
+            values, spec.get("unit"), None, None, "flag",
+            severity=sev, status="Confirmed",
+            note=f"declared {rel} than governing",
+        ))
+
+
 def validate_candidates(findings):
     try:
         from jsonschema import Draft202012Validator
@@ -1157,6 +1590,8 @@ def main(argv=None):
             run_w3(networks, criteria, params, rows, findings, meta, status_cap)
         run_w5_geom(networks, plan_doc, params, rows, findings, meta, status_cap)
         run_w6(networks, criteria, plan_doc, params, rows, findings, meta, status_cap)
+        run_same_tier_alternatives(params, rows, findings, meta, status_cap)
+        run_w8(networks, criteria, params, rows, findings, meta, status_cap)
 
         cons = {
             "consistency_version": "1.0",
@@ -1169,8 +1604,8 @@ def main(argv=None):
             },
             "meta": {
                 "marking": (
-                    "report only (DQ-11); phase A = W1/W2/W3/W5-geometry/W6-plan; "
-                    "agent WUT; owner DMR"
+                    "report only (DQ-11); W1/W2/W3/W5-geometry/W6-plan/W8; "
+                    "DQ-7a source tiers; agent WUT; owner DMR"
                 ),
                 "site": site,
                 "sub": a.sub,

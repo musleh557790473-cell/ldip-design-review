@@ -13,7 +13,7 @@
         "type": "object",
         "required": ["check", "result"],
         "properties": {
-          "check": {"enum": ["W1", "W2", "W3", "W5", "W6"]},
+          "check": {"enum": ["W1", "W2", "W3", "W5", "W6", "W8"]},
           "result": {
             "enum": ["pass", "flag", "observation", "information", "not_run"]
           },
