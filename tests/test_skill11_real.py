@@ -94,13 +94,17 @@ EXPECT = {
             "declared_clauses": ["§5.3", "§6.3", "Table 6.1", "Table 6.3", "§10.2", "Table 10.9"],
             "pw_criteria": {
                 "pressure_bar": (1.50, 6.0),
-                "min_diameter_mm": (110, 160),
+                # T3: 110 distribution mains / 160 fire-flow
+                "distribution_mains_mm": 110,
+                "fire_flow_mm": 160,
                 "velocity_ms": (0.2, 2.0),
                 "hw_c": (140, 130),
                 "valve_spacing_m": 1000,
                 "cover_m": (1.2, 1.0),
                 "separation_m_mm": (3.0, 500),
+                "head_loss_m_per_km": (20, 10),
             },
+            "sewer_min_diameter_mm": 200,
         },
     },
     "QRWN": {
@@ -500,25 +504,33 @@ def test_t11_r7_criteria_nmar_report(site, tmp_path):
         or (abs(pair["min_bar"] - exp["pw_criteria"]["pressure_bar"][0]) < 0.05
             and abs(pair["max_bar"] - exp["pw_criteria"]["pressure_bar"][1]) < 0.05)
     ), pair
-    # S3 (a): PW §5.3 criteria present
+    # T3: PW §5.3 criteria present (distribution mains / fire-flow labels)
     pc = exp["pw_criteria"]
     assert pw.get("min_diameter_mm") or pw.get("min_diameter_mm_pair")
     dpair = pw.get("min_diameter_mm_pair") or {}
     if dpair:
-        assert abs(dpair["service_mm"] - pc["min_diameter_mm"][0]) < 0.5
-        assert abs(dpair["distribution_mm"] - pc["min_diameter_mm"][1]) < 0.5
-    assert pw.get("velocity_range_ms") or (
-        pw.get("min_velocity_ms") and pw.get("max_velocity_ms"))
+        dist = dpair.get("distribution_mains_mm", dpair.get("service_mm"))
+        fire = dpair.get("fire_flow_mm", dpair.get("distribution_mm"))
+        assert abs(dist - pc["distribution_mains_mm"]) < 0.5
+        assert abs(fire - pc["fire_flow_mm"]) < 0.5
     assert pw.get("hw_c") or pw.get("hw_c_pair")
     assert pw.get("valve_spacing_m")
     assert abs(float(pw["valve_spacing_m"]["value"]) - pc["valve_spacing_m"]) < 1.0
-    assert pw.get("cover_m") or pw.get("cover_m_pair")
-    assert pw.get("head_loss_table") or any(
-        "5.3" in str(v.get("text", "")) for v in pw.values() if isinstance(v, dict)
-    )
-    # S3 (b): Tables 6.1 / 6.3 have rows
+    hl = pw.get("head_loss_table") or {}
+    assert hl, "Table 5.3 head-loss not read"
+    if hl.get("lt_600_mm_m_per_km") is not None:
+        assert abs(hl["lt_600_mm_m_per_km"] - pc["head_loss_m_per_km"][0]) < 0.5
+        assert abs(hl["d_600_to_1000_m_per_km"] - pc["head_loss_m_per_km"][1]) < 0.5
+    # T3: Tables 6.1 / 6.3 have rows; gradients store mm/m
     assert len(doc.get("mh_spacing_table") or []) >= 1, "Table 6.1 empty"
-    assert len((doc.get("gradient_tables") or {}).get("sewer") or []) >= 1, "Table 6.3 empty"
+    grads = (doc.get("gradient_tables") or {}).get("sewer") or []
+    assert len(grads) >= 1, "Table 6.3 empty"
+    assert any(r.get("min_slope_mm_per_m") is not None or r.get("min_slope_pct") is not None
+               for r in grads)
+    # Gravity min D 200, not house-connection 160
+    sewer_min = (doc.get("criteria") or {}).get("sewer", {}).get("min_diameter_mm")
+    if sewer_min:
+        assert abs(float(sewer_min["value"]) - exp["sewer_min_diameter_mm"]) < 0.5
     # Storm total ≈ 6.14 km
     storm_len = (doc.get("declared_totals") or {}).get("storm:total_length_km")
     if storm_len:

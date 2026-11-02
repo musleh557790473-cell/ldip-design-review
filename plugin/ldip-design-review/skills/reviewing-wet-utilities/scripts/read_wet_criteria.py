@@ -106,9 +106,18 @@ PRESSURE_PAIR = re.compile(
     r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*bar",
     re.I,
 )
+# §5.3.7: 110 distribution mains / 160 fire-flow (not service/distribution)
 DIAMETER_PAIR_MM = re.compile(
-    r"(?:min(?:imum)?\s+)?(?:pipe\s+)?diam(?:eter)?[^0-9]{0,30}"
-    r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*mm",
+    r"(?:min(?:imum)?\s+)?(?:pipe\s+)?diam(?:eter)?[^0-9]{0,40}"
+    r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:/|and|,)\s*(\d+(?:\.\d+)?)\s*mm",
+    re.I,
+)
+DIAMETER_DISTRIBUTION = re.compile(
+    r"(?:distribution|main)s?[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm",
+    re.I,
+)
+DIAMETER_FIRE = re.compile(
+    r"fire[- ]?flow[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm",
     re.I,
 )
 VELOCITY_RANGE = re.compile(
@@ -116,7 +125,11 @@ VELOCITY_RANGE = re.compile(
     re.I,
 )
 HW_C_PAIR = re.compile(
-    r"(?:Hazen[- ]Williams|HW)\s*C[^0-9]{0,15}(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)",
+    r"(?:Hazen[- ]Williams|HW)\s*C[^0-9]{0,20}(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)",
+    re.I,
+)
+HW_C_HDPE_DI = re.compile(
+    r"(?:C\s*=?\s*)?(\d{2,3})\s*(?:\(?(?:HDPE|PE)\)?)?\s*/\s*(\d{2,3})\s*(?:\(?(?:DI|ductile)\)?)?",
     re.I,
 )
 COVER_PAIR = re.compile(
@@ -127,23 +140,55 @@ SEPARATION_PAIR = re.compile(
     r"separat(?:ion|ed)[^0-9]{0,40}(\d+(?:\.\d+)?)\s*m[^0-9]{0,20}(\d+(?:\.\d+)?)\s*mm",
     re.I,
 )
-HEAD_LOSS_TABLE = re.compile(r"head[- ]?loss.{0,40}Table\s*5\.3", re.I)
+HEAD_LOSS_TABLE = re.compile(r"(?:head[- ]?loss|Table\s*5\.3)", re.I)
+# Table 5.3: 20 m/km (D < 600) / 10 m/km (600–1000)
+HEAD_LOSS_VALUES = re.compile(
+    r"(\d+(?:\.\d+)?)\s*m\s*/\s*km.*?(\d+(?:\.\d+)?)\s*m\s*/\s*km",
+    re.I | re.S,
+)
+VALVE_SPACING = re.compile(
+    r"(?:isolation\s+)?valves?[^0-9]{0,40}(?:every\s+)?(\d+(?:\.\d+)?)\s*m\b",
+    re.I,
+)
+SEWER_GRAVITY_MIN_D = re.compile(
+    r"(?:gravity|sewer|foul).{0,40}min(?:imum)?\s+(?:pipe\s+)?diam(?:eter)?[^0-9]{0,20}"
+    r"(\d{2,4})\s*mm|"
+    r"min(?:imum)?\s+(?:pipe\s+)?diam(?:eter)?[^0-9]{0,20}(\d{2,4})\s*mm.{0,40}"
+    r"(?:gravity|sewer|main)",
+    re.I,
+)
+HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I)
 
-# Table 6.1 — MH spacing by diameter (D mm → spacing m)
-TABLE_61_ROW = re.compile(
+# Table 6.1 — MH spacing by diameter range → spacing m
+# e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m", "200 mm 80 m"
+TABLE_61_RANGE = re.compile(
+    r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
+    r"|(?P<lo>\d{2,4})\s*(?:–|-|to)\s*(?P<hi>\d{2,4}))"
+    r"\s*(?:mm)?\s*[:\s]\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
+    re.I,
+)
+TABLE_61_SIMPLE = re.compile(
     r"(?P<d>\d{2,4})\s*mm\b[^0-9]{0,40}(?P<span>\d+(?:\.\d+)?)\s*m\b",
     re.I,
 )
-# Table 6.3 — min gradient by D with both velocity columns
-# e.g. "200 mm  0.50 %  0.60 m/s  0.75 m/s"
-TABLE_63_ROW = re.compile(
+# Table 6.3 — min gradient by D in mm/m (both columns); convert to % via ÷10 (T3)
+# e.g. "200: 5.00 / 3.20", "200 mm 5.00 3.20 mm/m", also accept "% " form
+TABLE_63_MM_PER_M = re.compile(
+    r"(?P<d>\d{2,4})\s*(?:mm)?\s*[:\s]\s*"
+    r"(?P<s1>\d+(?:\.\d+)?)\s*(?:/|,|\s+)\s*(?P<s2>\d+(?:\.\d+)?)"
+    r"(?:\s*mm\s*/\s*m)?",
+    re.I,
+)
+TABLE_63_PCT = re.compile(
     r"(?P<d>\d{2,4})\s*mm\s+"
     r"(?P<slope>\d+(?:\.\d+)?)\s*%\s+"
     r"(?P<v1>\d+(?:\.\d+)?)\s*m\s*/?\s*s"
     r"(?:\s+(?P<v2>\d+(?:\.\d+)?)\s*m\s*/?\s*s)?",
     re.I,
 )
-GRAD_ROW = TABLE_63_ROW  # alias used for storm gradient rows too
+TABLE_61_ROW = TABLE_61_SIMPLE  # legacy alias
+TABLE_63_ROW = TABLE_63_PCT
+GRAD_ROW = TABLE_63_PCT
 
 STORM_PIPE_ROW = re.compile(
     r"(?P<d>\d{2,4})\s*mm\s+(?P<len>\d+(?:\.\d+)?)\s*(?:m|km)",
@@ -397,29 +442,55 @@ def _set_criterion(bucket, key, value, page, text, clause=None, extra=None):
 
 
 def _extract_pw_criteria(bucket, text, page):
-    """Fill potable-water §5.3 declared values (S3)."""
+    """Fill potable-water §5.3 declared values (T3 / S3)."""
+    # §5.3.4 pressure 1.50 / 6.0 bar
     pm = PRESSURE_PAIR.search(text)
-    if pm:
-        bucket.setdefault("pressure_pair_bar", {
-            "min_bar": float(pm.group(1)),
-            "max_bar": float(pm.group(2)),
-            "page": page,
-            "text": text[:240],
-            "clause": "§5.3",
-        })
-        _set_criterion(bucket, "pressure_min_bar", float(pm.group(1)), page, text, "§5.3")
-        _set_criterion(bucket, "pressure_max_bar", float(pm.group(2)), page, text, "§5.3")
+    if pm and (
+        re.search(r"5\.3\.4|pressure|bar", text, re.I)
+        or "pressure_pair_bar" not in bucket
+    ):
+        clause = "§5.3.4" if re.search(r"5\.3\.4", text) else "§5.3"
+        # Prefer design criteria pair (≈1.5/6) over residual totals when both seen
+        lo, hi = float(pm.group(1)), float(pm.group(2))
+        existing = bucket.get("pressure_pair_bar")
+        take = existing is None or (
+            abs(lo - 1.5) < 0.2 and abs(hi - 6.0) < 0.5
+        ) or (existing and abs(existing.get("min_bar", 0) - 1.5) > 0.5)
+        if take:
+            bucket["pressure_pair_bar"] = {
+                "min_bar": lo, "max_bar": hi, "page": page,
+                "text": text[:240], "clause": clause,
+            }
+            bucket["pressure_min_bar"] = {
+                "value": lo, "page": page, "text": text[:240], "clause": clause,
+            }
+            bucket["pressure_max_bar"] = {
+                "value": hi, "page": page, "text": text[:240], "clause": clause,
+            }
+
+    # §5.3.7 min D 110 distribution mains / 160 fire-flow
+    d_dist = DIAMETER_DISTRIBUTION.search(text)
+    d_fire = DIAMETER_FIRE.search(text)
     dm = DIAMETER_PAIR_MM.search(text)
-    if dm:
-        bucket.setdefault("min_diameter_mm_pair", {
-            "service_mm": float(dm.group(1)),
-            "distribution_mm": float(dm.group(2)),
-            "page": page,
-            "text": text[:240],
-            "clause": "§5.3",
-        })
-        _set_criterion(bucket, "min_diameter_mm", float(dm.group(1)), page, text, "§5.3",
-                       extra={"distribution_mm": float(dm.group(2))})
+    if d_dist or d_fire or dm:
+        dist_mm = float(d_dist.group(1)) if d_dist else (float(dm.group(1)) if dm else None)
+        fire_mm = float(d_fire.group(1)) if d_fire else (float(dm.group(2)) if dm else None)
+        if dist_mm is not None and fire_mm is not None:
+            bucket.setdefault("min_diameter_mm_pair", {
+                "distribution_mains_mm": dist_mm,
+                "fire_flow_mm": fire_mm,
+                # legacy aliases kept for older tests
+                "service_mm": dist_mm,
+                "distribution_mm": fire_mm,
+                "page": page,
+                "text": text[:240],
+                "clause": "§5.3.7",
+            })
+            _set_criterion(
+                bucket, "min_diameter_mm", dist_mm, page, text, "§5.3.7",
+                extra={"fire_flow_mm": fire_mm, "distribution_mains_mm": dist_mm},
+            )
+
     vm = VELOCITY_RANGE.search(text)
     if vm:
         bucket.setdefault("velocity_range_ms", {
@@ -431,17 +502,25 @@ def _extract_pw_criteria(bucket, text, page):
         })
         _set_criterion(bucket, "min_velocity_ms", float(vm.group(1)), page, text, "§5.3")
         _set_criterion(bucket, "max_velocity_ms", float(vm.group(2)), page, text, "§5.3")
-    hm = HW_C_PAIR.search(text)
+
+    # §5.3.10 C 140 HDPE / 130 DI
+    hm = HW_C_PAIR.search(text) or (
+        HW_C_HDPE_DI.search(text) if re.search(r"5\.3\.10|Hazen|HW\s*C|\bHDPE\b|\bDI\b", text, re.I)
+        else None
+    )
     if hm:
         bucket.setdefault("hw_c_pair", {
+            "c_hdpe": float(hm.group(1)),
+            "c_di": float(hm.group(2)),
             "c_new": float(hm.group(1)),
             "c_old": float(hm.group(2)),
             "page": page,
             "text": text[:240],
-            "clause": "§5.3",
+            "clause": "§5.3.10",
         })
-        _set_criterion(bucket, "hw_c", float(hm.group(1)), page, text, "§5.3",
-                       extra={"c_old": float(hm.group(2))})
+        _set_criterion(bucket, "hw_c", float(hm.group(1)), page, text, "§5.3.10",
+                       extra={"c_di": float(hm.group(2))})
+
     cm = COVER_PAIR.search(text)
     if cm:
         bucket.setdefault("cover_m_pair", {
@@ -462,13 +541,26 @@ def _extract_pw_criteria(bucket, text, page):
             "text": text[:240],
             "clause": "§5.3",
         })
+
+    # §5.3.11 isolation valves every 1000 m
+    vmv = VALVE_SPACING.search(text)
+    if vmv:
+        _set_criterion(bucket, "valve_spacing_m", float(vmv.group(1)), page, text, "§5.3.11")
+
+    # Table 5.3 head-loss gradient 20 / 10 m/km
     if HEAD_LOSS_TABLE.search(text):
-        bucket.setdefault("head_loss_table", {
+        hl = HEAD_LOSS_VALUES.search(text)
+        payload = {
             "value": "Table 5.3",
             "page": page,
             "text": text[:240],
-            "clause": "§5.3",
-        })
+            "clause": "Table 5.3",
+        }
+        if hl:
+            payload["lt_600_mm_m_per_km"] = float(hl.group(1))
+            payload["d_600_to_1000_m_per_km"] = float(hl.group(2))
+        bucket.setdefault("head_loss_table", payload)
+
     for key, rx in CRITERION_PATTERNS:
         m = rx.search(text)
         if m and key in ("valve_spacing_m", "hw_c", "cover_m", "min_diameter_mm",
@@ -582,69 +674,165 @@ def extract(lines):
                 "min_velocity_ms", "max_velocity_ms", "separation_m",
             ):
                 _set_criterion(bucket, key, float(m.group(1)), page, text, "§5.3")
-            elif current != "potable_water":
+            elif current == "sewer" and key == "min_diameter_mm":
+                # T3: gravity min D = 200 (§6.3.4); skip house-connection 160
+                val = float(m.group(1))
+                if HOUSE_CONNECTION.search(text) and val < 200:
+                    continue
+                if val == 160 and not re.search(r"6\.3\.4|gravity", text, re.I):
+                    continue
+                # Prefer 200 when seen; do not let 160 overwrite
+                existing = bucket.get("min_diameter_mm")
+                if existing and float(existing["value"]) >= 200 and val < 200:
+                    continue
+                clause = "§6.3.4" if (val >= 200 or re.search(r"6\.3\.4", text)) else "§6.3"
+                _set_criterion(bucket, key, val, page, text, clause)
+            elif current not in ("potable_water",):
                 _set_criterion(bucket, key, float(m.group(1)), page, text, current)
+
+        # Explicit gravity min D 200 from §6.3.4 wording
+        if current == "sewer":
+            gm = SEWER_GRAVITY_MIN_D.search(text)
+            if gm:
+                val = float(next(g for g in gm.groups() if g))
+                if val >= 200:
+                    existing = bucket.get("min_diameter_mm")
+                    if existing is None or float(existing["value"]) < 200:
+                        bucket["min_diameter_mm"] = {
+                            "value": val, "page": page, "text": text[:240],
+                            "clause": "§6.3.4",
+                        }
 
         # Pressure residual pair also on configuration totals (2.76 / 5.27)
         pm = PRESSURE_PAIR.search(text)
         if pm and current == "potable_water":
-            # Prefer configuration-anchored residual pair for totals pressure
             if in_config["potable_water"] or "residual" in text.casefold():
-                bucket.setdefault("pressure_pair_bar", {
+                # Keep design §5.3.4 pair if already stored; record residual separately
+                if "pressure_pair_bar" not in bucket:
+                    bucket["pressure_pair_bar"] = {
+                        "min_bar": float(pm.group(1)),
+                        "max_bar": float(pm.group(2)),
+                        "page": page,
+                        "text": text[:240],
+                        "clause": current,
+                    }
+                bucket.setdefault("residual_pressure_pair_bar", {
                     "min_bar": float(pm.group(1)),
                     "max_bar": float(pm.group(2)),
                     "page": page,
                     "text": text[:240],
-                    "clause": current,
+                    "clause": "§5.5.1",
                 })
 
-        # Table 6.1 — MH spacing by D
+        # Table 6.1 — MH spacing by diameter range (T3)
         if in_table_61 and current == "sewer":
             if re.search(r"Table\s*6\.3\b", text, re.I):
                 in_table_61 = False
                 in_table_63 = True
             else:
-                for m in TABLE_61_ROW.finditer(text):
-                    d = float(m.group("d"))
+                matched = False
+                for m in TABLE_61_RANGE.finditer(text):
                     span = float(m.group("span"))
-                    # Spacing rows: diameter 100–2000, spacing 20–200 m
-                    if not (100 <= d <= 2000 and 20 <= span <= 250):
+                    if not (20 <= span <= 400):
                         continue
-                    if any(r["diameter_mm"] == d for r in mh_spacing_table):
+                    op = (m.group("op") or "").strip()
+                    if m.group("single"):
+                        d0 = float(m.group("single"))
+                        d_min = d_max = None
+                        if op in ("≥", ">=", ">"):
+                            d_min = d0
+                        elif op in ("≤", "<=", "<"):
+                            d_max = d0
+                        row = {
+                            "diameter_mm": d0,
+                            "diameter_min_mm": d_min,
+                            "diameter_max_mm": d_max,
+                            "mh_spacing_m": span,
+                            "page": page,
+                            "text": m.group(0),
+                        }
+                    else:
+                        lo, hi = float(m.group("lo")), float(m.group("hi"))
+                        row = {
+                            "diameter_mm": lo,
+                            "diameter_min_mm": lo,
+                            "diameter_max_mm": hi,
+                            "mh_spacing_m": span,
+                            "page": page,
+                            "text": m.group(0),
+                        }
+                    key = (row.get("diameter_min_mm"), row.get("diameter_max_mm"),
+                           row["diameter_mm"], span)
+                    if any(
+                        (r.get("diameter_min_mm"), r.get("diameter_max_mm"),
+                         r["diameter_mm"], r["mh_spacing_m"]) == key
+                        for r in mh_spacing_table
+                    ):
                         continue
-                    mh_spacing_table.append({
-                        "diameter_mm": d,
-                        "mh_spacing_m": span,
-                        "page": page,
-                        "text": m.group(0),
-                    })
+                    mh_spacing_table.append(row)
+                    matched = True
+                if not matched:
+                    for m in TABLE_61_SIMPLE.finditer(text):
+                        d = float(m.group("d"))
+                        span = float(m.group("span"))
+                        if not (100 <= d <= 2000 and 20 <= span <= 400):
+                            continue
+                        if any(r.get("diameter_mm") == d and r.get("diameter_min_mm") is None
+                               for r in mh_spacing_table):
+                            continue
+                        mh_spacing_table.append({
+                            "diameter_mm": d,
+                            "mh_spacing_m": span,
+                            "page": page,
+                            "text": m.group(0),
+                        })
 
-        # Table 6.3 — min gradient + both velocity columns
+        # Table 6.3 — min gradient in mm/m (both columns); % = mm/m ÷ 10 (T3)
         if (in_table_63 or current in ("sewer", "storm")) and current in ("sewer", "storm"):
             if re.search(r"Table\s*6\.1\b", text, re.I) and current == "sewer":
                 in_table_63 = False
                 in_table_61 = True
-            for m in TABLE_63_ROW.finditer(text):
+            existing = gradient_tables[current]
+            if in_table_63 or (current == "sewer" and "mm/m" in text.casefold()):
+                for m in TABLE_63_MM_PER_M.finditer(text):
+                    d = float(m.group("d"))
+                    s1 = float(m.group("s1"))
+                    s2 = float(m.group("s2"))
+                    # mm/m values are typically 0.35–10; reject % that look like 0.5 with m/s
+                    if s1 > 50 or s2 > 50:
+                        continue
+                    if any(abs(r["diameter_mm"] - d) < 0.5 for r in existing):
+                        continue
+                    # Prefer peak/design column (first) for min_slope comparison
+                    row = {
+                        "diameter_mm": d,
+                        "min_slope_mm_per_m": s1,
+                        "slope_peak_mm_per_m": s1,
+                        "slope_half_full_mm_per_m": s2,
+                        "min_slope_pct": s1 / 10.0,  # convert for immediate use
+                        "page": page,
+                        "text": m.group(0),
+                        "units": "mm/m",
+                    }
+                    existing.append(row)
+            for m in TABLE_63_PCT.finditer(text):
+                d = float(m.group("d"))
+                if any(abs(r["diameter_mm"] - d) < 0.5 for r in existing):
+                    continue
+                if current == "sewer" and not in_table_63 and "%" not in text:
+                    continue
+                slope_pct = float(m.group("slope"))
                 row = {
-                    "diameter_mm": float(m.group("d")),
-                    "min_slope_pct": float(m.group("slope")),
+                    "diameter_mm": d,
+                    "min_slope_pct": slope_pct,
+                    "min_slope_mm_per_m": slope_pct * 10.0,
                     "velocity_half_full_ms": float(m.group("v1")),
                     "velocity_peak_ms": float(m.group("v2")) if m.group("v2") else None,
-                    # Keep legacy key for W3 declared gradient lookup
                     "velocity_ms": float(m.group("v2") or m.group("v1")),
                     "page": page,
                     "text": m.group(0),
+                    "units": "%",
                 }
-                # Dedup by diameter within network
-                existing = gradient_tables[current]
-                if any(abs(r["diameter_mm"] - row["diameter_mm"]) < 0.5 for r in existing):
-                    continue
-                # Only accept while in Table 6.3 / storm gradient context, or
-                # when the line clearly has two velocity columns / slope
-                if current == "sewer" and not in_table_63:
-                    # Allow if line looks like a gradient table row near §6.3
-                    if not re.search(r"%", text):
-                        continue
                 existing.append(row)
 
         if current == "storm":

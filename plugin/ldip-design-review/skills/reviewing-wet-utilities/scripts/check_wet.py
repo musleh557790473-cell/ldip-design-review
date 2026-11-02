@@ -295,21 +295,74 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
     ))
 
 
+def _row_min_slope_pct(row):
+    """Return min gradient in % — convert stored mm/m (÷ 10) when needed (T3)."""
+    if row is None:
+        return None
+    if row.get("min_slope_pct") is not None:
+        return float(row["min_slope_pct"])
+    # Declared Table 6.3 stores mm/m; peak/design column preferred
+    for key in ("min_slope_mm_per_m", "slope_peak_mm_per_m", "slope_mm_per_m"):
+        if row.get(key) is not None:
+            return float(row[key]) / 10.0
+    return None
+
+
 def _min_slope_for_d(d_mm, er_table, declared_table):
-    """Prefer ER table; fall back to declared gradient table."""
+    """Prefer ER table; fall back to declared gradient table (mm/m → % via ÷10)."""
     table = er_table or declared_table or []
     if not table or d_mm is None:
         return None, None
-    # exact then nearest lower
     rows = sorted(table, key=lambda r: float(r["diameter_mm"]))
     exact = [r for r in rows if abs(float(r["diameter_mm"]) - d_mm) < 0.6]
     if exact:
-        return float(exact[0]["min_slope_pct"]), exact[0]
+        return _row_min_slope_pct(exact[0]), exact[0]
     below = [r for r in rows if float(r["diameter_mm"]) <= d_mm + 0.6]
     if below:
         r = below[-1]
-        return float(r["min_slope_pct"]), r
-    return float(rows[0]["min_slope_pct"]), rows[0]
+        return _row_min_slope_pct(r), r
+    return _row_min_slope_pct(rows[0]), rows[0]
+
+
+def _outfall_distances(conduits, nodes=None):
+    """BFS hops from each node to nearest outfall (T1 topology walk)."""
+    from collections import defaultdict, deque
+
+    adj = defaultdict(set)
+    starts = set()
+    stops = set()
+    for c in conduits:
+        s, t = c.get("start_node_id"), c.get("stop_node_id")
+        if s is None or t is None:
+            continue
+        adj[s].add(t)
+        adj[t].add(s)
+        starts.add(s)
+        stops.add(t)
+    outfalls = set()
+    for n in (nodes or []):
+        et = (n.get("element_type") or n.get("kind") or "").casefold()
+        if "outfall" in et or et in ("of", "outlet"):
+            eid = n.get("element_id")
+            if eid is not None:
+                outfalls.add(eid)
+    # Topological sinks: appear as stop but never as start
+    outfalls |= (stops - starts)
+    if not outfalls and stops:
+        # Degenerate single-component: treat pure sinks; else no walk
+        outfalls = stops - starts
+    dist = {}
+    q = deque()
+    for o in outfalls:
+        dist[o] = 0
+        q.append(o)
+    while q:
+        u = q.popleft()
+        for v in adj.get(u, ()):
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                q.append(v)
+    return dist, outfalls
 
 
 def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
@@ -318,7 +371,12 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
     er = raw.get("er") or {}
     sewer = er.get("sewer") or {}
     declared_vals = (raw.get("declared") or {}).get("sewer") or {}
-    min_d = float(sewer.get("min_diameter_mm", 200))
+    # Prefer ER min D; declared gravity min D (§6.3.4) if present — never house-connection 160
+    crit_sewer = ((criteria or {}).get("criteria") or {}).get("sewer") or {}
+    declared_min_d = None
+    if crit_sewer.get("min_diameter_mm"):
+        declared_min_d = float(crit_sewer["min_diameter_mm"]["value"])
+    min_d = float(sewer.get("min_diameter_mm") or declared_min_d or 200)
     max_mh = sewer.get("mh_spacing_m") or {"min": 30, "max": 80}
     max_spacing = float(max_mh.get("max", 80))
     # DQ-7: sewer cover is declared (ER silent) — soffit < 1.0 m → protection §6.3.3
@@ -340,12 +398,8 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
         ))
         return
 
-    # topology for adverse grade
-    by_id = {c["element_id"]: c for c in conduits if c.get("element_id") is not None}
-    # outfalls = nodes that are never a start
-    starts = {c.get("start_node_id") for c in conduits}
-    stops = {c.get("stop_node_id") for c in conduits}
-    outfalls = (stops - starts) - {None}
+    # T1: topology walk to outfall for adverse-grade direction
+    dist_out, outfalls = _outfall_distances(conduits, (networks or {}).get("nodes") or [])
 
     for c in conduits:
         cid = c.get("id") or c.get("element_id")
@@ -374,27 +428,27 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 "pass" if d is not None else "not_run",
             ))
 
-        # min gradient
+        # T1: min gradient compares |slope| (signed storage is orientation, not magnitude)
         need, src = _min_slope_for_d(d, er_grad, declared)
         s = c.get("slope_pct")
         if need is not None and s is not None:
-            # Strict below-minimum (T11-4: 0.49 flags, 0.50 passes). thr is for
-            # float noise only (1e-9 band), not a 0.01 grace below the ER limit.
-            if s + 1e-9 < need:
+            abs_s = abs(float(s))
+            if abs_s + 1e-9 < need:
                 rows.append(comparison_row(
                     "W3", f"min_slope:{cid}", ["model", "ER"],
-                    {"slope_pct": s, "min_pct": need, "diameter_mm": d},
-                    "%", need - s, None, "flag",
+                    {"slope_pct": s, "abs_slope_pct": abs_s, "min_pct": need,
+                     "diameter_mm": d},
+                    "%", need - abs_s, None, "flag",
                     severity="Major", status="Probable",
-                    note="ER §7.5.2 min gradient per D",
+                    note="ER §7.5.2 min gradient per D (|slope|)",
                 ))
                 findings.append(finding_stub(
                     "W3", f"Sewer {cid} gradient below minimum",
-                    f"Model slope {s:.3f} % < minimum {need:.3f} % for D≈{d} mm "
-                    f"(ER §7.5.2 / declared table). WUT-011.",
+                    f"Model |slope| {abs_s:.3f} % < minimum {need:.3f} % for D≈{d} mm "
+                    f"(ER §7.5.2 / declared table; stored S={s:.3f} %). WUT-011.",
                     "design_error", "Major", "Probable",
                     [evid("E01", "script_output",
-                          f"id={cid} S={s} min={need} D={d} src={src}")],
+                          f"id={cid} S={s} |S|={abs_s} min={need} D={d} src={src}")],
                     meta["site"], meta["sub"], meta["run"],
                     status_cap=status_cap, required_value=need, unit="%",
                     source_doc="ER §7.5.2 p.32",
@@ -402,7 +456,8 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
             else:
                 rows.append(comparison_row(
                     "W3", f"min_slope:{cid}", ["model", "ER"],
-                    {"slope_pct": s, "min_pct": need, "diameter_mm": d},
+                    {"slope_pct": s, "abs_slope_pct": abs_s, "min_pct": need,
+                     "diameter_mm": d},
                     "%", None, None, "pass",
                 ))
 
@@ -463,28 +518,47 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 note=f"declared cover {cover_clause}",
             ))
 
-        # adverse grade: invert rises in flow direction (start → stop toward outfall)
+        # T1 adverse: invert rises along flow toward outfall (topology walk)
         inv_s, inv_e = c.get("invert_start_m"), c.get("invert_stop_m")
-        if inv_s is not None and inv_e is not None and inv_e > inv_s + thr / 100.0:
-            # Only flag when stop is closer to outfall set (topology walk heuristic)
-            toward_outfall = c.get("stop_node_id") in outfalls or c.get("stop_node_id") in stops
-            if toward_outfall or outfalls:
-                rows.append(comparison_row(
-                    "W3", f"adverse:{cid}", ["model"],
-                    {"invert_start_m": inv_s, "invert_stop_m": inv_e},
-                    "m", inv_e - inv_s, None, "flag",
-                    severity="Major", status="Probable",
-                    note="adverse grade by flow direction",
-                ))
-                findings.append(finding_stub(
-                    "W3", f"Sewer {cid} adverse grade",
-                    f"Invert rises along flow {inv_s:.3f} → {inv_e:.3f} m (adverse). WUT-014.",
-                    "design_error", "Major", "Probable",
-                    [evid("E01", "script_output",
-                          f"id={cid} IL_start={inv_s} IL_stop={inv_e}")],
-                    meta["site"], meta["sub"], meta["run"],
-                    status_cap=status_cap,
-                ))
+        sid, tid = c.get("start_node_id"), c.get("stop_node_id")
+        if inv_s is not None and inv_e is not None and sid is not None and tid is not None:
+            ds, dt = dist_out.get(sid), dist_out.get(tid)
+            if ds is not None and dt is not None and ds != dt:
+                # Downstream = closer to outfall
+                if dt < ds:
+                    inv_up, inv_down = inv_s, inv_e  # flow start → stop
+                    flow = "start→stop"
+                else:
+                    inv_up, inv_down = inv_e, inv_s  # flow stop → start
+                    flow = "stop→start"
+                if inv_down > inv_up + thr / 100.0:
+                    rows.append(comparison_row(
+                        "W3", f"adverse:{cid}", ["model"],
+                        {"invert_upstream_m": inv_up, "invert_downstream_m": inv_down,
+                         "invert_start_m": inv_s, "invert_stop_m": inv_e,
+                         "flow_direction": flow},
+                        "m", inv_down - inv_up, None, "flag",
+                        severity="Major", status="Probable",
+                        note="adverse grade by topology walk to outfall",
+                    ))
+                    findings.append(finding_stub(
+                        "W3", f"Sewer {cid} adverse grade",
+                        f"Invert rises along flow toward outfall ({flow}) "
+                        f"{inv_up:.3f} → {inv_down:.3f} m (adverse). WUT-014.",
+                        "design_error", "Major", "Probable",
+                        [evid("E01", "script_output",
+                              f"id={cid} flow={flow} IL_up={inv_up} IL_down={inv_down} "
+                              f"IL_start={inv_s} IL_stop={inv_e}")],
+                        meta["site"], meta["sub"], meta["run"],
+                        status_cap=status_cap,
+                    ))
+                else:
+                    rows.append(comparison_row(
+                        "W3", f"adverse:{cid}", ["model"],
+                        {"invert_upstream_m": inv_up, "invert_downstream_m": inv_down,
+                         "flow_direction": flow},
+                        "m", None, None, "pass",
+                    ))
 
 
 def _fixture_spacing(fixtures, kind, max_m):

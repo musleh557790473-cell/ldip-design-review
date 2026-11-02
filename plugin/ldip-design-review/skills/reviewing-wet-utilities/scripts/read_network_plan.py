@@ -12,9 +12,10 @@ Usage:
 
 Exit: 0 done · 2 input · 3 ezdxf missing · 4 schema. No network, no shell.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -152,6 +153,72 @@ def diameter_from_layer(layer_name, meta):
     return None
 
 
+def _bulge_arc_length(x1, y1, x2, y2, bulge):
+    """Arc length for one LWPOLYLINE segment with DXF bulge (T2)."""
+    dx, dy = x2 - x1, y2 - y1
+    chord = math.hypot(dx, dy)
+    if chord == 0.0:
+        return 0.0
+    if bulge is None or abs(bulge) < 1e-12:
+        return chord
+    # included angle = 4 * atan(bulge); radius from chord + bulge
+    angle = 4.0 * math.atan(float(bulge))
+    radius = chord * (1.0 + float(bulge) ** 2) / (4.0 * abs(float(bulge)))
+    return abs(radius * angle)
+
+
+def _polyline_length_from_points(points, closed=False):
+    """Sum segment lengths; each point is (x, y[, bulge])."""
+    if not points or len(points) < 2:
+        return 0.0
+    pts = list(points)
+    if closed and pts[0][:2] != pts[-1][:2]:
+        pts = pts + [pts[0]]
+    total = 0.0
+    for i in range(len(pts) - 1):
+        x1, y1 = float(pts[i][0]), float(pts[i][1])
+        x2, y2 = float(pts[i + 1][0]), float(pts[i + 1][1])
+        bulge = pts[i][2] if len(pts[i]) > 2 else 0.0
+        total += _bulge_arc_length(x1, y1, x2, y2, bulge)
+    return total
+
+
+def entity_path_length(e, dtype):
+    """Compute plan length from vertices; bulges as arcs (T2). Never trust e.length() alone."""
+    try:
+        if dtype == "LINE":
+            return float(e.dxf.start.distance(e.dxf.end))
+        if dtype == "LWPOLYLINE":
+            pts = []
+            with_bulge = list(e.get_points("xyb"))
+            for p in with_bulge:
+                if len(p) >= 3:
+                    pts.append((float(p[0]), float(p[1]), float(p[2])))
+                else:
+                    pts.append((float(p[0]), float(p[1]), 0.0))
+            closed = bool(e.closed) if hasattr(e, "closed") else bool(e.dxf.flags & 1)
+            length = _polyline_length_from_points(pts, closed=closed)
+            if length > 0:
+                return length
+            # Fallback if get_points failed silently
+            try:
+                fallback = float(e.length())
+                return fallback if fallback > 0 else length
+            except Exception:
+                return length
+        if dtype == "POLYLINE":
+            pts = []
+            for v in e.vertices:
+                loc = v.dxf.location
+                bulge = float(getattr(v.dxf, "bulge", 0.0) or 0.0)
+                pts.append((float(loc[0]), float(loc[1]), bulge))
+            closed = bool(e.is_closed) if hasattr(e, "is_closed") else False
+            return _polyline_length_from_points(pts, closed=closed)
+    except Exception:
+        pass
+    return None
+
+
 def read_dxf(path, layers_map, network_hint=None):
     _require_ezdxf()
     import ezdxf
@@ -167,6 +234,9 @@ def read_dxf(path, layers_map, network_hint=None):
         if dtype not in ("TEXT", "MTEXT", "INSERT", "LINE", "LWPOLYLINE", "POLYLINE"):
             continue
         layer = e.dxf.layer if hasattr(e.dxf, "layer") else "0"
+        # T2: drop layer 0 (title-block / unassigned geometry)
+        if layer_short(layer) == "0" or str(layer).strip() == "0":
+            continue
         meta = resolve_layer(layer, layers_map) or {}
         util = meta.get("utility") or network_hint
         if dtype in ("TEXT", "MTEXT"):
@@ -235,16 +305,7 @@ def read_dxf(path, layers_map, network_hint=None):
             if not meta.get("utility") and not meta.get("diameter_mm"):
                 continue
             d_mm = diameter_from_layer(layer, meta)
-            length = None
-            try:
-                if dtype == "LINE":
-                    length = e.dxf.start.distance(e.dxf.end)
-                elif dtype == "LWPOLYLINE":
-                    length = e.length()
-                elif hasattr(e, "length"):
-                    length = e.length()
-            except Exception:
-                length = None
+            length = entity_path_length(e, dtype)
             pipes.append({
                 "raw": None,
                 "length_m": float(length) if length is not None else None,

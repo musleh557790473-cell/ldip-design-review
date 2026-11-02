@@ -6,6 +6,7 @@ No real project data. Synthetic fixture uses the real OpenFlows table/column nam
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import subprocess
 import sys
@@ -198,8 +199,11 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
     return path
 
 
-def make_dxf(path, texts, lines=None):
-    """Minimal DXF with MTEXT labels on real wet layers (R3 / R4)."""
+def make_dxf(path, texts, lines=None, lwpolylines=None):
+    """Minimal DXF with MTEXT labels on real wet layers (R3 / R4).
+
+    ``lwpolylines``: list of (layer, [(x,y[,bulge]), ...], closed).
+    """
     import ezdxf
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
@@ -211,6 +215,12 @@ def make_dxf(path, texts, lines=None):
         if layer not in doc.layers:
             doc.layers.add(layer)
         msp.add_line((x0, y0), (x1, y1), dxfattribs={"layer": layer})
+    for layer, pts, closed in (lwpolylines or []):
+        if layer not in doc.layers:
+            doc.layers.add(layer)
+        format_ = "xyb" if any(len(p) > 2 for p in pts) else "xy"
+        pl = msp.add_lwpolyline(pts, format=format_, dxfattribs={"layer": layer})
+        pl.closed = bool(closed)
     path = Path(path)
     doc.saveas(path)
     return path
@@ -434,6 +444,49 @@ def test_t11_5_adverse_grade(tmp_path):
     assert any("adverse" in f["title"].casefold() for f in cand["findings"])
 
 
+def test_t11_5b_abs_slope_stop_to_start_no_adverse(tmp_path):
+    """T1: pipe stored stop→start with |S| above min → no gradient flag, no adverse."""
+    # Topology: start=outfall(2), stop=upstream(1). Inverts drop toward start.
+    # Stored slope negative; |S|=1.25 % ≥ 0.50 %. Flow toward outfall is downhill.
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "e" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "REV", "element_id": 1, "source": "model", "network": "sewer",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 99.50, "invert_stop_m": 100.00,
+            "slope_pct": -1.25, "cover_m": 1.5,
+            "start_node_id": 2, "stop_node_id": 1,
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    presence = {
+        "networks": {
+            "sewer": {"plan": True, "model": True},
+            "water": {"plan": True, "model": True},
+            "irrigation": {"plan": True, "model": True},
+            "storm": {"plan": True, "model": True},
+        },
+        "hydraulic_calculations": True,
+    }
+    cons, cand, _ = check(tmp_path, networks, presence=presence)
+    grad = [r for r in cons["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("min_slope")]
+    assert grad and grad[0]["result"] == "pass", grad
+    adv = [r for r in cons["comparisons"]
+           if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+           and r["result"] == "flag"]
+    assert not adv, adv
+    assert not any("gradient below" in f["title"].casefold() for f in cand["findings"])
+    assert not any("adverse" in f["title"].casefold() for f in cand["findings"])
+
+
 # --------------------------------------------------------------------------- T11-6 consistency tolerance edges
 def test_t11_6_w2_tolerance_edges(tmp_path):
     """T11-6: L ± 0.05 m edge — 0.05 pass, 0.06 flag Confirmed."""
@@ -604,6 +657,33 @@ def test_t11_4b_w3_mh_spacing_threshold(tmp_path):
     assert any("spacing" in f["title"].casefold() for f in cand["findings"])
 
 
+def test_t11_lwpolyline_length_with_bulge(tmp_path):
+    """T2: LWPOLYLINE length from vertices; bulges as arcs; layer 0 dropped."""
+    storm_layer = "CI-Ss_50_35_08_85-M-SW_Pipe Dia 400"
+    # Straight 100 m segment + semicircle bulge (chord 20 m → arc π*10)
+    dxf = make_dxf(
+        tmp_path / "sto.dxf",
+        texts=[],
+        lwpolylines=[
+            (storm_layer, [(0.0, 0.0), (100.0, 0.0)], False),
+            (storm_layer, [(0.0, 10.0, 1.0), (20.0, 10.0, 0.0)], False),
+            # layer 0 noise — must be ignored
+            ("0", [(0.0, 0.0), (1000.0, 0.0)], False),
+        ],
+    )
+    out = tmp_path / "plan.json"
+    rc, msg = run("read_network_plan.py", "--dxf", dxf, "--site", "NMAR",
+                  "--network", "storm", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    geoms = [p for p in doc["pipes"] if p.get("kind") == "pipe_geometry"]
+    assert all(p.get("layer") != "0" for p in geoms)
+    lengths = sorted(p["length_m"] for p in geoms if p.get("length_m"))
+    assert len(lengths) == 2
+    assert abs(lengths[0] - math.pi * 10.0) < 0.05 or abs(lengths[1] - math.pi * 10.0) < 0.05
+    assert any(abs(L - 100.0) < 1e-6 for L in lengths)
+
+
 def test_t11_criteria_reader(tmp_path):
     """read_wet_criteria: PW §5.3, Tables 6.1/6.3 rows, Table 10.9 10-col, TOC skip."""
     text = {
@@ -619,12 +699,13 @@ def test_t11_criteria_reader(tmp_path):
             "page": 60,
             "text": (
                 "§5.3 Potable Water Design Criteria\n"
-                "Minimum residual pressure 1.50 / 6.0 bar\n"
-                "Minimum pipe diameter 110 / 160 mm\n"
+                "§5.3.4 Minimum residual pressure 1.50 / 6.0 bar\n"
+                "§5.3.7 Minimum pipe diameter distribution mains 110 mm / "
+                "fire-flow 160 mm\n"
                 "Velocity 0.2 – 2.0 m/s\n"
-                "Head-loss per Table 5.3\n"
-                "Hazen-Williams C 140 / 130\n"
-                "Valve spacing 1000 m\n"
+                "Table 5.3 head-loss 20 m/km for D < 600 and 10 m/km for 600–1000\n"
+                "§5.3.10 Hazen-Williams C 140 HDPE / 130 DI\n"
+                "§5.3.11 Isolation valves every 1000 m\n"
                 "Cover 1.2 / 1.0 m\n"
                 "Separation 3 m / 500 mm from sewers\n"
             ),
@@ -632,13 +713,18 @@ def test_t11_criteria_reader(tmp_path):
             "page": 64,
             "text": (
                 "Sewer network design criteria §6.3\n"
+                "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
+                "House connections minimum diameter 160 mm\n"
                 "Table 6.1 Manhole spacing\n"
-                "200 mm 80 m\n"
-                "250 mm 80 m\n"
-                "300 mm 100 m\n"
-                "Table 6.3 Minimum gradients\n"
-                "200 mm 0.50 % 0.60 m/s 0.75 m/s\n"
-                "300 mm 0.35 % 0.60 m/s 0.75 m/s\n"
+                "150 – 200: 100 m\n"
+                "300 – 500: 120 m\n"
+                "600 – 800: 160 m\n"
+                "≤ 1000: 200 m\n"
+                "≥ 1200: 300 m\n"
+                "Table 6.3 Minimum gradients mm/m\n"
+                "200: 5.00 / 3.20\n"
+                "300: 3.50 / 2.50\n"
+                "1200: 0.50 / 0.35\n"
             ),
         }, {
             "page": 70,
@@ -685,23 +771,30 @@ def test_t11_criteria_reader(tmp_path):
     assert rc == 0, msg
     doc = load(out)
     Draft202012Validator(load(TPL / "criteria.schema.json")).validate(doc)
-    # S3 (a) PW §5.3
+    # T3 / S3 (a) PW §5.3
     pw = doc["criteria"]["potable_water"]
-    assert abs(pw["pressure_pair_bar"]["min_bar"] - 1.50) < 1e-9 or abs(
-        pw["pressure_pair_bar"]["min_bar"] - 2.76) < 1e-9
-    assert pw.get("min_diameter_mm_pair") or pw.get("min_diameter_mm")
+    assert abs(pw["pressure_pair_bar"]["min_bar"] - 1.50) < 1e-9
+    assert abs(pw["pressure_pair_bar"]["max_bar"] - 6.0) < 1e-9
+    dpair = pw["min_diameter_mm_pair"]
+    assert abs(dpair["distribution_mains_mm"] - 110) < 1e-9
+    assert abs(dpair["fire_flow_mm"] - 160) < 1e-9
     assert pw.get("velocity_range_ms") or pw.get("min_velocity_ms")
-    assert pw.get("hw_c_pair") or pw.get("hw_c")
+    assert abs(pw["hw_c_pair"]["c_hdpe"] - 140) < 1e-9
+    assert abs(pw["hw_c_pair"]["c_di"] - 130) < 1e-9
     assert abs(float(pw["valve_spacing_m"]["value"]) - 1000) < 1e-9
     assert pw.get("cover_m_pair") or pw.get("cover_m")
-    assert pw.get("head_loss_table")
-    # S3 (b) Tables 6.1 / 6.3
-    assert len(doc["mh_spacing_table"]) >= 2
+    hl = pw["head_loss_table"]
+    assert abs(hl["lt_600_mm_m_per_km"] - 20) < 1e-9
+    assert abs(hl["d_600_to_1000_m_per_km"] - 10) < 1e-9
+    # T3 Tables 6.1 / 6.3 (mm/m → %)
+    assert len(doc["mh_spacing_table"]) >= 4
     assert len(doc["gradient_tables"]["sewer"]) >= 2
     g200 = next(r for r in doc["gradient_tables"]["sewer"] if r["diameter_mm"] == 200)
-    assert abs(g200["min_slope_pct"] - 0.50) < 1e-9
-    assert g200.get("velocity_half_full_ms") is not None
-    assert g200.get("velocity_peak_ms") is not None
+    assert abs(g200["min_slope_mm_per_m"] - 5.00) < 1e-9
+    assert abs(g200["min_slope_pct"] - 0.50) < 1e-9  # ÷ 10
+    assert abs(g200["slope_half_full_mm_per_m"] - 3.20) < 1e-9
+    # Gravity min D 200, not house-connection 160
+    assert abs(doc["criteria"]["sewer"]["min_diameter_mm"]["value"] - 200) < 1e-9
     # S3 (c) totals from Configuration, not TOC
     assert abs(doc["declared_totals"]["sewer:total_length_km"]["value"] - 9.70) < 1e-9
     assert int(doc["declared_totals"]["sewer:manhole_count"]["value"]) == 173
