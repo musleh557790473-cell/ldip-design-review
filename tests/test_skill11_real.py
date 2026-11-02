@@ -301,11 +301,15 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
     pipe_labels = [p for p in plan["pipes"] if p.get("kind") == "pipe_label"]
     assert len(pipe_labels) == exp["plan_pipe_labels"]
 
-    # Match plan L/S to model within DQ-9 tol; expect 149 identical
+    # Match plan L/S to model within DQ-9 tol; expect 149 identical.
+    # V2: compare |model slope| with plan S= (143/164 conduits stored reversed).
     tol_l, tol_s = 0.05, 0.01
     identical = 0
     for c in doc["conduits"]:
         if c.get("diameter_mm") is None or abs(c["diameter_mm"] - 200) > 1:
+            continue
+        model_s = c.get("slope_pct")
+        if model_s is None:
             continue
         for p in pipe_labels:
             if p.get("_used"):
@@ -313,7 +317,7 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
             if p.get("length_m") is None or p.get("slope_pct") is None:
                 continue
             if (abs(p["length_m"] - (c.get("length_m") or 0)) <= tol_l
-                    and abs(p["slope_pct"] - (c.get("slope_pct") or 0)) <= tol_s):
+                    and abs(p["slope_pct"] - abs(model_s)) <= tol_s):
                 identical += 1
                 p["_used"] = True
                 break

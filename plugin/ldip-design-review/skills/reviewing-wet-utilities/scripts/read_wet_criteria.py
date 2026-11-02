@@ -103,7 +103,20 @@ CRITERION_PATTERNS = [
 ]
 
 PRESSURE_PAIR = re.compile(
-    r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*bar",
+    r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*bars?",
+    re.I,
+)
+# V3: real NMAR sentences (report p.72–73) — pressure not written as "min … bar"
+PRESSURE_MIN_SENTENCE = re.compile(
+    r"(?:residual\s+)?pressure[^.]{0,80}?"
+    r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|minimum(?:\s+of)?)"
+    r"[^0-9]{0,20}(\d+(?:\.\d+)?)\s*bars?\b",
+    re.I,
+)
+PRESSURE_MAX_SENTENCE = re.compile(
+    r"pressure[^.]{0,80}?"
+    r"(?:will\s+not\s+exceed|shall\s+not\s+exceed|not\s+exceed|maximum(?:\s+operating)?)"
+    r"[^0-9]{0,40}(\d+(?:\.\d+)?)\s*bars?\b",
     re.I,
 )
 # §5.3.7: 110 distribution mains / 160 fire-flow (not service/distribution)
@@ -113,11 +126,13 @@ DIAMETER_PAIR_MM = re.compile(
     re.I,
 )
 DIAMETER_DISTRIBUTION = re.compile(
-    r"(?:distribution|main)s?[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm",
+    r"(?:(?:distribution|main)s?[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm|"
+    r"(\d+(?:\.\d+)?)\s*mm\s+for\s+distribution\s+mains?)",
     re.I,
 )
 DIAMETER_FIRE = re.compile(
-    r"fire[- ]?flow[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm",
+    r"(?:fire[- ]?flow[^0-9]{0,40}(\d+(?:\.\d+)?)\s*mm|"
+    r"(\d+(?:\.\d+)?)\s*mm\s+for\s+(?:the\s+)?pipeline[^.]{0,40}fire\s*flow)",
     re.I,
 )
 VELOCITY_RANGE = re.compile(
@@ -130,6 +145,15 @@ HW_C_PAIR = re.compile(
 )
 HW_C_HDPE_DI = re.compile(
     r"(?:C\s*=?\s*)?(\d{2,3})\s*(?:\(?(?:HDPE|PE)\)?)?\s*/\s*(\d{2,3})\s*(?:\(?(?:DI|ductile)\)?)?",
+    re.I,
+)
+# V3: "140 for High Density Polyethylene (HDPE) pipes." / "130 for Ductile Iron (DI)"
+HW_C_HDPE_SENTENCE = re.compile(
+    r"(\d{2,3})\s+for\s+High\s+Density\s+Polyethylene|\b(\d{2,3})\s+for\s+\(?HDPE\)?",
+    re.I,
+)
+HW_C_DI_SENTENCE = re.compile(
+    r"(\d{2,3})\s+for\s+Ductile\s+Iron|\b(\d{2,3})\s+for\s+\(?DI\)?",
     re.I,
 )
 COVER_PAIR = re.compile(
@@ -147,7 +171,8 @@ HEAD_LOSS_VALUES = re.compile(
     re.I | re.S,
 )
 VALVE_SPACING = re.compile(
-    r"(?:isolation\s+)?valves?[^0-9]{0,40}(?:every\s+)?(\d+(?:\.\d+)?)\s*m\b",
+    r"(?:isolat(?:ion|ing)\s+)?valves?[^0-9]{0,80}"
+    r"(?:every|maximum\s+distance\s+of\s+every)?\s*(\d+(?:\.\d+)?)\s*m(?:eters?)?\b",
     re.I,
 )
 SEWER_GRAVITY_MIN_D = re.compile(
@@ -161,13 +186,14 @@ HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I
 
 # Table 6.1 — MH spacing by diameter range → spacing m
 # e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m",
-# "up to 1000 → 200 m", "1200 and above → 300 m"
+# "up to 1000 → 200 m", "1200 and above → 300 m" (V4)
+_DASH = r"[–—−‐-]"  # en/em/minus/hyphen variants from PDF extract
 TABLE_61_RANGE = re.compile(
     r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
     r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
     r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)"
-    r"|(?P<lo>\d{2,4})\s*(?:–|-|to)\s*(?P<hi>\d{2,4}))"
-    r"\s*(?:mm)?\s*(?:[:→\s]|to)?\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
+    rf"|(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}}))"
+    r"\s*(?:mm)?\s*(?:[:→=>\s]|to)?\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
     re.I,
 )
 TABLE_61_SIMPLE = re.compile(
@@ -175,11 +201,18 @@ TABLE_61_SIMPLE = re.compile(
     re.I,
 )
 # Table 6.3 — min gradient by D in mm/m (both columns); convert to % via ÷10 (T3)
-# e.g. "200: 5.00 / 3.20", "200 mm 5.00 3.20 mm/m", also accept "% " form
+# e.g. "200: 5.00 / 3.20", "1200 and larger 0.50 / 0.35" (V4)
 TABLE_63_MM_PER_M = re.compile(
-    r"(?P<d>\d{2,4})\s*(?:mm)?\s*[:\s]\s*"
+    r"(?P<d>\d{2,4})\s*(?:mm)?"
+    r"(?:\s+and\s+(?:larger|above|over|greater(?:\s+than)?))?"
+    r"\s*[:\s]\s*"
     r"(?P<s1>\d+(?:\.\d+)?)\s*(?:/|,|\s+)\s*(?P<s2>\d+(?:\.\d+)?)"
     r"(?:\s*mm\s*/\s*m)?",
+    re.I,
+)
+# End caption for Table 10.9 (below the table body on last page) — V1
+TABLE_109_END_CAPTION = re.compile(
+    r"TABLE\s*10\.9\s+HYDRAULIC\s+DESIGN\s+RESULTS",
     re.I,
 )
 TABLE_63_PCT = re.compile(
@@ -445,10 +478,22 @@ def _set_criterion(bucket, key, value, page, text, clause=None, extra=None):
     bucket[key] = row
 
 
+def _pw_diameter_mm(match):
+    """First non-None capture from distribution/fire diameter regexes."""
+    if not match:
+        return None
+    for g in match.groups():
+        if g is not None:
+            return float(g)
+    return None
+
+
 def _extract_pw_criteria(bucket, text, page):
-    """Fill potable-water §5.3 declared values (T3 / S3)."""
-    # §5.3.4 pressure 1.50 / 6.0 bar
+    """Fill potable-water §5.3 declared values (T3 / S3 / V3)."""
+    # §5.3.4 pressure 1.50 / 6.0 bar — slash pair or V3 sentences
     pm = PRESSURE_PAIR.search(text)
+    pmin = PRESSURE_MIN_SENTENCE.search(text)
+    pmax = PRESSURE_MAX_SENTENCE.search(text)
     if pm and (
         re.search(r"5\.3\.4|pressure|bar", text, re.I)
         or "pressure_pair_bar" not in bucket
@@ -471,29 +516,94 @@ def _extract_pw_criteria(bucket, text, page):
             bucket["pressure_max_bar"] = {
                 "value": hi, "page": page, "text": text[:240], "clause": clause,
             }
+    # V3 sentences may appear on separate lines — merge into pair
+    if pmin or pmax:
+        clause = "§5.3.4" if re.search(r"5\.3\.4", text) else "§5.3"
+        existing = bucket.get("pressure_pair_bar") or {}
+        lo = float(pmin.group(1)) if pmin else existing.get("min_bar")
+        hi = float(pmax.group(1)) if pmax else existing.get("max_bar")
+        if lo is not None and hi is not None:
+            # Prefer design 1.50/6.0 over residual operating pair
+            take = existing.get("min_bar") is None or (
+                abs(lo - 1.5) < 0.2 and abs(hi - 6.0) < 0.5
+            ) or abs(float(existing.get("min_bar", 0)) - 1.5) > 0.5
+            if take:
+                bucket["pressure_pair_bar"] = {
+                    "min_bar": float(lo), "max_bar": float(hi), "page": page,
+                    "text": text[:240], "clause": clause,
+                }
+        if pmin:
+            bucket["pressure_min_bar"] = {
+                "value": float(pmin.group(1)), "page": page,
+                "text": text[:240], "clause": clause,
+            }
+        if pmax:
+            bucket["pressure_max_bar"] = {
+                "value": float(pmax.group(1)), "page": page,
+                "text": text[:240], "clause": clause,
+            }
+        # If only one side this line, keep prior other side when forming pair
+        if bucket.get("pressure_min_bar") and bucket.get("pressure_max_bar"):
+            if "pressure_pair_bar" not in bucket or (
+                abs(bucket["pressure_pair_bar"].get("min_bar", 0) - 1.5) > 0.5
+            ):
+                bucket["pressure_pair_bar"] = {
+                    "min_bar": float(bucket["pressure_min_bar"]["value"]),
+                    "max_bar": float(bucket["pressure_max_bar"]["value"]),
+                    "page": page, "text": text[:240], "clause": clause,
+                }
 
     # §5.3.7 min D 110 distribution mains / 160 fire-flow
     d_dist = DIAMETER_DISTRIBUTION.search(text)
     d_fire = DIAMETER_FIRE.search(text)
     dm = DIAMETER_PAIR_MM.search(text)
     if d_dist or d_fire or dm:
-        dist_mm = float(d_dist.group(1)) if d_dist else (float(dm.group(1)) if dm else None)
-        fire_mm = float(d_fire.group(1)) if d_fire else (float(dm.group(2)) if dm else None)
+        dist_mm = _pw_diameter_mm(d_dist)
+        fire_mm = _pw_diameter_mm(d_fire)
+        if dist_mm is None and dm:
+            dist_mm = float(dm.group(1))
+        if fire_mm is None and dm:
+            fire_mm = float(dm.group(2))
+        # Accumulate across sentences (V3: diameters on separate lines)
+        existing_pair = bucket.get("min_diameter_mm_pair") or {}
+        if dist_mm is None:
+            dist_mm = existing_pair.get("distribution_mains_mm")
+        if fire_mm is None:
+            fire_mm = existing_pair.get("fire_flow_mm")
         if dist_mm is not None and fire_mm is not None:
-            bucket.setdefault("min_diameter_mm_pair", {
-                "distribution_mains_mm": dist_mm,
-                "fire_flow_mm": fire_mm,
+            bucket["min_diameter_mm_pair"] = {
+                "distribution_mains_mm": float(dist_mm),
+                "fire_flow_mm": float(fire_mm),
                 # legacy aliases kept for older tests
-                "service_mm": dist_mm,
-                "distribution_mm": fire_mm,
+                "service_mm": float(dist_mm),
+                "distribution_mm": float(fire_mm),
                 "page": page,
                 "text": text[:240],
                 "clause": "§5.3.7",
-            })
+            }
             _set_criterion(
-                bucket, "min_diameter_mm", dist_mm, page, text, "§5.3.7",
-                extra={"fire_flow_mm": fire_mm, "distribution_mains_mm": dist_mm},
+                bucket, "min_diameter_mm", float(dist_mm), page, text, "§5.3.7",
+                extra={"fire_flow_mm": float(fire_mm),
+                       "distribution_mains_mm": float(dist_mm)},
             )
+        elif dist_mm is not None:
+            bucket.setdefault("min_diameter_mm_pair", {
+                "distribution_mains_mm": float(dist_mm),
+                "service_mm": float(dist_mm),
+                "page": page, "text": text[:240], "clause": "§5.3.7",
+            })
+            bucket["min_diameter_mm_pair"]["distribution_mains_mm"] = float(dist_mm)
+            bucket["min_diameter_mm_pair"]["service_mm"] = float(dist_mm)
+            _set_criterion(
+                bucket, "min_diameter_mm", float(dist_mm), page, text, "§5.3.7",
+                extra={"distribution_mains_mm": float(dist_mm)},
+            )
+        elif fire_mm is not None:
+            pair = bucket.setdefault("min_diameter_mm_pair", {
+                "page": page, "text": text[:240], "clause": "§5.3.7",
+            })
+            pair["fire_flow_mm"] = float(fire_mm)
+            pair["distribution_mm"] = float(fire_mm)
 
     vm = VELOCITY_RANGE.search(text)
     if vm:
@@ -507,23 +617,47 @@ def _extract_pw_criteria(bucket, text, page):
         _set_criterion(bucket, "min_velocity_ms", float(vm.group(1)), page, text, "§5.3")
         _set_criterion(bucket, "max_velocity_ms", float(vm.group(2)), page, text, "§5.3")
 
-    # §5.3.10 C 140 HDPE / 130 DI
+    # §5.3.10 C 140 HDPE / 130 DI — pair form or V3 separate sentences
     hm = HW_C_PAIR.search(text) or (
         HW_C_HDPE_DI.search(text) if re.search(r"5\.3\.10|Hazen|HW\s*C|\bHDPE\b|\bDI\b", text, re.I)
         else None
     )
+    c_hdpe = c_di = None
     if hm:
-        bucket.setdefault("hw_c_pair", {
-            "c_hdpe": float(hm.group(1)),
-            "c_di": float(hm.group(2)),
-            "c_new": float(hm.group(1)),
-            "c_old": float(hm.group(2)),
+        c_hdpe, c_di = float(hm.group(1)), float(hm.group(2))
+    else:
+        hs = HW_C_HDPE_SENTENCE.search(text)
+        ds = HW_C_DI_SENTENCE.search(text)
+        if hs:
+            c_hdpe = float(next(g for g in hs.groups() if g))
+        if ds:
+            c_di = float(next(g for g in ds.groups() if g))
+        existing_hw = bucket.get("hw_c_pair") or {}
+        if c_hdpe is None:
+            c_hdpe = existing_hw.get("c_hdpe")
+        if c_di is None:
+            c_di = existing_hw.get("c_di")
+    if c_hdpe is not None and c_di is not None:
+        bucket["hw_c_pair"] = {
+            "c_hdpe": float(c_hdpe),
+            "c_di": float(c_di),
+            "c_new": float(c_hdpe),
+            "c_old": float(c_di),
             "page": page,
             "text": text[:240],
             "clause": "§5.3.10",
+        }
+        _set_criterion(bucket, "hw_c", float(c_hdpe), page, text, "§5.3.10",
+                       extra={"c_di": float(c_di)})
+    elif c_hdpe is not None or c_di is not None:
+        pair = bucket.setdefault("hw_c_pair", {
+            "page": page, "text": text[:240], "clause": "§5.3.10",
         })
-        _set_criterion(bucket, "hw_c", float(hm.group(1)), page, text, "§5.3.10",
-                       extra={"c_di": float(hm.group(2))})
+        if c_hdpe is not None:
+            pair["c_hdpe"] = pair["c_new"] = float(c_hdpe)
+            _set_criterion(bucket, "hw_c", float(c_hdpe), page, text, "§5.3.10")
+        if c_di is not None:
+            pair["c_di"] = pair["c_old"] = float(c_di)
 
     cm = COVER_PAIR.search(text)
     if cm:
@@ -546,7 +680,7 @@ def _extract_pw_criteria(bucket, text, page):
             "clause": "§5.3",
         })
 
-    # §5.3.11 isolation valves every 1000 m
+    # §5.3.11 isolation / isolating valves every 1000 m (V3)
     vmv = VALVE_SPACING.search(text)
     if vmv:
         _set_criterion(bucket, "valve_spacing_m", float(vmv.group(1)), page, text, "§5.3.11")
@@ -649,28 +783,45 @@ def extract(lines):
                 if on_toc:
                     continue
                 if clause == "Table 10.9":
-                    in_table_109 = True
-                    in_table_63 = False
-                    current = "storm"
-                elif clause == "Table 6.1":
-                    in_table_61 = True
-                    in_table_63 = False
-                    current = "sewer"
-                elif clause == "Table 6.3":
-                    in_table_63 = True
-                    in_table_61 = False
-                    table_63_page = page
-                    current = "sewer"
-                elif clause.startswith("§"):
-                    current = net
-                    # Leave Table 6.3 block on a later section heading
-                    if in_table_63 and table_63_page is not None and page != table_63_page:
+                    # V1: end caption below the table body closes the block;
+                    # a bare "Table 10.9" heading (or first sighting) opens it.
+                    if TABLE_109_END_CAPTION.search(text) and storm_table_109:
+                        in_table_109 = False
+                    else:
+                        in_table_109 = True
                         in_table_63 = False
+                        current = "storm"
+                elif clause == "Table 6.1":
+                    if in_table_109:
+                        pass  # V1: keep storm table open across repeated headers
+                    else:
+                        in_table_61 = True
+                        in_table_63 = False
+                        current = "sewer"
+                elif clause == "Table 6.3":
+                    if in_table_109:
+                        pass
+                    else:
+                        in_table_63 = True
+                        in_table_61 = False
+                        table_63_page = page
+                        current = "sewer"
+                elif clause.startswith("§"):
+                    # V1: do not leave storm Table 10.9 mid-block on a stray § hit
+                    if not in_table_109:
+                        current = net
+                        # Leave Table 6.3 block on a later section heading
+                        if in_table_63 and table_63_page is not None and page != table_63_page:
+                            in_table_63 = False
 
         if on_toc:
             continue
 
-        current = section_of(text, current)
+        # V1: pin section to storm while Table 10.9 body is open
+        if in_table_109:
+            current = "storm"
+        else:
+            current = section_of(text, current)
 
         # Configuration sub-section anchors (S3) — require numbered heading
         if current in CONFIG_ANCHORS and CONFIG_ANCHORS[current].search(text):
@@ -684,8 +835,14 @@ def extract(lines):
 
         bucket = criteria[current]
 
-        # PW §5.3 structured criteria (force section on §5.3.x sub-clauses)
-        if re.search(r"(?:§\s*)?5\.3(?:\.\d+)?\b", text) and current != "sewer":
+        # PW §5.3 structured criteria (force section on §5.3.x sub-clauses).
+        # V1: require section lookbehind so lengths like "25.30" do not match "5.3",
+        # and never steal the cursor while Table 10.9 is open.
+        if (
+            not in_table_109
+            and current != "sewer"
+            and re.search(rf"(?:§\s*)?{_SEC}5\.3(?:\.\d+)?\b", text)
+        ):
             current = "potable_water"
             bucket = criteria[current]
         if current == "potable_water":
@@ -903,11 +1060,18 @@ def extract(lines):
                     "page": page,
                     "text": m.group(0),
                 })
-            if in_table_109 or STORM_109_ID.search(text):
-                row = _parse_storm_109_row(text, page)
-                if row and row["id"] not in storm_109_by_id:
-                    storm_109_by_id[row["id"]] = row
-                    storm_table_109.append(row)
+        # V1: keep parsing Table 10.9 through repeated headers / pages until
+        # the end caption; auto-open on P- rows while already in storm.
+        if in_table_109 or (current == "storm" and STORM_109_ID.search(text)):
+            if not in_table_109 and STORM_109_ID.search(text):
+                in_table_109 = True
+            row = _parse_storm_109_row(text, page)
+            if row and row["id"] not in storm_109_by_id:
+                storm_109_by_id[row["id"]] = row
+                storm_table_109.append(row)
+            # End caption closes the block (caption sits below the last rows)
+            if TABLE_109_END_CAPTION.search(text) and storm_table_109:
+                in_table_109 = False
 
         # Declared totals — prefer Configuration anchors; never TOC
         force = bool(current and in_config.get(current))

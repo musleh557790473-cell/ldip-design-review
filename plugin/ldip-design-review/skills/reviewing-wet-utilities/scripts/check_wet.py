@@ -265,26 +265,29 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                     meta["site"], meta["sub"], meta["run"],
                     status_cap=status_cap,
                 ))
-        # Slope
-        diff, flag = _tol_flag(c.get("slope_pct"), p.get("slope_pct"), tol["slope_pct"])
-        if p.get("slope_pct") is not None and c.get("slope_pct") is not None:
+        # Slope — V2: compare |model slope| with plan S= (stored-reversed pipes)
+        model_s = c.get("slope_pct")
+        plan_s = p.get("slope_pct")
+        model_s_abs = abs(model_s) if model_s is not None else None
+        diff, flag = _tol_flag(model_s_abs, plan_s, tol["slope_pct"])
+        if plan_s is not None and model_s is not None:
             st = "Confirmed" if not status_cap else "Probable"
             rows.append(comparison_row(
                 "W2", f"element:S:{cid}", ["model", "plan"],
-                {"model": c.get("slope_pct"), "plan": p.get("slope_pct"), "id": cid},
+                {"model": model_s, "model_abs": model_s_abs, "plan": plan_s, "id": cid},
                 "%", diff, None, "flag" if flag else "pass",
                 severity="Minor" if flag else None,
                 status=st if flag else None,
-                note="DQ-9 slope ± 0.01 %",
+                note="DQ-9 |slope| ± 0.01 % (V2)",
             ))
             if flag:
                 findings.append(finding_stub(
                     "W2", f"Pipe {cid} slope label ≠ model",
-                    f"Plan label S={p.get('slope_pct')} %; model slope {c.get('slope_pct')} % "
-                    f"(|Δ|={diff:.4f} > {tol['slope_pct']}). WUT-1xx.",
+                    f"Plan label S={plan_s} %; model |slope| {model_s_abs} % "
+                    f"(stored S={model_s} %; |Δ|={diff:.4f} > {tol['slope_pct']}). WUT-1xx.",
                     "inconsistency", "Minor", st,
                     [evid("E01", "script_output",
-                          f"id={cid} model_S={c.get('slope_pct')} plan_S={p.get('slope_pct')}")],
+                          f"id={cid} model_S={model_s} |S|={model_s_abs} plan_S={plan_s}")],
                     meta["site"], meta["sub"], meta["run"],
                     status_cap=status_cap,
                 ))

@@ -490,7 +490,7 @@ def test_t11_5b_abs_slope_stop_to_start_no_adverse(tmp_path):
 # --------------------------------------------------------------------------- T11-6 consistency tolerance edges
 def test_t11_6_w2_tolerance_edges(tmp_path):
     """T11-6: L ± 0.05 m edge — 0.05 pass, 0.06 flag Confirmed."""
-    def networks(delta):
+    def networks(delta, slope_model=0.50, slope_plan=0.50):
         return {
             "networks_version": "1.0",
             "network": "sewer",
@@ -499,15 +499,15 @@ def test_t11_6_w2_tolerance_edges(tmp_path):
                 "id": "P1", "element_id": 1, "source": "model",
                 "diameter_mm": 200, "length_m": 50.0,
                 "invert_start_m": 100.0, "invert_stop_m": 99.75,
-                "slope_pct": 0.50, "cover_m": 1.5,
+                "slope_pct": slope_model, "cover_m": 1.5,
                 "start_node_id": 1, "stop_node_id": 2,
             }],
             "nodes": [],
             "summary": {"conduit_count": 1, "length_km": 0.05, "length_m": 50.0},
             "plan": [{
                 "id": "P1", "source": "plan", "kind": "pipe_label",
-                "raw": "P1 L=%.2f m S=0.50 %% Ø200" % (50.0 + delta),
-                "length_m": 50.0 + delta, "slope_pct": 0.50, "diameter_mm": 200,
+                "raw": "P1 L=%.2f m S=%.2f %% Ø200" % (50.0 + delta, slope_plan),
+                "length_m": 50.0 + delta, "slope_pct": slope_plan, "diameter_mm": 200,
             }],
         }
 
@@ -536,6 +536,16 @@ def test_t11_6_w2_tolerance_edges(tmp_path):
     assert finds[0]["severity"] == "Minor"
     stmt = finds[0]["statement"]
     assert "50.06" in stmt or ("50.0" in stmt and "0.06" in stmt)
+
+    # V2: stored-reversed model slope still matches positive plan S=
+    cons_rev, cand_rev, _ = check(
+        tmp_path / "edge_rev", networks(0.0, slope_model=-0.50, slope_plan=0.50),
+        presence=presence,
+    )
+    S_rows = [r for r in cons_rev["comparisons"]
+              if r["check"] == "W2" and str(r["quantity"]).startswith("element:S")]
+    assert S_rows and S_rows[0]["result"] == "pass", S_rows
+    assert not any("slope label" in f["title"].casefold() for f in cand_rev["findings"])
 
 
 def test_t11_w6_er_conflict_observations(tmp_path):
@@ -770,16 +780,22 @@ def test_t11_criteria_reader(tmp_path):
                 "6.5.1 Configuration ......................... 81\n"
             ),
         }, {
-            "page": 60,
+            # V3: real NMAR sentence forms (report p.72–73), not "minimum pressure … bar"
+            "page": 72,
             "text": (
                 "§5.3 Potable Water Design Criteria\n"
-                "§5.3.4 Minimum residual pressure 1.50 / 6.0 bar\n"
-                "§5.3.7 Minimum pipe diameter distribution mains 110 mm / "
-                "fire-flow 160 mm\n"
+                "The residual pressure in the distribution system shall not be "
+                "less than 1.50 bars under all operating conditions.\n"
+                "The pressure of the network will not exceed 6.0 bars of maximum "
+                "operating pressure.\n"
+                "110mm for distribution mains.\n"
+                "160mm for the pipeline provides a fire flow.\n"
                 "Velocity 0.2 – 2.0 m/s\n"
                 "Table 5.3 head-loss 20 m/km for D < 600 and 10 m/km for 600–1000\n"
-                "§5.3.10 Hazen-Williams C 140 HDPE / 130 DI\n"
-                "§5.3.11 Isolation valves every 1000 m\n"
+                "140 for High Density Polyethylene (HDPE) pipes.\n"
+                "130 for Ductile Iron (DI) pipes.\n"
+                "Isolating valves will be provided at a maximum distance of "
+                "every 1000 meters along the network.\n"
                 "Cover 1.2 / 1.0 m\n"
                 "Separation 3 m / 500 mm from sewers\n"
             ),
@@ -790,16 +806,17 @@ def test_t11_criteria_reader(tmp_path):
                 "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
                 "House connections minimum diameter 160 mm\n"
                 "Table 6.1 Manhole spacing\n"
-                "150 – 200: 100 m\n"
+                # V4: hyphen range + "1200 and above" wording from real report
+                "150 - 200 → 100\n"
                 "300 – 500: 120 m\n"
                 "600 – 800: 160 m\n"
                 "≤ 1000: 200 m\n"
-                "≥ 1200: 300 m\n"
+                "1200 and above → 300\n"
                 "Table 6.3 Minimum gradients mm/m\n"
                 "200: 5.00 / 3.20\n"
                 "300: 3.50 / 2.50\n"
                 "400: 2.00 / 1.50\n"
-                "1200: 0.50 / 0.35\n"
+                "1200 and larger 0.50 / 0.35\n"
             ),
         }, {
             "page": 94,
@@ -833,16 +850,25 @@ def test_t11_criteria_reader(tmp_path):
             "text": (
                 "Table 10.9 Storm pipe schedule\n"
                 "Label Invert Start Invert Stop Length Slope Section Size Material n Cover\n"
+                # V1: length 25.30 must not abort table via false "5.3" PW switch
                 "P-055 760.87 760.50 25.30 1.46 Circular 400 Concrete 0.013 0.18\n"
-                "P-118 758.20 757.90 40.00 0.75 Circular 500 Concrete 0.013 0.63\n"
+                "P-066 759.00 758.70 20.00 1.50 Circular 400 Concrete 0.013 0.90\n"
             ),
         }, {
-            "page": 143,
+            "page": 151,
+            "text": (
+                # V1: repeated header + rows after P-066 (pages 151–153)
+                "Label Invert Start Invert Stop Length Slope Section Size Material n Cover\n"
+                "P-118 758.20 757.90 40.00 0.75 Circular 500 Concrete 0.013 0.63\n"
+                "P-119 755.00 754.60 30.00 1.33 Circular 600 Concrete 0.013 1.15\n"
+            ),
+        }, {
+            "page": 153,
             "text": (
                 "Label Invert Start Invert Stop Length Slope Section Size Material n Cover\n"
-                "P-119 755.00 754.60 30.00 1.33 Circular 600 Concrete 0.013 1.15\n"
                 "P-092 750.00 749.20 110.6 0.72 Circular 800 Concrete 0.013 1.50\n"
                 "P-088 748.00 747.40 100.7 0.60 Circular 700 Concrete 0.013 1.40\n"
+                "TABLE 10.9 HYDRAULIC DESIGN RESULTS – STORM WATER NETWORK\n"
             ),
         }],
     }
@@ -867,8 +893,17 @@ def test_t11_criteria_reader(tmp_path):
     hl = pw["head_loss_table"]
     assert abs(hl["lt_600_mm_m_per_km"] - 20) < 1e-9
     assert abs(hl["d_600_to_1000_m_per_km"] - 10) < 1e-9
-    # U3 Tables 6.1 (5 rows) / 6.3 (incl. 1200+; no D 0 from p.94)
+    # U3/V4 Tables 6.1 (5 rows incl. 150-200 + 1200 and above) / 6.3 1200+
     assert len(doc["mh_spacing_table"]) >= 5
+    assert any(abs(r["mh_spacing_m"] - 100) < 0.5
+               and r.get("diameter_min_mm") == 150
+               and r.get("diameter_max_mm") == 200
+               for r in doc["mh_spacing_table"]), doc["mh_spacing_table"]
+    assert any(
+        abs(r["mh_spacing_m"] - 300) < 0.5
+        and (r.get("diameter_min_mm") == 1200 or abs(r["diameter_mm"] - 1200) < 0.5)
+        for r in doc["mh_spacing_table"]
+    ), doc["mh_spacing_table"]
     grads = doc["gradient_tables"]["sewer"]
     assert not any(r["diameter_mm"] < 100 for r in grads)
     g200 = next(r for r in grads if r["diameter_mm"] == 200)
@@ -891,15 +926,19 @@ def test_t11_criteria_reader(tmp_path):
     clauses = {t["clause"] for t in doc["declared_tables"]}
     assert "§5.3" in clauses and "§6.3" in clauses and "§10.2" in clauses
     assert "Table 6.1" in clauses and "Table 6.3" in clauses and "Table 10.9" in clauses
-    # S2 Table 10.9 full rows, unique by label
+    # S2/V1 Table 10.9 continues past P-066 / length 25.30; unique by label
     by_id = {r["id"]: r for r in doc["storm_table_109"]}
     assert len(by_id) == len(doc["storm_table_109"])
+    assert "P-066" in by_id and "P-118" in by_id and "P-119" in by_id
     assert abs(by_id["P-055"]["cover_m"] - 0.18) < 1e-9
     assert abs(by_id["P-055"]["invert_start_m"] - 760.87) < 1e-9
+    assert abs(by_id["P-055"]["length_m"] - 25.30) < 1e-9
     assert abs(by_id["P-118"]["cover_m"] - 0.63) < 1e-9
     assert abs(by_id["P-119"]["cover_m"] - 1.15) < 1e-9
     assert abs(by_id["P-092"]["length_m"] - 110.6) < 1e-9
     assert abs(by_id["P-088"]["length_m"] - 100.7) < 1e-9
+    total_109_km = sum(r["length_m"] for r in doc["storm_table_109"]) / 1000.0
+    assert total_109_km > 0.3  # synthetic subset; real ≈ 6.07 km
 
 
 def test_t11_params_declared_not_er():
