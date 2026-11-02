@@ -53,8 +53,9 @@ EXPECT = {
             "plan_node_labels": 164,
             "plan_pipe_labels": 164,
             "force_main_d1000": 1,
-            "force_main_labels": 9,  # Y1: 8 × Ø110 + 1 × Ø1000
-            "force_main_d110": 8,
+            # Z1: 7×Ø110 + 1×Ø1000 in site coords; legend Ø110 in sheet coords excluded (U2)
+            "force_main_labels": 8,
+            "force_main_d110": 7,
             "force_main_drafting_findings": 1,
             "plan_globs": ["**/SWN-10000*.dxf", "**/SWN-10000*.dwg"],
         },
@@ -202,7 +203,8 @@ def _write_presence(tmp_path, storm_model=False, from_root=None):
         },
         "hydraulic_calculations": False,
     }
-    path = tmp_path / "presence.json"
+    path = Path(tmp_path) / "presence.json"
+    path.parent.mkdir(parents=True, exist_ok=True)  # Z2: allow tmp_path / "fm_pres"
     path.write_text(json.dumps(p), encoding="utf-8")
     return path
 
@@ -321,7 +323,8 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
     assert abs(co17["e_m"] - 657629.4) < 0.1
     assert abs(co17["n_m"] - 2714320.5) < 0.1
 
-    # Y1: force-main labels (8 × Ø110 + 1 × Ø1000) → 1 Minor Confirmed drafting finding
+    # Y1/Z1: force-main labels (7 × Ø110 + 1 × Ø1000; legend sheet-coord excluded)
+    # → 1 Minor Confirmed drafting finding
     fm_labels = [p for p in plan["pipes"] if p.get("kind") == "force_main_label"]
     assert len(fm_labels) == exp["force_main_labels"]
     assert sum(1 for p in fm_labels if abs(p["diameter_mm"] - 110) < 0.5) == exp["force_main_d110"]
