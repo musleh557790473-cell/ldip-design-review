@@ -26,8 +26,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wet_common import (  # noqa: E402
     EXIT_OK, EXIT_SCHEMA, FINDING_SCHEMA, PARAMS_PATH, SKILL_ROOT, atomic_write_json,
-    comparison_row, emit, evid, fail, finding_stub, load_params, main_guard, read_json,
-    stage_pct,
+    comparison_row, emit, evid, fail, finding_stub, load_params, main_guard,
+    match_conduits_to_labels, read_json, stage_pct,
 )
 
 CONS_SCHEMA = SKILL_ROOT / "templates" / "consistency.schema.json"
@@ -225,24 +225,41 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                     status_cap=status_cap,
                 ))
 
-    # Element-level plan vs model (L, S, levels, E/N)
-    # Match by nearest plan pipe label with same diameter, or by order when ids align
-    plan_labels = [p for p in plan if p.get("kind") == "pipe_label" or p.get("length_m") is not None]
-    matched = 0
+    # Element-level plan vs model (L, S) — X1 maximum bipartite matching under DQ-9
+    plan_labels = [
+        p for p in plan
+        if p.get("kind") == "pipe_label" or (
+            p.get("length_m") is not None and p.get("slope_pct") is not None
+        )
+    ]
+    # Prefer explicit id hits first (Confirmed when both L and S also agree), then
+    # maximum matching on the remainder so order cannot drop compatible pairs.
+    remaining_c = []
+    remaining_p = list(plan_labels)
+    id_pairs = []
     for c in conduits:
         cid = str(c.get("id") or "")
-        candidates = [p for p in plan_labels if cid and cid.casefold() in str(p.get("raw") or "").casefold()]
-        if not candidates and c.get("diameter_mm") is not None:
-            candidates = [p for p in plan_labels
-                          if p.get("diameter_mm") is not None
-                          and abs(p["diameter_mm"] - c["diameter_mm"]) < 1.0
-                          and p.get("_used") is not True]
-        if not candidates:
+        if not cid or c.get("length_m") is None or c.get("slope_pct") is None:
+            remaining_c.append(c)
             continue
-        p = candidates[0]
-        p["_used"] = True
-        matched += 1
-        # Length
+        hit = next(
+            (i for i, p in enumerate(remaining_p)
+             if cid.casefold() in str(p.get("raw") or "").casefold()
+             and p.get("length_m") is not None and p.get("slope_pct") is not None),
+            None,
+        )
+        if hit is None:
+            remaining_c.append(c)
+            continue
+        id_pairs.append((c, remaining_p.pop(hit)))
+    dq9_pairs, n_left = match_conduits_to_labels(
+        remaining_c, remaining_p, tol_l=tol["length_m"], tol_s=tol["slope_pct"],
+    )
+    pairs = id_pairs + dq9_pairs
+    matched = len(pairs)
+    for c, p in pairs:
+        cid = str(c.get("id") or "")
+        # Length — matched under DQ-9 so |ΔL| ≤ tol (pass); still record the row
         diff, flag = _tol_flag(c.get("length_m"), p.get("length_m"), tol["length_m"])
         if p.get("length_m") is not None and c.get("length_m") is not None:
             st = "Confirmed" if not status_cap else "Probable"
@@ -252,7 +269,7 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                 "m", diff, None, "flag" if flag else "pass",
                 severity="Minor" if flag else None,
                 status=st if flag else None,
-                note="DQ-9 L ± 0.05 m; DWG label vs model → Confirmed",
+                note="DQ-9 L ± 0.05 m; max bipartite match (X1)",
             ))
             if flag:
                 findings.append(finding_stub(
@@ -265,7 +282,7 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                     meta["site"], meta["sub"], meta["run"],
                     status_cap=status_cap,
                 ))
-        # Slope — V2: compare |model slope| with plan S= (stored-reversed pipes)
+        # Slope — V2/X1: |model slope| vs plan S=
         model_s = c.get("slope_pct")
         plan_s = p.get("slope_pct")
         model_s_abs = abs(model_s) if model_s is not None else None
@@ -278,7 +295,7 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                 "%", diff, None, "flag" if flag else "pass",
                 severity="Minor" if flag else None,
                 status=st if flag else None,
-                note="DQ-9 |slope| ± 0.01 % (V2)",
+                note="DQ-9 |slope| ± 0.01 %; max bipartite match (X1)",
             ))
             if flag:
                 findings.append(finding_stub(
@@ -293,8 +310,11 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                 ))
     rows.append(comparison_row(
         "W2", "element_match_count", ["model", "plan"],
-        {"matched": matched, "model_conduits": len(conduits), "plan_labels": len(plan_labels)},
+        {"matched": matched, "model_conduits": len(conduits),
+         "plan_labels": len(plan_labels), "dq9_left": n_left,
+         "method": "maximum_bipartite"},
         None, None, None, "information",
+        note="X1 maximum bipartite matching under DQ-9 L/|S|",
     ))
 
     # U2: design-set storm plan lengths vs Table 10.9 (± 2 % per D and total)

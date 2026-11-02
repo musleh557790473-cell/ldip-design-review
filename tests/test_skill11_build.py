@@ -25,6 +25,31 @@ FT = 0.3048
 FT_MM = 304.8
 
 
+def make_linestring_wkb(points_ft, *, little=True, with_z=False):
+    """Build OGC WKB LineString (US-foot coordinates) for synthetic HMIRealGeometry."""
+    import struct
+    endian = 1 if little else 0
+    fmt = "<" if little else ">"
+    gtype = 2 + (1000 if with_z else 0)
+    parts = [
+        struct.pack(f"{fmt}B", endian),
+        struct.pack(f"{fmt}I", gtype),
+        struct.pack(f"{fmt}I", len(points_ft)),
+    ]
+    for p in points_ft:
+        if with_z:
+            x, y, z = p[0], p[1], p[2] if len(p) > 2 else 0.0
+            parts.append(struct.pack(f"{fmt}3d", x, y, z))
+        else:
+            parts.append(struct.pack(f"{fmt}2d", p[0], p[1]))
+    return b"".join(parts)
+
+
+# NMAR Co-17 start in US feet (re-review 5 X2)
+CO17_START_FT = (2157576.65, 8905251.05)
+CO17_END_FT = (2157601.58, 8905251.05)  # ~7.60 m east
+
+
 def run(script, *args):
     p = subprocess.run([PY, str(SK / script), *map(str, args)], capture_output=True, text=True)
     line = p.stdout.strip().splitlines()[-1] if p.stdout.strip() else "{}"
@@ -78,6 +103,7 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
         CREATE TABLE BaseLink_HmiDataSetGeometry_Data (
           DomainElementID INTEGER, AlternativeID INTEGER,
           HMIGeometryScaledLength REAL,
+          HMIRealGeometry BLOB,
           PRIMARY KEY (DomainElementID, AlternativeID)
         );
         CREATE TABLE GravityLinkBase_Physical_Data (
@@ -150,9 +176,14 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                 "INSERT INTO IdahoPipe_Physical_Data VALUES (?, ?, ?, ?, ?)",
                 (eid, alt, mat, d_mm / FT_MM, hw),
             )
+            # Default geometry along +E for pressure pipes
+            wkb = make_linestring_wkb([
+                (1000.0 + eid * 10, 2000.0),
+                (1000.0 + eid * 10 + L_m / FT, 2000.0),
+            ])
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?)",
-                (eid, alt, L_m / FT),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb),
             )
             c.execute(
                 "INSERT OR IGNORE INTO BaseIdahoNode_Physical_Data VALUES (?, ?, ?)",
@@ -161,6 +192,7 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
     else:
         # Default Co-17 validation values (R1 note) plus a second conduit
         # Co-17: D 200 mm, L 7.60 m, inverts 759.413 / 759.365
+        # X2: Co-17 start E 657629.4 / N 2714320.5 m (= CO17_START_FT)
         conduits = conduits or [
             # eid, label, start, stop, D_mm, L_m, inv_s_m, inv_e_m, alt
             (1, "Co-17", 101, 102, 200.0, 7.60, 759.413, 759.365, 1),
@@ -186,9 +218,19 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                 "INSERT INTO PhysicalLink_Physical_Data VALUES (?, ?, ?, ?)",
                 (eid, alt, i0 / FT, i1 / FT),
             )
+            if lab == "Co-17":
+                wkb = make_linestring_wkb([CO17_START_FT, CO17_END_FT], little=True)
+            else:
+                # C-2 continues east of Co-17 end; also exercise big-endian Z WKB
+                start = CO17_END_FT
+                end = (CO17_END_FT[0] + L_m / FT, CO17_END_FT[1])
+                wkb = make_linestring_wkb(
+                    [(start[0], start[1], 0.0), (end[0], end[1], 0.0)],
+                    little=False, with_z=True,
+                )
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?)",
-                (eid, alt, L_m / FT),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb),
             )
             c.execute(
                 "INSERT INTO GravityLinkBase_Physical_Data VALUES (?, ?, ?, ?)",
@@ -273,6 +315,14 @@ def test_t11_1_reader_units_feet_to_si(tmp_path):
     assert abs(c0["invert_start_m"] - 759.413) < 0.02
     assert abs(c0["invert_stop_m"] - 759.365) < 0.02
     assert c0["units_source"] == "US_feet"
+    # X2: HMIRealGeometry WKB (ft → m); Co-17 start E/N
+    assert c0.get("has_geometry") is True
+    assert abs(c0["e_m"] - 657629.4) < 0.1
+    assert abs(c0["n_m"] - 2714320.5) < 0.1
+    assert len(c0.get("vertices_m") or []) >= 2
+    c2 = by_id["C-2"]
+    assert c2.get("has_geometry") is True  # big-endian Z LineString
+    assert sum(1 for c in doc["conduits"] if c.get("has_geometry")) == 2
 
 
 # --------------------------------------------------------------------------- T11-2 base alternative
@@ -488,6 +538,67 @@ def test_t11_5b_abs_slope_stop_to_start_no_adverse(tmp_path):
 
 
 # --------------------------------------------------------------------------- T11-6 consistency tolerance edges
+def test_t11_x1_bipartite_beats_greedy(tmp_path):
+    """X1: maximum bipartite matching finds 2 pairs where greedy model-order finds 1."""
+    sys.path.insert(0, str(SK))
+    from wet_common import match_conduits_to_labels, dq9_ls_compatible
+
+    conduits = [
+        {"id": "C1", "length_m": 1.00, "slope_pct": 1.0, "diameter_mm": 200},
+        {"id": "C2", "length_m": 1.04, "slope_pct": 1.0, "diameter_mm": 200},
+    ]
+    labels = [
+        {"kind": "pipe_label", "length_m": 1.03, "slope_pct": 1.0, "raw": "L1"},
+        {"kind": "pipe_label", "length_m": 0.96, "slope_pct": 1.0, "raw": "L2"},
+    ]
+    # L1 matches both; L2 matches only C1 → greedy C1→L1 leaves C2 unmatched
+    greedy = 0
+    used = set()
+    for c in conduits:
+        for j, p in enumerate(labels):
+            if j in used:
+                continue
+            if dq9_ls_compatible(c, p):
+                greedy += 1
+                used.add(j)
+                break
+    assert greedy == 1
+    pairs, n_left = match_conduits_to_labels(conduits, labels)
+    assert n_left == 2 and len(pairs) == 2
+
+    # W2 uses the same matcher — both element:L rows pass
+    presence = {
+        "networks": {
+            "sewer": {"plan": True, "model": True},
+            "water": {"plan": True, "model": True},
+            "irrigation": {"plan": True, "model": True},
+            "storm": {"plan": True, "model": True},
+        },
+        "hydraulic_calculations": True,
+    }
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+        "conduits": [
+            {**c, "element_id": i + 1, "source": "model",
+             "invert_start_m": 100.0, "invert_stop_m": 99.0, "cover_m": 1.5,
+             "start_node_id": 1, "stop_node_id": 2}
+            for i, c in enumerate(conduits)
+        ],
+        "nodes": [],
+        "summary": {"conduit_count": 2, "length_km": 0.002},
+        "plan": labels,
+    }
+    cons, _, _ = check(tmp_path / "x1", networks, presence=presence)
+    match_row = next(
+        r for r in cons["comparisons"]
+        if r["check"] == "W2" and r["quantity"] == "element_match_count"
+    )
+    assert match_row["values"]["matched"] == 2
+    assert match_row["values"].get("method") == "maximum_bipartite"
+
+
 def test_t11_6_w2_tolerance_edges(tmp_path):
     """T11-6: L ± 0.05 m edge — 0.05 pass, 0.06 flag Confirmed."""
     def networks(delta, slope_model=0.50, slope_plan=0.50):

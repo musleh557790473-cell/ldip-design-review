@@ -48,7 +48,8 @@ EXPECT = {
             "report_mh": 173,
             "report_depth": (1.40, 3.50),
             "model_depth": (1.70, 3.80),
-            "plan_labels_identical_ls": 149,
+            "plan_labels_identical_ls": 150,  # X1: maximum bipartite (was 149 from rounding)
+            "conduits_with_geometry": 163,  # X2: HMIRealGeometry on 163/164
             "plan_node_labels": 164,
             "plan_pipe_labels": 164,
             "force_main_d1000": 1,
@@ -289,7 +290,7 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
              and r["result"] == "flag"]
     assert len(cover) == exp["w3_cover_flags"]
 
-    # Plan labels (R4): 164 node / 164 pipe; 149 identical L,S vs model D200 set
+    # Plan labels (R4/X1): 164 node / 164 pipe; 150 identical via max bipartite
     dxf = _resolve(site, "dxf", exp["plan_globs"])
     if dxf is None:
         pytest.skip("NMAR SWN-10000 DXF not configured")
@@ -301,27 +302,21 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
     pipe_labels = [p for p in plan["pipes"] if p.get("kind") == "pipe_label"]
     assert len(pipe_labels) == exp["plan_pipe_labels"]
 
-    # Match plan L/S to model within DQ-9 tol; expect 149 identical.
-    # V2: compare |model slope| with plan S= (143/164 conduits stored reversed).
-    tol_l, tol_s = 0.05, 0.01
-    identical = 0
-    for c in doc["conduits"]:
-        if c.get("diameter_mm") is None or abs(c["diameter_mm"] - 200) > 1:
-            continue
-        model_s = c.get("slope_pct")
-        if model_s is None:
-            continue
-        for p in pipe_labels:
-            if p.get("_used"):
-                continue
-            if p.get("length_m") is None or p.get("slope_pct") is None:
-                continue
-            if (abs(p["length_m"] - (c.get("length_m") or 0)) <= tol_l
-                    and abs(p["slope_pct"] - abs(model_s)) <= tol_s):
-                identical += 1
-                p["_used"] = True
-                break
-    assert identical == exp["plan_labels_identical_ls"]
+    # X1: maximum bipartite matching under DQ-9 L ±0.05 m, |S| ±0.01 %
+    # Expected 150 / 164 (all conduits with L+S, not D200-only).
+    sys.path.insert(0, str(SK))
+    from wet_common import match_conduits_to_labels
+    pairs, n_left = match_conduits_to_labels(doc["conduits"], pipe_labels)
+    assert n_left == exp["conduits"]  # 164
+    assert len(pairs) == exp["plan_labels_identical_ls"]
+
+    # X2: HMIRealGeometry present on most conduits; Co-17 start E/N
+    with_geom = [c for c in doc["conduits"] if c.get("has_geometry")]
+    assert len(with_geom) == exp["conduits_with_geometry"]
+    co17 = next(c for c in doc["conduits"] if str(c.get("id")) == "Co-17")
+    assert co17.get("has_geometry")
+    assert abs(co17["e_m"] - 657629.4) < 0.1
+    assert abs(co17["n_m"] - 2714320.5) < 0.1
 
     # Force-main Ø1000 = 1 (label or diameter)
     fm = [p for p in pipe_labels

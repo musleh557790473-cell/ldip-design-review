@@ -157,6 +157,170 @@ def _safe_index(cur, table, base_alt, required_cols=()):
         return {}, []
 
 
+# --------------------------------------------------------------------------- X2 WKB (HMIRealGeometry)
+# OGC WKB / ISO SQL-MM: byte order, type (1 Point / 2 LineString / 5 MultiLineString),
+# Z via type+1000 or EWKB 0x80000000. Coordinates stored in US feet → convert to m.
+
+
+def _wkb_endian(byte_order):
+    if byte_order == 1:
+        return "<"  # NDR little-endian
+    if byte_order == 0:
+        return ">"  # XDR big-endian
+    return None
+
+
+def _wkb_has_z(gtype):
+    """Return (base_type, has_z) for ISO (+1000/+2000/+3000) or EWKB high bits."""
+    t = int(gtype) & 0xFFFFFFFF
+    has_z = bool(t & 0x80000000) or (1000 <= (t % 10000) < 2000) or (3000 <= (t % 10000) < 4000)
+    # Strip EWKB flags then ISO dimension offsets
+    base = t & 0x0FFFFFFF
+    if base >= 3000:
+        base -= 3000
+    elif base >= 2000:
+        base -= 2000
+    elif base >= 1000:
+        base -= 1000
+    return base, has_z
+
+
+def _wkb_read_point(buf, off, fmt, has_z):
+    n = 3 if has_z else 2
+    need = 8 * n
+    if off + need > len(buf):
+        return None, off
+    vals = struct.unpack(f"{fmt}{n}d", buf[off:off + need])
+    return (float(vals[0]), float(vals[1])), off + need
+
+
+def parse_wkb_vertices_ft(blob):
+    """Parse WKB blob → list of (x_ft, y_ft) vertices. Both endiannesses; 2D/3D.
+
+    Supports Point, LineString, MultiLineString. Returns [] on empty/unreadable.
+    """
+    if blob is None:
+        return []
+    if isinstance(blob, memoryview):
+        blob = blob.tobytes()
+    if isinstance(blob, bytearray):
+        blob = bytes(blob)
+    if not isinstance(blob, (bytes,)):
+        # Some drivers expose hex text
+        try:
+            s = str(blob).strip()
+            if s[:2].casefold() == "0x":
+                s = s[2:]
+            blob = bytes.fromhex(s)
+        except (ValueError, TypeError):
+            return []
+    if len(blob) < 5:
+        return []
+
+    def parse_geom(buf, off):
+        if off >= len(buf):
+            return [], off
+        endian = _wkb_endian(buf[off])
+        if endian is None:
+            return [], off
+        off += 1
+        if off + 4 > len(buf):
+            return [], off
+        gtype = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
+        off += 4
+        base, has_z = _wkb_has_z(gtype)
+        pts = []
+        if base == 1:  # Point
+            pt, off = _wkb_read_point(buf, off, endian, has_z)
+            if pt:
+                pts.append(pt)
+        elif base == 2:  # LineString
+            if off + 4 > len(buf):
+                return pts, off
+            n = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
+            off += 4
+            for _ in range(n):
+                pt, off = _wkb_read_point(buf, off, endian, has_z)
+                if pt is None:
+                    break
+                pts.append(pt)
+        elif base == 5:  # MultiLineString
+            if off + 4 > len(buf):
+                return pts, off
+            n = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
+            off += 4
+            for _ in range(n):
+                sub, off = parse_geom(buf, off)
+                pts.extend(sub)
+        elif base == 4:  # MultiPoint
+            if off + 4 > len(buf):
+                return pts, off
+            n = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
+            off += 4
+            for _ in range(n):
+                sub, off = parse_geom(buf, off)
+                pts.extend(sub)
+        else:
+            # Unsupported type — stop
+            return pts, len(buf)
+        return pts, off
+
+    pts, _ = parse_geom(blob, 0)
+    return pts
+
+
+def geometry_from_wkb_ft(blob):
+    """X2: WKB in US feet → SI vertices / start E-N for a conduit or pipe."""
+    verts_ft = parse_wkb_vertices_ft(blob)
+    if not verts_ft:
+        return {
+            "vertices_m": [],
+            "e_m": None,
+            "n_m": None,
+            "end_e_m": None,
+            "end_n_m": None,
+            "has_geometry": False,
+        }
+    verts_m = [
+        [round(ft_to_m(x), 6), round(ft_to_m(y), 6)] for x, y in verts_ft
+    ]
+    return {
+        "vertices_m": verts_m,
+        "e_m": verts_m[0][0],
+        "n_m": verts_m[0][1],
+        "end_e_m": verts_m[-1][0],
+        "end_n_m": verts_m[-1][1],
+        "has_geometry": True,
+    }
+
+
+def _attach_link_geometry(conduit, geom_row, geom_cols):
+    """Fill conduit e_m/n_m/vertices_m from HMIRealGeometry when present."""
+    wkb_col = _col(geom_cols, "HMIRealGeometry", "RealGeometry", "Geometry")
+    empty = {
+        "vertices_m": [], "e_m": None, "n_m": None,
+        "end_e_m": None, "end_n_m": None, "has_geometry": False,
+    }
+    if not wkb_col or geom_row is None:
+        conduit.update(empty)
+        return conduit
+    blob = geom_row[wkb_col] if wkb_col in geom_row.keys() else None
+    # sqlite3.Row supports keys(); also accept mapping / sequence via index
+    if blob is None:
+        try:
+            blob = geom_row[wkb_col]
+        except (KeyError, IndexError, TypeError):
+            blob = None
+    geo = geometry_from_wkb_ft(blob)
+    conduit["vertices_m"] = geo["vertices_m"]
+    conduit["e_m"] = geo["e_m"]
+    conduit["n_m"] = geo["n_m"]
+    conduit["end_e_m"] = geo["end_e_m"]
+    conduit["end_n_m"] = geo["end_n_m"]
+    conduit["has_geometry"] = geo["has_geometry"]
+    return conduit
+
+
 def read_live_elements(cur, tables):
     """HMIModelingElement where IsDeleted = 0, with Label."""
     if not _has(tables, "HMIModelingElement"):
@@ -319,7 +483,7 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
                 material = grav[eid][mat_col]
             if n_col:
                 roughness = _as_float(grav[eid][n_col])
-        conduits.append({
+        c_row = {
             "id": el["label"],
             "element_id": eid,
             "network": network,
@@ -341,12 +505,12 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
             "stop_node_id": stop_id,
             "start_label": (elements.get(start_id) or {}).get("label"),
             "stop_label": (elements.get(stop_id) or {}).get("label"),
-            "e_m": None,
-            "n_m": None,
             "alternative_id": _row_alt(diam.get(eid) or inv.get(eid) or geom.get(eid),
                                        diam_cols or inv_cols or geom_cols) or base_alt,
             "units_source": "US_feet",
-        })
+        }
+        _attach_link_geometry(c_row, geom.get(eid), geom_cols)
+        conduits.append(c_row)
 
     used = {c["element_id"] for c in conduits}
     node_ids = set()
@@ -358,12 +522,21 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
     nodes = []
     for eid in sorted(node_ids):
         el = elements.get(eid) or {"element_id": eid, "label": str(eid)}
+        # Prefer start-point of an incident conduit that begins at this node
+        e_m = n_m = None
+        for c in conduits:
+            if c.get("start_node_id") == eid and c.get("e_m") is not None:
+                e_m, n_m = c["e_m"], c["n_m"]
+                break
+            if c.get("stop_node_id") == eid and c.get("end_e_m") is not None:
+                e_m, n_m = c["end_e_m"], c["end_n_m"]
+                break
         nodes.append({
             "element_id": eid,
             "label": el.get("label") or str(eid),
             "element_type": "manhole",
-            "e_m": None,
-            "n_m": None,
+            "e_m": e_m,
+            "n_m": n_m,
             "ground_m": ground.get(eid),
             "source": "model",
         })
@@ -466,7 +639,7 @@ def read_pressure_network(cur, tables, elements, base_alt, network):
             if d_mm is not None and g_start is not None:
                 # Prefer Idaho node elevation as invert proxy when present
                 cover = None
-        conduits.append({
+        c_row = {
             "id": el["label"],
             "element_id": eid,
             "network": network,
@@ -485,12 +658,12 @@ def read_pressure_network(cur, tables, elements, base_alt, network):
             "stop_node_id": stop_id,
             "start_label": (elements.get(start_id) or {}).get("label"),
             "stop_label": (elements.get(stop_id) or {}).get("label"),
-            "e_m": None,
-            "n_m": None,
             "alternative_id": _row_alt(phys.get(eid) or geom.get(eid),
                                        phys_cols or geom_cols) or base_alt,
             "units_source": "US_feet",
-        })
+        }
+        _attach_link_geometry(c_row, geom.get(eid), geom_cols)
+        conduits.append(c_row)
 
     node_ids = set()
     for c in conduits:
@@ -501,12 +674,20 @@ def read_pressure_network(cur, tables, elements, base_alt, network):
     nodes = []
     for eid in sorted(node_ids):
         el = elements.get(eid) or {"element_id": eid, "label": str(eid)}
+        e_m = n_m = None
+        for c in conduits:
+            if c.get("start_node_id") == eid and c.get("e_m") is not None:
+                e_m, n_m = c["e_m"], c["n_m"]
+                break
+            if c.get("stop_node_id") == eid and c.get("end_e_m") is not None:
+                e_m, n_m = c["end_e_m"], c["end_n_m"]
+                break
         nodes.append({
             "element_id": eid,
             "label": el.get("label") or str(eid),
             "element_type": "junction",
-            "e_m": None,
-            "n_m": None,
+            "e_m": e_m,
+            "n_m": n_m,
             "ground_m": ground.get(eid),
             "source": "model",
         })

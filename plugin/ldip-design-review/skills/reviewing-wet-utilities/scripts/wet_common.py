@@ -171,6 +171,70 @@ def slope_pct(length_m, drop_m):
     return 100.0 * float(drop_m) / float(length_m)
 
 
+def dq9_ls_compatible(conduit, label, tol_l=0.05, tol_s=0.01):
+    """True when conduit L and |S| agree with a plan label under DQ-9 (X1)."""
+    cl = conduit.get("length_m")
+    pl = label.get("length_m")
+    cs = conduit.get("slope_pct")
+    ps = label.get("slope_pct")
+    if cl is None or pl is None or cs is None or ps is None:
+        return False
+    return abs(float(cl) - float(pl)) <= tol_l and abs(abs(float(cs)) - float(ps)) <= tol_s
+
+
+def maximum_bipartite_matching(adj):
+    """Kuhn DFS maximum matching. ``adj[u]`` = neighbour right-side ids.
+
+    Returns ``(size, mate_u)`` where ``mate_u[u] = v`` for each matched left node.
+    """
+    mate_v = {}
+
+    def dfs(u, seen):
+        for v in adj[u]:
+            if v in seen:
+                continue
+            seen.add(v)
+            if v not in mate_v or dfs(mate_v[v], seen):
+                mate_v[v] = u
+                return True
+        return False
+
+    size = 0
+    for u in range(len(adj)):
+        if dfs(u, set()):
+            size += 1
+    mate_u = {u: v for v, u in mate_v.items()}
+    return size, mate_u
+
+
+def match_conduits_to_labels(conduits, labels, *, tol_l=0.05, tol_s=0.01,
+                             diameter_mm=None, diameter_tol=1.0):
+    """X1: maximum bipartite matching of conduits ↔ plan labels under DQ-9 L/|S|.
+
+    Optional ``diameter_mm`` restricts the left side (e.g. NMAR D200 set).
+    Returns ``(pairs, n_left)`` where each pair is ``(conduit, label)``.
+    """
+    left = []
+    for c in conduits:
+        if diameter_mm is not None:
+            d = c.get("diameter_mm")
+            if d is None or abs(float(d) - float(diameter_mm)) > diameter_tol:
+                continue
+        if c.get("length_m") is None or c.get("slope_pct") is None:
+            continue
+        left.append(c)
+    right = [
+        p for p in labels
+        if p.get("length_m") is not None and p.get("slope_pct") is not None
+    ]
+    adj = []
+    for c in left:
+        adj.append([j for j, p in enumerate(right) if dq9_ls_compatible(c, p, tol_l, tol_s)])
+    _size, mate_u = maximum_bipartite_matching(adj)
+    pairs = [(left[u], right[v]) for u, v in sorted(mate_u.items())]
+    return pairs, len(left)
+
+
 def evid(eid, source_type, extract, tier="deterministic", **extra):
     e = {"evidence_id": eid, "tier": tier, "source_type": source_type, "extract": extract}
     e.update(extra)
