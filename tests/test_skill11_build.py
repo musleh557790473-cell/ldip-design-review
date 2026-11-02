@@ -612,6 +612,80 @@ def test_t11_idaho_pipe_water_reader(tmp_path):
     assert all(abs(c["roughness"] - 140) < 1e-6 for c in doc["conduits"])
 
 
+def test_t11_4c_gradient_er_exact_or_declared_or_not_run(tmp_path):
+    """U1: 250 mm → not_run (no ER/declared); 400 mm → declared 0.20 %."""
+    presence = {
+        "networks": {
+            "sewer": {"plan": True, "model": True},
+            "water": {"plan": True, "model": True},
+            "irrigation": {"plan": True, "model": True},
+            "storm": {"plan": True, "model": True},
+        },
+        "hydraulic_calculations": True,
+    }
+
+    def net(d_mm, slope):
+        return {
+            "networks_version": "1.0",
+            "network": "sewer",
+            "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+            "conduits": [{
+                "id": "C1", "element_id": 1, "source": "model", "network": "sewer",
+                "diameter_mm": d_mm, "length_m": 50.0,
+                "invert_start_m": 100.0,
+                "invert_stop_m": 100.0 - 50.0 * slope / 100.0,
+                "slope_pct": slope, "cover_m": 1.5,
+                "start_node_id": 1, "stop_node_id": 2,
+            }],
+            "nodes": [
+                {"element_id": 1, "label": "MH1", "element_type": "manhole"},
+                {"element_id": 2, "label": "OF", "element_type": "outfall"},
+            ],
+            "summary": {"conduit_count": 1, "length_km": 0.05},
+            "plan": [],
+        }
+
+    # 250 mm: ER silent, no declared row → not_run, no finding
+    cons250, cand250, _ = check(tmp_path / "d250", net(250, 0.10), presence=presence)
+    g250 = [r for r in cons250["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("min_slope")]
+    assert g250 and g250[0]["result"] == "not_run"
+    assert "no ER / declared minimum for D 250" in (g250[0].get("note") or "")
+    assert not any("gradient below" in f["title"].casefold() for f in cand250["findings"])
+
+    # 400 mm with declared Table 6.3 peak 2.0 mm/m = 0.20 %
+    criteria = {
+        "gradient_tables": {
+            "sewer": [{
+                "diameter_mm": 400,
+                "min_slope_mm_per_m": 2.0,
+                "slope_peak_mm_per_m": 2.0,
+                "slope_half_full_mm_per_m": 1.5,
+                "min_slope_pct": 0.20,
+                "units": "mm/m",
+            }],
+        },
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons400, cand400, _ = check(
+        tmp_path / "d400", net(400, 0.15), criteria=criteria, presence=presence,
+    )
+    g400 = [r for r in cons400["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("min_slope")
+            and r["result"] == "flag"]
+    assert g400, cons400["comparisons"]
+    assert abs(g400[0]["values"].get("min_pct", 0) - 0.20) < 1e-9
+    assert any("gradient below" in f["title"].casefold() for f in cand400["findings"])
+
+    cons400ok, _, _ = check(
+        tmp_path / "d400ok", net(400, 0.20), criteria=criteria, presence=presence,
+    )
+    g400ok = [r for r in cons400ok["comparisons"]
+              if r["check"] == "W3" and str(r["quantity"]).startswith("min_slope")]
+    assert g400ok and g400ok[0]["result"] == "pass"
+
+
 def test_t11_4b_w3_mh_spacing_threshold(tmp_path):
     """S1: 80.0007 m no flag; 80.02 m flags (w3_threshold_tol 0.01)."""
     def net(length):
@@ -724,7 +798,14 @@ def test_t11_criteria_reader(tmp_path):
                 "Table 6.3 Minimum gradients mm/m\n"
                 "200: 5.00 / 3.20\n"
                 "300: 3.50 / 2.50\n"
+                "400: 2.00 / 1.50\n"
                 "1200: 0.50 / 0.35\n"
+            ),
+        }, {
+            "page": 94,
+            "text": (
+                # U3: stray row must not enter Table 6.3
+                "Appendix notes\n00 1 1\n"
             ),
         }, {
             "page": 70,
@@ -738,7 +819,7 @@ def test_t11_criteria_reader(tmp_path):
                 "§6.5.1 Configuration\n"
                 "Total network length 9.70 km\n"
                 "Proposed No. of manholes: 173 manholes\n"
-                "Depth 1.40 – 3.50 m\n"
+                "The sewer network depth ranges from 1.40 m to 3.50 m\n"
             ),
         }, {
             "page": 100,
@@ -786,13 +867,17 @@ def test_t11_criteria_reader(tmp_path):
     hl = pw["head_loss_table"]
     assert abs(hl["lt_600_mm_m_per_km"] - 20) < 1e-9
     assert abs(hl["d_600_to_1000_m_per_km"] - 10) < 1e-9
-    # T3 Tables 6.1 / 6.3 (mm/m → %)
-    assert len(doc["mh_spacing_table"]) >= 4
-    assert len(doc["gradient_tables"]["sewer"]) >= 2
-    g200 = next(r for r in doc["gradient_tables"]["sewer"] if r["diameter_mm"] == 200)
+    # U3 Tables 6.1 (5 rows) / 6.3 (incl. 1200+; no D 0 from p.94)
+    assert len(doc["mh_spacing_table"]) >= 5
+    grads = doc["gradient_tables"]["sewer"]
+    assert not any(r["diameter_mm"] < 100 for r in grads)
+    g200 = next(r for r in grads if r["diameter_mm"] == 200)
     assert abs(g200["min_slope_mm_per_m"] - 5.00) < 1e-9
     assert abs(g200["min_slope_pct"] - 0.50) < 1e-9  # ÷ 10
     assert abs(g200["slope_half_full_mm_per_m"] - 3.20) < 1e-9
+    g1200 = next(r for r in grads if abs(r["diameter_mm"] - 1200) < 0.5)
+    assert abs(g1200["min_slope_mm_per_m"] - 0.50) < 1e-9
+    assert abs(g1200["slope_half_full_mm_per_m"] - 0.35) < 1e-9
     # Gravity min D 200, not house-connection 160
     assert abs(doc["criteria"]["sewer"]["min_diameter_mm"]["value"] - 200) < 1e-9
     # S3 (c) totals from Configuration, not TOC

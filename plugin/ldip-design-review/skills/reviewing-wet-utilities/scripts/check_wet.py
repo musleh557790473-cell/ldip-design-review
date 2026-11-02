@@ -294,34 +294,96 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
         None, None, None, "information",
     ))
 
+    # U2: design-set storm plan lengths vs Table 10.9 (± 2 % per D and total)
+    storm_109 = (criteria or {}).get("storm_table_109") or []
+    design_pipes = [
+        p for p in plan
+        if p.get("kind") == "pipe_geometry"
+        and (p.get("utility") in (None, "storm") or (networks or {}).get("network") == "storm")
+        and (p.get("set") or "design") == "design"
+        and p.get("length_m") is not None
+        and p.get("diameter_mm") is not None
+    ]
+    if storm_109 and design_pipes:
+        plan_by_d = defaultdict(float)
+        for p in design_pipes:
+            plan_by_d[int(round(p["diameter_mm"]))] += float(p["length_m"])
+        rep_by_d = defaultdict(float)
+        for row in storm_109:
+            size = row.get("size")
+            L = row.get("length_m")
+            if size is None or L is None:
+                continue
+            try:
+                rep_by_d[int(round(float(size)))] += float(L)
+            except (TypeError, ValueError):
+                continue
+        plan_total = sum(plan_by_d.values())
+        rep_total = sum(rep_by_d.values())
+        if rep_total > 0 and plan_total > 0:
+            pct = abs(rep_total - plan_total) / max(rep_total, plan_total)
+            flag = pct > tol["report_pct"] + 1e-15
+            rows.append(comparison_row(
+                "W2", "design_vs_table109:total", ["plan", "report"],
+                {"plan_m": plan_total, "report_m": rep_total, "pct": round(pct, 6),
+                 "set": "design"},
+                "m", abs(rep_total - plan_total), pct,
+                "flag" if flag else "pass",
+                severity="Minor" if flag else None,
+                status="Probable" if flag else None,
+                note="U2 design set vs Table 10.9 total ± 2 %",
+            ))
+        for d in sorted(set(plan_by_d) | set(rep_by_d)):
+            pl, rp = plan_by_d.get(d), rep_by_d.get(d)
+            if pl is None or rp is None:
+                continue
+            pct = abs(pl - rp) / max(abs(pl), abs(rp), 1e-12)
+            flag = pct > tol["report_pct"] + 1e-15
+            rows.append(comparison_row(
+                "W2", f"design_vs_table109:D{d}", ["plan", "report"],
+                {"diameter_mm": d, "plan_m": pl, "report_m": rp, "pct": round(pct, 6),
+                 "set": "design"},
+                "m", abs(pl - rp), pct,
+                "flag" if flag else "pass",
+                severity="Minor" if flag else None,
+                status="Probable" if flag else None,
+            ))
+
 
 def _row_min_slope_pct(row):
-    """Return min gradient in % — convert stored mm/m (÷ 10) when needed (T3)."""
+    """Return min gradient in % — peak (0.75 m/s) column; mm/m ÷ 10 (T3/U1)."""
     if row is None:
         return None
-    if row.get("min_slope_pct") is not None:
-        return float(row["min_slope_pct"])
-    # Declared Table 6.3 stores mm/m; peak/design column preferred
-    for key in ("min_slope_mm_per_m", "slope_peak_mm_per_m", "slope_mm_per_m"):
+    # Peak / design column first (0.75 m/s); never half-full as primary
+    for key in ("slope_peak_mm_per_m", "min_slope_mm_per_m", "slope_mm_per_m"):
         if row.get(key) is not None:
             return float(row[key]) / 10.0
+    if row.get("min_slope_pct") is not None:
+        return float(row["min_slope_pct"])
     return None
 
 
-def _min_slope_for_d(d_mm, er_table, declared_table):
-    """Prefer ER table; fall back to declared gradient table (mm/m → % via ÷10)."""
-    table = er_table or declared_table or []
+def _exact_row(table, d_mm, tol=0.6):
     if not table or d_mm is None:
+        return None
+    hits = [r for r in table if abs(float(r["diameter_mm"]) - d_mm) < tol]
+    return hits[0] if hits else None
+
+
+def _min_slope_for_d(d_mm, er_table, declared_table):
+    """U1 / DQ-7: ER exact D only; else declared Table 6.3 exact D (peak); else None.
+
+    Do **not** apply nearest-lower ER/declared rows — that invents criteria.
+    """
+    if d_mm is None:
         return None, None
-    rows = sorted(table, key=lambda r: float(r["diameter_mm"]))
-    exact = [r for r in rows if abs(float(r["diameter_mm"]) - d_mm) < 0.6]
-    if exact:
-        return _row_min_slope_pct(exact[0]), exact[0]
-    below = [r for r in rows if float(r["diameter_mm"]) <= d_mm + 0.6]
-    if below:
-        r = below[-1]
-        return _row_min_slope_pct(r), r
-    return _row_min_slope_pct(rows[0]), rows[0]
+    er_row = _exact_row(er_table, d_mm)
+    if er_row is not None:
+        return _row_min_slope_pct(er_row), {"source": "ER", "row": er_row}
+    dec_row = _exact_row(declared_table, d_mm)
+    if dec_row is not None:
+        return _row_min_slope_pct(dec_row), {"source": "declared", "row": dec_row}
+    return None, None
 
 
 def _outfall_distances(conduits, nodes=None):
@@ -428,36 +490,47 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 "pass" if d is not None else "not_run",
             ))
 
-        # T1: min gradient compares |slope| (signed storage is orientation, not magnitude)
-        need, src = _min_slope_for_d(d, er_grad, declared)
+        # T1/U1: |slope| vs min; ER exact D, else declared exact D, else not_run
+        need, src_info = _min_slope_for_d(d, er_grad, declared)
         s = c.get("slope_pct")
-        if need is not None and s is not None:
+        if need is None:
+            if d is not None:
+                rows.append(comparison_row(
+                    "W3", f"min_slope:{cid}", ["model"],
+                    {"slope_pct": s, "diameter_mm": d},
+                    "%", None, None, "not_run",
+                    note=f"no ER / declared minimum for D {int(round(d)) if d else d}",
+                ))
+        elif s is not None:
             abs_s = abs(float(s))
+            src_name = (src_info or {}).get("source") or "ER"
+            src_label = "ER" if src_name == "ER" else "declared"
             if abs_s + 1e-9 < need:
                 rows.append(comparison_row(
-                    "W3", f"min_slope:{cid}", ["model", "ER"],
+                    "W3", f"min_slope:{cid}", ["model", src_label],
                     {"slope_pct": s, "abs_slope_pct": abs_s, "min_pct": need,
-                     "diameter_mm": d},
+                     "diameter_mm": d, "criterion_source": src_name},
                     "%", need - abs_s, None, "flag",
                     severity="Major", status="Probable",
-                    note="ER §7.5.2 min gradient per D (|slope|)",
+                    note=f"{src_label} min gradient per D (|slope|)",
                 ))
                 findings.append(finding_stub(
                     "W3", f"Sewer {cid} gradient below minimum",
                     f"Model |slope| {abs_s:.3f} % < minimum {need:.3f} % for D≈{d} mm "
-                    f"(ER §7.5.2 / declared table; stored S={s:.3f} %). WUT-011.",
+                    f"({src_label}; stored S={s:.3f} %). WUT-011.",
                     "design_error", "Major", "Probable",
                     [evid("E01", "script_output",
-                          f"id={cid} S={s} |S|={abs_s} min={need} D={d} src={src}")],
+                          f"id={cid} S={s} |S|={abs_s} min={need} D={d} src={src_name}")],
                     meta["site"], meta["sub"], meta["run"],
                     status_cap=status_cap, required_value=need, unit="%",
-                    source_doc="ER §7.5.2 p.32",
+                    source_doc=("ER §7.5.2 p.32" if src_name == "ER"
+                                else "declared Table 6.3"),
                 ))
             else:
                 rows.append(comparison_row(
-                    "W3", f"min_slope:{cid}", ["model", "ER"],
+                    "W3", f"min_slope:{cid}", ["model", src_label],
                     {"slope_pct": s, "abs_slope_pct": abs_s, "min_pct": need,
-                     "diameter_mm": d},
+                     "diameter_mm": d, "criterion_source": src_name},
                     "%", None, None, "pass",
                 ))
 
@@ -863,12 +936,50 @@ def run_w6(networks, criteria, plan_doc, params, rows, findings, meta, status_ca
             note="attenuation ponds — information when none drawn at PD",
         ))
 
-    # Report storm pipe table vs plan diameters (W6 report table)
+    # U2: design set vs report table; Observation if a second storm set exists
+    design_pipes = [
+        p for p in storm_pipes
+        if (p.get("set") or "design") == "design"
+        and p.get("length_m") is not None
+    ]
+    xref_pipes = [
+        p for p in storm_pipes
+        if str(p.get("set") or "").startswith("xref:")
+        and p.get("length_m") is not None
+    ]
+    design_km = sum(p["length_m"] for p in design_pipes) / 1000.0
+    xref_km = sum(p["length_m"] for p in xref_pipes) / 1000.0
+    if design_pipes and xref_pipes:
+        xref_sets = sorted({p.get("set") for p in xref_pipes})
+        findings.append(finding_stub(
+            "W6", "Second storm network on plan",
+            f"Plan carries a second storm pipe set ({', '.join(xref_sets)}) "
+            f"in addition to the design set. Design total {design_km:.2f} km; "
+            f"xref total {xref_km:.2f} km. WUT-034 inconsistency.",
+            "inconsistency", "Observation", "Probable",
+            [evid("E01", "script_output",
+                  f"design_km={design_km:.3f} xref_km={xref_km:.3f} "
+                  f"xref_sets={xref_sets}")],
+            meta["site"], meta["sub"], meta["run"],
+            status_cap=status_cap,
+            note="U2 — one Observation for second storm network; quote both totals",
+        ))
+        rows.append(comparison_row(
+            "W6", "storm_plan_second_set", ["plan"],
+            {"design_km": round(design_km, 3), "xref_km": round(xref_km, 3),
+             "xref_sets": xref_sets},
+            "km", None, None, "observation",
+            severity="Observation", status="Probable",
+        ))
+
     table = (criteria or {}).get("storm_pipe_table") or []
-    if table and storm_pipes:
+    compare_pipes = design_pipes or [
+        p for p in storm_pipes if p.get("length_m") is not None
+    ]
+    if table and compare_pipes:
         plan_by_d = defaultdict(float)
-        for p in storm_pipes:
-            if p.get("diameter_mm") is not None and p.get("length_m") is not None:
+        for p in compare_pipes:
+            if p.get("diameter_mm") is not None:
                 key = int(round(p["diameter_mm"]))
                 plan_by_d[key] += float(p["length_m"])
         for row in table:
@@ -881,7 +992,8 @@ def run_w6(networks, criteria, plan_doc, params, rows, findings, meta, status_ca
             flag = pct > params["report_pct"]
             rows.append(comparison_row(
                 "W6", f"report_table:D{d}", ["report", "plan"],
-                {"report_m": rep, "plan_m": pl, "pct": round(pct, 6)},
+                {"report_m": rep, "plan_m": pl, "pct": round(pct, 6),
+                 "set": "design"},
                 "m", abs(rep - pl), pct, "flag" if flag else "pass",
                 severity="Minor" if flag else None,
                 status="Probable" if flag else None,

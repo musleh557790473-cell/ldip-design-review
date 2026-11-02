@@ -65,10 +65,13 @@ EXPECT = {
         },
         "storm_plan": {
             "globs": ["**/STO-10000*.dxf", "**/STO-10000*.dwg"],
-            "length_km_by_plan": 5.91,
+            # U2: design-set lengths (own layers); xref set is separate (5.91 km)
+            "length_km_by_plan": 6.09,
             "length_m_by_d": {
-                400: 3269, 500: 1160, 600: 662, 700: 562, 800: 84, 1000: 171,
+                400: 2756, 500: 1155, 600: 335, 700: 597, 800: 73,
+                900: 448, 1000: 494, 1100: 231,
             },
+            "set": "design",
         },
         "report": {
             "globs": [
@@ -447,7 +450,7 @@ def test_t11_r5_storm_model_missing_and_report_table(site, tmp_path):
         assert pid in by_id, (pid, sorted(by_id))
         assert abs(by_id[pid]["length_m"] - val) < 0.05, (pid, by_id[pid], val)
 
-    # Plan lengths by diameter (R4)
+    # U2: design-set plan lengths by diameter (own layers; not xref)
     dxf = _resolve(site, "dxf", EXPECT[site]["storm_plan"]["globs"])
     if dxf is None:
         pytest.skip("NMAR STO-10000 DXF not configured")
@@ -456,16 +459,23 @@ def test_t11_r5_storm_model_missing_and_report_table(site, tmp_path):
         "--out", plan_out)
     plan = json.loads(plan_out.read_text(encoding="utf-8"))
     by_d = defaultdict(float)
+    xref_km = 0.0
     for p in plan["pipes"]:
         if p.get("kind") != "pipe_geometry":
             continue
         if p.get("diameter_mm") is None or p.get("length_m") is None:
             continue
-        by_d[int(round(p["diameter_mm"]))] += float(p["length_m"])
+        if (p.get("set") or "design") == "design":
+            by_d[int(round(p["diameter_mm"]))] += float(p["length_m"])
+        elif str(p.get("set") or "").startswith("xref:"):
+            xref_km += float(p["length_m"]) / 1000.0
     for d, exp_m in EXPECT[site]["storm_plan"]["length_m_by_d"].items():
         assert abs(by_d.get(d, 0.0) - exp_m) <= max(5.0, 0.02 * exp_m), (d, by_d.get(d), exp_m)
     total_km = sum(by_d.values()) / 1000.0
     assert abs(total_km - EXPECT[site]["storm_plan"]["length_km_by_plan"]) <= 0.05
+    # Xref set may be present; W6 Observation covers it when both exist
+    if xref_km > 0:
+        assert abs(xref_km - 5.91) <= 0.05 or xref_km > 1.0
 
 
 @pytest.mark.parametrize("site", ["NMAR"])

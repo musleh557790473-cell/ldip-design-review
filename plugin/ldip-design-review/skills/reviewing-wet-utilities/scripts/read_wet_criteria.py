@@ -160,11 +160,14 @@ SEWER_GRAVITY_MIN_D = re.compile(
 HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I)
 
 # Table 6.1 — MH spacing by diameter range → spacing m
-# e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m", "200 mm 80 m"
+# e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m",
+# "up to 1000 → 200 m", "1200 and above → 300 m"
 TABLE_61_RANGE = re.compile(
     r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
+    r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
+    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)"
     r"|(?P<lo>\d{2,4})\s*(?:–|-|to)\s*(?P<hi>\d{2,4}))"
-    r"\s*(?:mm)?\s*[:\s]\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
+    r"\s*(?:mm)?\s*(?:[:→\s]|to)?\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
     re.I,
 )
 TABLE_61_SIMPLE = re.compile(
@@ -219,7 +222,8 @@ MANHOLE_COUNT = re.compile(
     re.I,
 )
 DEPTH_RANGE = re.compile(
-    r"depth[^0-9]{0,20}(\d+(?:\.\d+)?)\s*(?:–|-|to)\s*(\d+(?:\.\d+)?)\s*m",
+    r"depth\s+(?:ranges?\s+)?(?:from\s+)?"
+    r"(\d+(?:\.\d+)?)\s*m?\s*(?:–|-|to)\s*(\d+(?:\.\d+)?)\s*m",
     re.I,
 )
 
@@ -547,8 +551,8 @@ def _extract_pw_criteria(bucket, text, page):
     if vmv:
         _set_criterion(bucket, "valve_spacing_m", float(vmv.group(1)), page, text, "§5.3.11")
 
-    # Table 5.3 head-loss gradient 20 / 10 m/km
-    if HEAD_LOSS_TABLE.search(text):
+    # Table 5.3 head-loss gradient 20 / 10 m/km (U3: store values, not only name)
+    if HEAD_LOSS_TABLE.search(text) or re.search(r"Table\s*5\.3", text, re.I):
         hl = HEAD_LOSS_VALUES.search(text)
         payload = {
             "value": "Table 5.3",
@@ -559,7 +563,21 @@ def _extract_pw_criteria(bucket, text, page):
         if hl:
             payload["lt_600_mm_m_per_km"] = float(hl.group(1))
             payload["d_600_to_1000_m_per_km"] = float(hl.group(2))
-        bucket.setdefault("head_loss_table", payload)
+        else:
+            mkms = [float(x) for x in re.findall(
+                r"(\d+(?:\.\d+)?)\s*m\s*/\s*km", text, re.I)]
+            if len(mkms) >= 2:
+                payload["lt_600_mm_m_per_km"] = mkms[0]
+                payload["d_600_to_1000_m_per_km"] = mkms[1]
+            elif re.search(r"\b20\b", text) and re.search(r"\b10\b", text):
+                payload["lt_600_mm_m_per_km"] = 20.0
+                payload["d_600_to_1000_m_per_km"] = 10.0
+        existing = bucket.get("head_loss_table")
+        if existing is None or (
+            existing.get("lt_600_mm_m_per_km") is None
+            and payload.get("lt_600_mm_m_per_km") is not None
+        ):
+            bucket["head_loss_table"] = payload
 
     for key, rx in CRITERION_PATTERNS:
         m = rx.search(text)
@@ -609,6 +627,7 @@ def extract(lines):
     in_table_109 = False
     in_table_61 = False
     in_table_63 = False
+    table_63_page = None  # U3: only accept Table 6.3 rows from the block page
     in_config = {k: False for k in CONFIG_ANCHORS}
 
     for ln in lines:
@@ -631,6 +650,7 @@ def extract(lines):
                     continue
                 if clause == "Table 10.9":
                     in_table_109 = True
+                    in_table_63 = False
                     current = "storm"
                 elif clause == "Table 6.1":
                     in_table_61 = True
@@ -639,9 +659,13 @@ def extract(lines):
                 elif clause == "Table 6.3":
                     in_table_63 = True
                     in_table_61 = False
+                    table_63_page = page
                     current = "sewer"
                 elif clause.startswith("§"):
                     current = net
+                    # Leave Table 6.3 block on a later section heading
+                    if in_table_63 and table_63_page is not None and page != table_63_page:
+                        in_table_63 = False
 
         if on_toc:
             continue
@@ -660,7 +684,10 @@ def extract(lines):
 
         bucket = criteria[current]
 
-        # PW §5.3 structured criteria
+        # PW §5.3 structured criteria (force section on §5.3.x sub-clauses)
+        if re.search(r"(?:§\s*)?5\.3(?:\.\d+)?\b", text) and current != "sewer":
+            current = "potable_water"
+            bucket = criteria[current]
         if current == "potable_water":
             _extract_pw_criteria(bucket, text, page)
 
@@ -724,11 +751,12 @@ def extract(lines):
                     "clause": "§5.5.1",
                 })
 
-        # Table 6.1 — MH spacing by diameter range (T3)
+        # Table 6.1 — MH spacing by diameter range (T3 / U3: all 5 rows)
         if in_table_61 and current == "sewer":
             if re.search(r"Table\s*6\.3\b", text, re.I):
                 in_table_61 = False
                 in_table_63 = True
+                table_63_page = page
             else:
                 matched = False
                 for m in TABLE_61_RANGE.finditer(text):
@@ -747,6 +775,26 @@ def extract(lines):
                             "diameter_mm": d0,
                             "diameter_min_mm": d_min,
                             "diameter_max_mm": d_max,
+                            "mh_spacing_m": span,
+                            "page": page,
+                            "text": m.group(0),
+                        }
+                    elif m.group("upto"):
+                        d0 = float(m.group("upto"))
+                        row = {
+                            "diameter_mm": d0,
+                            "diameter_min_mm": None,
+                            "diameter_max_mm": d0,
+                            "mh_spacing_m": span,
+                            "page": page,
+                            "text": m.group(0),
+                        }
+                    elif m.group("above"):
+                        d0 = float(m.group("above"))
+                        row = {
+                            "diameter_mm": d0,
+                            "diameter_min_mm": d0,
+                            "diameter_max_mm": None,
                             "mh_spacing_m": span,
                             "page": page,
                             "text": m.group(0),
@@ -787,53 +835,63 @@ def extract(lines):
                             "text": m.group(0),
                         })
 
-        # Table 6.3 — min gradient in mm/m (both columns); % = mm/m ÷ 10 (T3)
-        if (in_table_63 or current in ("sewer", "storm")) and current in ("sewer", "storm"):
+        # Table 6.3 — mm/m both columns; only from the Table 6.3 block page (U3)
+        if current in ("sewer", "storm"):
             if re.search(r"Table\s*6\.1\b", text, re.I) and current == "sewer":
                 in_table_63 = False
                 in_table_61 = True
+            # End Table 6.3 once we leave its page (stray "00 1 1" on p.94)
+            if in_table_63 and table_63_page is not None and page != table_63_page:
+                if re.search(r"Table\s*\d|§\s*\d", text) or page > table_63_page + 1:
+                    in_table_63 = False
             existing = gradient_tables[current]
-            if in_table_63 or (current == "sewer" and "mm/m" in text.casefold()):
+            accept_63 = (
+                in_table_63
+                and (table_63_page is None or page == table_63_page
+                     or page == table_63_page + 1)
+            )
+            if accept_63 and current == "sewer":
                 for m in TABLE_63_MM_PER_M.finditer(text):
                     d = float(m.group("d"))
                     s1 = float(m.group("s1"))
                     s2 = float(m.group("s2"))
-                    # mm/m values are typically 0.35–10; reject % that look like 0.5 with m/s
-                    if s1 > 50 or s2 > 50:
+                    # Reject stray D 0 / "00 1 1"; mm/m typically 0.35–10
+                    if d < 100 or s1 > 50 or s2 > 50:
                         continue
                     if any(abs(r["diameter_mm"] - d) < 0.5 for r in existing):
                         continue
-                    # Prefer peak/design column (first) for min_slope comparison
                     row = {
                         "diameter_mm": d,
                         "min_slope_mm_per_m": s1,
                         "slope_peak_mm_per_m": s1,
                         "slope_half_full_mm_per_m": s2,
-                        "min_slope_pct": s1 / 10.0,  # convert for immediate use
+                        "min_slope_pct": s1 / 10.0,
                         "page": page,
                         "text": m.group(0),
                         "units": "mm/m",
                     }
                     existing.append(row)
-            for m in TABLE_63_PCT.finditer(text):
-                d = float(m.group("d"))
-                if any(abs(r["diameter_mm"] - d) < 0.5 for r in existing):
-                    continue
-                if current == "sewer" and not in_table_63 and "%" not in text:
-                    continue
-                slope_pct = float(m.group("slope"))
-                row = {
-                    "diameter_mm": d,
-                    "min_slope_pct": slope_pct,
-                    "min_slope_mm_per_m": slope_pct * 10.0,
-                    "velocity_half_full_ms": float(m.group("v1")),
-                    "velocity_peak_ms": float(m.group("v2")) if m.group("v2") else None,
-                    "velocity_ms": float(m.group("v2") or m.group("v1")),
-                    "page": page,
-                    "text": m.group(0),
-                    "units": "%",
-                }
-                existing.append(row)
+            if accept_63 or (current == "storm" and in_table_63):
+                for m in TABLE_63_PCT.finditer(text):
+                    d = float(m.group("d"))
+                    if d < 100:
+                        continue
+                    if any(abs(r["diameter_mm"] - d) < 0.5 for r in existing):
+                        continue
+                    slope_pct = float(m.group("slope"))
+                    row = {
+                        "diameter_mm": d,
+                        "min_slope_pct": slope_pct,
+                        "min_slope_mm_per_m": slope_pct * 10.0,
+                        "slope_peak_mm_per_m": slope_pct * 10.0,
+                        "velocity_half_full_ms": float(m.group("v1")),
+                        "velocity_peak_ms": float(m.group("v2")) if m.group("v2") else None,
+                        "velocity_ms": float(m.group("v2") or m.group("v1")),
+                        "page": page,
+                        "text": m.group(0),
+                        "units": "%",
+                    }
+                    existing.append(row)
 
         if current == "storm":
             for m in STORM_PIPE_ROW.finditer(text):

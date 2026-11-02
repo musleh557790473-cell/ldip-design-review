@@ -183,6 +183,45 @@ def _polyline_length_from_points(points, closed=False):
     return total
 
 
+SHEET_COORD_E_MAX = 100_000.0  # U2: legend / sheet-space geometry
+
+
+def layer_pipe_set(layer_name):
+    """U2: own layers → design; xref layers → xref:<name>."""
+    if not layer_name or "$" not in layer_name:
+        return "design"
+    prefix = layer_name.rsplit("$", 1)[0]
+    # Strip trailing $0 / $N index tokens
+    parts = [p for p in prefix.split("$") if p and not p.isdigit()]
+    xref_name = parts[0] if parts else prefix
+    xref_name = xref_name.strip() or "xref"
+    if xref_name.casefold() in ("", "0"):
+        return "design"
+    return f"xref:{xref_name}"
+
+
+def entity_points_xy(e, dtype):
+    """Return list of (x, y) for sheet-coord filter and length."""
+    try:
+        if dtype == "LINE":
+            return [(float(e.dxf.start[0]), float(e.dxf.start[1])),
+                    (float(e.dxf.end[0]), float(e.dxf.end[1]))]
+        if dtype == "LWPOLYLINE":
+            return [(float(p[0]), float(p[1])) for p in e.get_points("xy")]
+        if dtype == "POLYLINE":
+            return [(float(v.dxf.location[0]), float(v.dxf.location[1])) for v in e.vertices]
+    except Exception:
+        return []
+    return []
+
+
+def is_sheet_coordinate_geometry(points):
+    """U2: drop legend polylines in sheet space (all E < 100,000)."""
+    if not points:
+        return False
+    return all(x < SHEET_COORD_E_MAX for x, _y in points)
+
+
 def entity_path_length(e, dtype):
     """Compute plan length from vertices; bulges as arcs (T2). Never trust e.length() alone."""
     try:
@@ -200,7 +239,6 @@ def entity_path_length(e, dtype):
             length = _polyline_length_from_points(pts, closed=closed)
             if length > 0:
                 return length
-            # Fallback if get_points failed silently
             try:
                 fallback = float(e.length())
                 return fallback if fallback > 0 else length
@@ -267,6 +305,7 @@ def read_dxf(path, layers_map, network_hint=None):
                     "diameter_mm": pipe.get("diameter_mm") or diameter_from_layer(layer, meta),
                     "source": "plan",
                     "kind": "pipe_label",
+                    "set": layer_pipe_set(layer),
                 })
                 continue
             if kind in ("hydrant", "valve", "washout", "air_valve", "catch_basin", "outfall", "pond"):
@@ -304,8 +343,11 @@ def read_dxf(path, layers_map, network_hint=None):
         elif dtype in ("LINE", "LWPOLYLINE", "POLYLINE"):
             if not meta.get("utility") and not meta.get("diameter_mm"):
                 continue
+            pts_xy = entity_points_xy(e, dtype)
             d_mm = diameter_from_layer(layer, meta)
             length = entity_path_length(e, dtype)
+            e0 = pts_xy[0][0] if pts_xy else None
+            n0 = pts_xy[0][1] if pts_xy else None
             pipes.append({
                 "raw": None,
                 "length_m": float(length) if length is not None else None,
@@ -314,11 +356,33 @@ def read_dxf(path, layers_map, network_hint=None):
                 "layer": layer,
                 "utility": util or meta.get("utility"),
                 "handle": e.dxf.handle,
-                "e_m": None,
-                "n_m": None,
+                "e_m": e0,
+                "n_m": n0,
                 "source": "plan",
                 "kind": "pipe_geometry",
+                "set": layer_pipe_set(layer),
+                "_pts_xy": pts_xy,
             })
+    # U2: drop sheet-coordinate legend geometry only when the drawing also
+    # has site-coordinate pipes (E ≥ 100,000). Pure local-coord DXFs keep all.
+    has_site = any(
+        (p.get("e_m") is not None and p["e_m"] >= SHEET_COORD_E_MAX)
+        or any(x >= SHEET_COORD_E_MAX for x, _y in (p.get("_pts_xy") or []))
+        for p in pipes if p.get("kind") == "pipe_geometry"
+    )
+    if has_site:
+        kept = []
+        for p in pipes:
+            if p.get("kind") == "pipe_geometry" and is_sheet_coordinate_geometry(
+                    p.get("_pts_xy") or []):
+                continue
+            if p.get("kind") == "pipe_label" and p.get("e_m") is not None and (
+                    p["e_m"] < SHEET_COORD_E_MAX):
+                continue
+            kept.append(p)
+        pipes = kept
+    for p in pipes:
+        p.pop("_pts_xy", None)
     return nodes, pipes, fixtures
 
 
