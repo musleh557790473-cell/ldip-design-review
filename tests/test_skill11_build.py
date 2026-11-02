@@ -374,6 +374,91 @@ def test_t11_3_dxf_label_parse(tmp_path):
     assert geom[0]["utility"] == "sewer"
 
 
+def test_t11_y1_force_main_labels(tmp_path):
+    """Y1: FORCE MAIN texts → force_main_label; W2 flags Ø ≠ report 110 mm."""
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location("rnp", SK / "read_network_plan.py")
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    p110 = mod.parse_force_main_label("FORCE MAIN HDPE Ø110mm")
+    assert p110 and abs(p110["diameter_mm"] - 110) < 1e-9
+    assert p110["material"] and "HDPE" in p110["material"].upper()
+    p1000 = mod.parse_force_main_label(
+        "PROPOSED FORCE MAIN LINE- HDPE SDR11 PN16 Ø1000mm"
+    )
+    assert p1000 and abs(p1000["diameter_mm"] - 1000) < 1e-9
+    assert mod.parse_force_main_label("L=10\nS=0.5%") is None
+
+    # DXF with 8 × Ø110 + 1 × Ø1000 (site coordinates)
+    texts = []
+    for i in range(7):
+        texts.append((
+            "CI-Ss_50_35_08_30-P-SS_Annotation Main Sewer",
+            "FORCE MAIN HDPE Ø110mm", 650000 + i, 2714000 + i,
+        ))
+    texts.append((
+        "CI-Ss_50_35_08_30-P-SS_Annotation Main Sewer",
+        "PROPOSED FORCE MAIN LINE- HDPE SDR11 PN16 Ø110mm",
+        650010, 2714010,
+    ))
+    texts.append((
+        "CI-Ss_50_35_08_30-P-SS_Annotation Main Sewer",
+        "FORCE MAIN HDPE Ø1000mm", 650020, 2714020,
+    ))
+    dxf = make_dxf(tmp_path / "fm.dxf", texts)
+    out = tmp_path / "plan.json"
+    rc, msg = run("read_network_plan.py", "--dxf", dxf, "--site", "NMAR",
+                  "--network", "sewer", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    fm = [p for p in doc["pipes"] if p.get("kind") == "force_main_label"]
+    assert len(fm) == 9
+    assert sum(1 for p in fm if abs(p["diameter_mm"] - 110) < 0.5) == 8
+    assert sum(1 for p in fm if abs(p["diameter_mm"] - 1000) < 0.5) == 1
+    assert all(p.get("e_m") is not None and p.get("n_m") is not None for p in fm)
+
+    presence = {
+        "networks": {
+            "sewer": {"plan": True, "model": True},
+            "water": {"plan": True, "model": True},
+            "irrigation": {"plan": True, "model": True},
+            "storm": {"plan": True, "model": True},
+        },
+        "hydraulic_calculations": True,
+    }
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "b" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "C1", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 10.0, "slope_pct": 0.5,
+            "invert_start_m": 100.0, "invert_stop_m": 99.95, "cover_m": 1.5,
+            "start_node_id": 1, "stop_node_id": 2,
+        }],
+        "nodes": [],
+        "summary": {"conduit_count": 1, "length_km": 0.01},
+        "plan": fm,
+    }
+    criteria = {
+        "declared_totals": {},
+        "criteria": {"sewer": {"force_main_diameter_mm": {"value": 110, "clause": "§6.3.4"}}},
+    }
+    cons, cand, _ = check(
+        tmp_path / "y1", networks, criteria=criteria, presence=presence,
+    )
+    draft = [
+        f for f in cand["findings"]
+        if "force-main" in f["title"].casefold() or "force main" in f["title"].casefold()
+    ]
+    assert len(draft) == 1, [f["title"] for f in cand["findings"]]
+    assert draft[0]["severity"] == "Minor"
+    assert draft[0]["proposed_status"] == "Confirmed"
+    assert "1000" in draft[0]["statement"]
+    assert "Ø1000" in draft[0]["statement"] or "1000mm" in draft[0]["statement"].casefold()
+    assert "650020" in draft[0]["statement"] or "E 650020" in draft[0]["statement"]
+
+
 def test_t11_3b_pipe_label_no_diameter_prefix(tmp_path):
     """Pipe label without diameter prefix still parses L= / S=."""
     from importlib.util import spec_from_file_location, module_from_spec

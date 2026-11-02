@@ -26,6 +26,6 @@ jobs:
           # 747 = prior 737 + PR #28 R1–R7 fixes (real OpenFlows fixture, declared params,
           # label/layer parsers, expanded T11-R* + criteria real gates).
           # Cursor without LDIP_SKILL11_* / LDIP_REVIEW_ROOT: real gates skipped.
-          python tools/check_suite.py --expect 752 --tests tests
+          python tools/check_suite.py --expect 753 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all

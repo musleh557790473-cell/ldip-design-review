@@ -58,6 +58,16 @@ S_RE = re.compile(r"(?<![A-Za-z0-9.])S\s*=\s*(?P<s>-?\d+(?:\.\d+)?)\s*%?", re.I)
 D_PREFIX_RE = re.compile(r"^(?P<d>\d{2,4})(?=L\s*=)", re.I)
 LAYER_PIPE_DIA_RE = re.compile(r"Pipe\s*Dia\s*(\d+)", re.I)
 LAYER_PCT_C_RE = re.compile(r"%%c(\d+)\s*mm", re.I)
+# Y1: "FORCE MAIN HDPE Ø110mm" / "PROPOSED FORCE MAIN LINE- HDPE … Ø1000mm"
+FORCE_MAIN_RE = re.compile(
+    r"(?:PROPOSED\s+)?FORCE\s+MAIN\b(?P<body>[^Ø⌀%]{0,120}?)"
+    r"(?:Ø|⌀|%%c)\s*(?P<d>\d{2,4})\s*mm",
+    re.I,
+)
+FORCE_MAIN_MATERIAL_RE = re.compile(
+    r"\b(?P<mat>HDPE(?:\s+SDR\d+(?:\s+PN\d+)?)?|PE|DI|PVC|GRP|STEEL|DIP)\b",
+    re.I,
+)
 
 
 def _require_ezdxf():
@@ -113,6 +123,26 @@ def parse_node_label(text):
         "e_m": num("e"),
         "n_m": num("n"),
         "raw": raw.strip(),
+    }
+
+
+def parse_force_main_label(text):
+    """Y1: FORCE MAIN … (Ø|⌀|%%c)<D>mm → diameter, optional material."""
+    raw = str(text)
+    t = _normalize_label_text(text)
+    m = FORCE_MAIN_RE.search(t)
+    if not m:
+        return None
+    material = None
+    body = m.group("body") or ""
+    mm = FORCE_MAIN_MATERIAL_RE.search(body) or FORCE_MAIN_MATERIAL_RE.search(t)
+    if mm:
+        material = mm.group("mat").strip()
+    return {
+        "raw": raw.strip(),
+        "diameter_mm": float(m.group("d")),
+        "material": material,
+        "kind": "force_main_label",
     }
 
 
@@ -293,6 +323,21 @@ def read_dxf(path, layers_map, network_hint=None):
                     "source": "plan",
                 })
                 continue
+            # Y1: force-main callouts before generic L=/S= pipe labels
+            fm = parse_force_main_label(text)
+            if fm:
+                pipes.append({
+                    **fm,
+                    "layer": layer,
+                    "utility": util or "sewer",
+                    "handle": e.dxf.handle,
+                    "e_m": x,
+                    "n_m": y,
+                    "source": "plan",
+                    "kind": "force_main_label",
+                    "set": layer_pipe_set(layer),
+                })
+                continue
             pipe = parse_pipe_label(text)
             if pipe:
                 pipes.append({
@@ -376,8 +421,8 @@ def read_dxf(path, layers_map, network_hint=None):
             if p.get("kind") == "pipe_geometry" and is_sheet_coordinate_geometry(
                     p.get("_pts_xy") or []):
                 continue
-            if p.get("kind") == "pipe_label" and p.get("e_m") is not None and (
-                    p["e_m"] < SHEET_COORD_E_MAX):
+            if p.get("kind") in ("pipe_label", "force_main_label") and (
+                    p.get("e_m") is not None and p["e_m"] < SHEET_COORD_E_MAX):
                 continue
             kept.append(p)
         pipes = kept

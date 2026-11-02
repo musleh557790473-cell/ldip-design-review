@@ -53,6 +53,9 @@ EXPECT = {
             "plan_node_labels": 164,
             "plan_pipe_labels": 164,
             "force_main_d1000": 1,
+            "force_main_labels": 9,  # Y1: 8 × Ø110 + 1 × Ø1000
+            "force_main_d110": 8,
+            "force_main_drafting_findings": 1,
             "plan_globs": ["**/SWN-10000*.dxf", "**/SWN-10000*.dwg"],
         },
         "water": {
@@ -318,14 +321,35 @@ def test_t11_r1_nmar_sewer(site, tmp_path):
     assert abs(co17["e_m"] - 657629.4) < 0.1
     assert abs(co17["n_m"] - 2714320.5) < 0.1
 
-    # Force-main Ø1000 = 1 (label or diameter)
-    fm = [p for p in pipe_labels
-          if (p.get("diameter_mm") and abs(p["diameter_mm"] - 1000) < 1)
-          or (p.get("raw") and re.search(r"(?:Ø|⌀|%%c)?\s*1000", str(p["raw"])))]
-    # Also accept geometry / model force-main of 1000 mm
-    fm_model = [c for c in doc["conduits"]
-                if c.get("diameter_mm") and abs(c["diameter_mm"] - 1000) < 1]
-    assert len(fm) + len(fm_model) >= exp["force_main_d1000"] or len(fm) == exp["force_main_d1000"]
+    # Y1: force-main labels (8 × Ø110 + 1 × Ø1000) → 1 Minor Confirmed drafting finding
+    fm_labels = [p for p in plan["pipes"] if p.get("kind") == "force_main_label"]
+    assert len(fm_labels) == exp["force_main_labels"]
+    assert sum(1 for p in fm_labels if abs(p["diameter_mm"] - 110) < 0.5) == exp["force_main_d110"]
+    assert sum(1 for p in fm_labels if abs(p["diameter_mm"] - 1000) < 0.5) == exp["force_main_d1000"]
+    cons_fm = tmp_path / "consistency_fm.json"
+    cand_fm = tmp_path / "candidates_fm.json"
+    criteria_fm = {
+        "declared_totals": criteria["declared_totals"],
+        "criteria": {"sewer": {"force_main_diameter_mm": {"value": 110, "clause": "§6.3.4"}}},
+        "gradient_tables": {"sewer": []},
+        "storm_pipe_table": [],
+    }
+    crit_fm = tmp_path / "criteria_fm.json"
+    crit_fm.write_text(json.dumps(criteria_fm), encoding="utf-8")
+    run("check_wet.py", "--networks", out, "--criteria", crit_fm, "--plan", plan_out,
+        "--site", site, "--sub", "REAL",
+        "--out-consistency", cons_fm, "--out-candidates", cand_fm,
+        "--presence", _write_presence(tmp_path / "fm_pres", storm_model=False,
+                                      from_root=_site_dir(site)))
+    finds = json.loads(cand_fm.read_text(encoding="utf-8"))["findings"]
+    draft = [
+        f for f in finds
+        if "force-main" in f["title"].casefold() or "force main" in f["title"].casefold()
+    ]
+    assert len(draft) == exp["force_main_drafting_findings"]
+    assert draft[0]["severity"] == "Minor"
+    assert draft[0]["proposed_status"] == "Confirmed"
+    assert "1000" in draft[0]["statement"]
 
 
 @pytest.mark.parametrize("site", ["QRWN"])

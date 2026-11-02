@@ -372,6 +372,74 @@ def run_w2(networks, criteria, params, rows, findings, meta, status_cap):
                 status="Probable" if flag else None,
             ))
 
+    # Y1: force-main plan labels vs report force-main diameter (110 mm §6.3.4 / §6.5.1)
+    fm_labels = [p for p in plan if p.get("kind") == "force_main_label"]
+    if fm_labels:
+        report_d = _report_force_main_diameter_mm(criteria, params)
+        rows.append(comparison_row(
+            "W2", "force_main_label_count", ["plan"],
+            {"count": len(fm_labels), "report_diameter_mm": report_d},
+            None, None, None, "information",
+            note="Y1 force-main labels on plan",
+        ))
+        for fl in fm_labels:
+            d = fl.get("diameter_mm")
+            if d is None or report_d is None:
+                continue
+            diff = abs(float(d) - float(report_d))
+            flag = diff > 0.5
+            cid = fl.get("raw") or "force_main"
+            rows.append(comparison_row(
+                "W2", f"force_main_D:{cid[:40]}", ["plan", "report"],
+                {"plan_mm": d, "report_mm": report_d,
+                 "e_m": fl.get("e_m"), "n_m": fl.get("n_m"),
+                 "material": fl.get("material")},
+                "mm", diff, None, "flag" if flag else "pass",
+                severity="Minor" if flag else None,
+                status="Confirmed" if flag else None,
+                note="Y1 DWG force-main Ø vs report 110 mm",
+            ))
+            if flag:
+                e_m, n_m = fl.get("e_m"), fl.get("n_m")
+                pos = (
+                    f"E {e_m:.2f} / N {n_m:.2f}"
+                    if e_m is not None and n_m is not None else "position unknown"
+                )
+                findings.append(finding_stub(
+                    "W2", "Force-main label diameter ≠ report",
+                    f"Plan force-main label reads '{fl.get('raw')}' ({pos}); "
+                    f"diameter {d:g} mm disagrees with report force-main diameter "
+                    f"{report_d:g} mm (§6.3.4 / §6.5.1). Drafting label. WUT-1xx.",
+                    "inconsistency", "Minor", "Confirmed",
+                    [evid("E01", "script_output",
+                          f"raw={fl.get('raw')!r} plan_mm={d} report_mm={report_d} "
+                          f"E={e_m} N={n_m}")],
+                    meta["site"], meta["sub"], meta["run"],
+                    status_cap=status_cap,
+                    note="Y1: DWG text vs report → Confirmed; drafting_label Minor",
+                ))
+
+
+def _report_force_main_diameter_mm(criteria, params):
+    """Report / declared force-main diameter (mm). Default 110 (§6.3.4 / §6.5.1)."""
+    crit = (criteria or {}).get("criteria") or {}
+    sewer = crit.get("sewer") or {}
+    for key in ("force_main_diameter_mm", "force_main_min_diameter_mm"):
+        row = sewer.get(key)
+        if isinstance(row, dict) and row.get("value") is not None:
+            return float(row["value"])
+        if isinstance(row, (int, float)):
+            return float(row)
+    totals = (criteria or {}).get("declared_totals") or {}
+    for key in ("sewer:force_main_diameter_mm", "force_main_diameter_mm"):
+        row = totals.get(key)
+        if isinstance(row, dict) and row.get("value") is not None:
+            return float(row["value"])
+    declared = ((params.get("raw") or {}).get("declared") or {}).get("sewer") or {}
+    if declared.get("force_main_diameter_mm") is not None:
+        return float(declared["force_main_diameter_mm"])
+    return 110.0
+
 
 def _row_min_slope_pct(row):
     """Return min gradient in % — peak (0.75 m/s) column; mm/m ÷ 10 (T3/U1)."""
