@@ -1,6 +1,13 @@
 {
-  "tag": "DQ-7 / DQ-9 / DQ-12 / DQ-14 / DQ-15 [AGREED 1 Nov 2026 21:55]",
-  "note": "Skill 11 detection thresholds (SPC-0006 Rev Q §4.19). ER values from the connected 83-page edition (sha 2b3db87e…f6bb, DQ-14). NOT deposited rulebook values. DQ-11: findings report-only until WUT states change in the next rulebook. Where the ER is silent, use declared (source: declared) with the report clause (DQ-7).",
+  "tag": "DQ-7a / DQ-9 / DQ-12 / DQ-14 / DQ-15 [AGREED 2 Nov 2026]",
+  "note": "Skill 11 detection thresholds (SPC-0006 Rev Q §4.19). DQ-7a source tiers: every threshold carries source_tier (1–5), source (doc + clause/page), and value. Governing = lowest tier that supplies a value. ER values from the connected 83-page edition (sha 2b3db87e…f6bb, DQ-14). NOT deposited rulebook values. DQ-11: findings report-only until WUT states change in the next rulebook.",
+  "source_tiers": {
+    "1": "contract ER→DTR→CMP",
+    "2": "project authority",
+    "3": "RIPC",
+    "4": "provider/MOMAH/SHC",
+    "5": "Parsons declared"
+  },
   "tolerances": {
     "length_m": 0.05,
     "slope_pct": 0.01,
@@ -16,6 +23,322 @@
     "irrigation": {"plan": true, "model": true},
     "storm": {"plan": true, "model": true}
   },
+  "thresholds": {
+    "sewer.min_diameter_mm": {
+      "value": 200,
+      "unit": "mm",
+      "source_tier": 1,
+      "source": "ER §7.5.2 p.32"
+    },
+    "sewer.min_slope_pct.200": {
+      "value": 0.5,
+      "unit": "%",
+      "source_tier": 1,
+      "source": "ER §7.5.2"
+    },
+    "sewer.min_slope_pct.300": {
+      "value": 0.35,
+      "unit": "%",
+      "source_tier": 1,
+      "source": "ER §7.5.2"
+    },
+    "sewer.min_slope_pct.other": {
+      "value": null,
+      "unit": "%",
+      "source_tier": 5,
+      "source": "declared Table 6.3 (0.75 m/s col)",
+      "note": "CMP Q185 confirms 200 mm (tier 1 via ER). Other D rows declared (5) until CMP confirmed [GAP]"
+    },
+    "sewer.mh_spacing_m": {
+      "value": {"min": 30, "max": 80},
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER §7.5.2"
+    },
+    "sewer.cover_to_crown_m": {
+      "value": 1.2,
+      "protected_min_m": 0.5,
+      "unit": "m",
+      "source_tier": 1,
+      "source": "CMP Q185"
+    },
+    "sewer.max_depth_to_crown_m": {
+      "value": 6.0,
+      "unit": "m",
+      "source_tier": 1,
+      "source": "CMP Q185"
+    },
+    "sewer.d_over_d_max": {
+      "value": 0.75,
+      "unit": "-",
+      "source_tier": 1,
+      "source": "ER §7.5.2"
+    },
+    "sewer.min_velocity_half_full_ms": {
+      "value": 0.6,
+      "unit": "m/s",
+      "source_tier": 1,
+      "source": "ER §7.5.2"
+    },
+    "water.valve_spacing_m": {
+      "value": 500,
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER §7.5.1 p.31"
+    },
+    "water.pressure_min_bar": {
+      "value": 3.5,
+      "unit": "bar",
+      "source_tier": 1,
+      "source": "ER §7.5.1",
+      "advisory": true,
+      "approx": true
+    },
+    "water.pressure_max_bar": {
+      "value": {"min": 6.0, "max": 7.0},
+      "unit": "bar",
+      "source_tier": 1,
+      "source": "ER §7.5.1",
+      "advisory": true,
+      "approx": true
+    },
+    "water.head_loss_m_per_km": {
+      "value": {"min": 2, "max": 5},
+      "unit": "m/km",
+      "source_tier": 1,
+      "source": "ER §7.5.1"
+    },
+    "water.velocity_max_ms": {
+      "value": {"min": 2.0, "max": 3.0},
+      "unit": "m/s",
+      "source_tier": 1,
+      "source": "ER §7.5.1"
+    },
+    "water.fire_main_min_diameter_mm": {
+      "value": 160,
+      "unit": "mm",
+      "source_tier": 1,
+      "source": "CMP Q166",
+      "note": "min fire-main D 160 mm OD"
+    },
+    "water.min_diameter_mm": {
+      "value": 110,
+      "unit": "mm",
+      "source_tier": 5,
+      "source": "declared §5.3.7",
+      "note": "ER silent on general min D; Parsons declared 110 / 160"
+    },
+    "water.hydrant_spacing_m": {
+      "value": {"residential": 150, "commercial_min": 90, "commercial_max": 120},
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER FLS p.49"
+    },
+    "water.fire_residual_bar": {
+      "value": 1.5,
+      "unit": "bar",
+      "source_tier": 1,
+      "source": "ER §7.5.13 p.49"
+    },
+    "water.fire_flow_l_per_min": {
+      "value": {"min": 1000, "max": 2000},
+      "unit": "L/min",
+      "source_tier": 1,
+      "source": "ER §7.5.13",
+      "note": "low-rise"
+    },
+    "water.cover_m": {
+      "value": 1.2,
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER §7.5.1",
+      "advisory": true,
+      "approx": true,
+      "note": "ER ~1.2 m in roads — advisory"
+    },
+    "storm.return_period_yr": {
+      "value": 10,
+      "unit": "yr",
+      "source_tier": 1,
+      "source": "ER §7.5.3 / Table 7-8 p.43"
+    },
+    "storm.min_diameter_mm": {
+      "value": 300,
+      "unit": "mm",
+      "source_tier": 1,
+      "source": "ER §7.5.3–7.5.11"
+    },
+    "storm.velocity_ms": {
+      "value": {"min": 0.61, "max": 3.66},
+      "unit": "m/s",
+      "source_tier": 1,
+      "source": "ER §7.5.7"
+    },
+    "storm.cover_m": {
+      "value": 1.2,
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER §7.5.8"
+    },
+    "storm.mh_spacing_m": {
+      "value": {
+        "lt_800_mm_min": 70,
+        "lt_800_mm_max": 100,
+        "gt_800_mm_min": 100,
+        "gt_800_mm_max": 120,
+        "box_min": 120,
+        "box_max": 150
+      },
+      "unit": "m",
+      "source_tier": 1,
+      "source": "ER Table 7-11 p.46"
+    },
+    "irrigation.velocity_max_ms": {
+      "value": 2.0,
+      "unit": "m/s",
+      "source_tier": 1,
+      "source": "ER §7.5.12"
+    }
+  },
+  "same_tier_alternatives": [
+    {
+      "id": "cmp_pw_pressure",
+      "criterion": "water.pressure",
+      "governing_source": "ER §7.5.1 (~3.5 / ~6–7 bar)",
+      "alt_source": "CMP",
+      "alt_value": "1.5–4.0 bar",
+      "title": "CMP PW pressure differs from ER (same tier 1)",
+      "statement": "Same-tier contract sources differ on potable-water pressure: ER §7.5.1 cites ~3.5 bar min / ~6–7 bar max while CMP gives 1.5–4.0 bar. Until reconciled (DQ-7a / DQ-15 style), governing stays ER and this Observation records the CMP alternative."
+    },
+    {
+      "id": "cmp_hydrant_spacing",
+      "criterion": "water.hydrant_spacing_m",
+      "governing_source": "ER FLS p.49 (150 m res / 90–120 m commercial)",
+      "alt_source": "CMP",
+      "alt_value": "≤135 m",
+      "title": "CMP hydrant spacing differs from ER (same tier 1)",
+      "statement": "Same-tier contract sources differ on hydrant spacing: ER FLS p.49 gives 150 m residential / 90–120 m commercial while CMP gives ≤135 m. Until reconciled (DQ-7a / DQ-15 style), governing stays ER FLS and this Observation records the CMP alternative."
+    },
+    {
+      "id": "cmp_mh_spacing",
+      "criterion": "sewer.mh_spacing_m",
+      "governing_source": "ER §7.5.2 (30–80 m)",
+      "alt_source": "CMP",
+      "alt_value": "100–200 m",
+      "title": "CMP sewer MH spacing differs from ER (same tier 1)",
+      "statement": "Same-tier contract sources differ on sewer MH spacing: ER §7.5.2 gives 30–80 m while CMP gives 100–200 m. Until reconciled (DQ-7a / DQ-15 style), governing stays ER and this Observation records the CMP alternative."
+    },
+    {
+      "id": "cmp_fire_flow",
+      "criterion": "water.fire_flow_l_per_min",
+      "governing_source": "ER §7.5.13 (1000–2000 L/min low-rise)",
+      "alt_source": "CMP",
+      "alt_value": "7570 L/min × 2 h",
+      "title": "CMP fire flow differs from ER (same tier 1)",
+      "statement": "Same-tier contract sources differ on fire flow: ER §7.5.13 gives 1000–2000 L/min (low-rise) while CMP gives 7570 L/min × 2 h. Until reconciled (DQ-7a / DQ-15 style), governing stays ER and this Observation records the CMP alternative."
+    }
+  ],
+  "w8_comparisons": [
+    {
+      "id": "pw_pressure_min",
+      "label": "PW min pressure",
+      "declared_from": "potable_water.pressure_min_bar",
+      "governing_key": "water.pressure_min_bar",
+      "sense": "min",
+      "unit": "bar"
+    },
+    {
+      "id": "pw_head_loss",
+      "label": "PW head loss",
+      "declared_from": "potable_water.head_loss_table.lt_600_mm_m_per_km",
+      "governing_key": "water.head_loss_m_per_km",
+      "sense": "max_range",
+      "unit": "m/km"
+    },
+    {
+      "id": "pw_isolation",
+      "label": "PW isolation valve spacing",
+      "declared_from": "potable_water.valve_spacing_m",
+      "governing_key": "water.valve_spacing_m",
+      "sense": "max",
+      "unit": "m"
+    },
+    {
+      "id": "pw_fire_residual",
+      "label": "fire residual at hydrant",
+      "declared_from": "potable_water.fire_residual_bar",
+      "governing_key": "water.fire_residual_bar",
+      "sense": "min",
+      "unit": "bar"
+    },
+    {
+      "id": "pw_velocity_max",
+      "label": "PW max velocity",
+      "declared_from": "potable_water.max_velocity_ms",
+      "governing_key": "water.velocity_max_ms",
+      "sense": "max_in_range",
+      "unit": "m/s"
+    },
+    {
+      "id": "sewer_mh_spacing",
+      "label": "sewer MH spacing",
+      "declared_from": "mh_spacing_table.min_d_row",
+      "governing_key": "sewer.mh_spacing_m",
+      "sense": "max",
+      "unit": "m",
+      "note": "Table 6.1 row for smallest D (e.g. 150–200 → 100 m) vs ER max 80 m"
+    },
+    {
+      "id": "sewer_cover",
+      "label": "sewer cover",
+      "declared_from": "sewer.cover_m",
+      "governing_key": "sewer.cover_to_crown_m",
+      "sense": "min",
+      "unit": "m",
+      "declared_note": "soffit",
+      "governing_note": "crown"
+    },
+    {
+      "id": "sewer_max_depth",
+      "label": "sewer max depth",
+      "declared_from": "sewer.max_depth_m",
+      "governing_key": "sewer.max_depth_to_crown_m",
+      "sense": "max",
+      "unit": "m"
+    },
+    {
+      "id": "sewer_d_over_d",
+      "label": "sewer d/D",
+      "declared_from": "sewer.d_over_d_max",
+      "governing_key": "sewer.d_over_d_max",
+      "sense": "max",
+      "unit": "-"
+    },
+    {
+      "id": "sewer_min_grad_200",
+      "label": "sewer min gradient 200 mm",
+      "declared_from": "gradient_tables.sewer.200",
+      "governing_key": "sewer.min_slope_pct.200",
+      "sense": "min",
+      "unit": "%"
+    },
+    {
+      "id": "storm_return",
+      "label": "storm return period",
+      "declared_from": "storm.return_period_yr",
+      "governing_key": "storm.return_period_yr",
+      "sense": "equal",
+      "unit": "yr"
+    },
+    {
+      "id": "storm_cover",
+      "label": "storm cover",
+      "declared_from": "storm.cover_m",
+      "governing_key": "storm.cover_m",
+      "sense": "min",
+      "unit": "m"
+    }
+  ],
   "er": {
     "edition": "connected 83-page Employer's Requirements",
     "edition_sha256_prefix": "2b3db87e",
@@ -30,7 +353,10 @@
       "min_velocity_half_full_ms": 0.6,
       "d_over_d_max": 0.75,
       "mh_spacing_m": {"min": 30, "max": 80},
-      "note": "ER silent on numeric cover (\"sufficient … special protection if shallow\"). 0.75 m/s column in declared tables = peak (W3)"
+      "cover_to_crown_m": 1.2,
+      "cover_protected_min_m": 0.5,
+      "max_depth_to_crown_m": 6.0,
+      "note": "Cover / max depth to crown from CMP Q185 (tier 1). 0.75 m/s column in declared tables = peak (W3)"
     },
     "water": {
       "clause": "§7.5.1 / FLS",
@@ -39,14 +365,16 @@
       "pressure_max_bar": 7.0,
       "fire_pressure_bar": 1.5,
       "velocity_max_ms": 3.0,
+      "velocity_max_range_ms": {"min": 2.0, "max": 3.0},
       "head_loss_m_per_km": {"min": 2, "max": 5},
       "valve_spacing_m": 500,
       "cover_m": 1.2,
       "cover_advisory": true,
       "cover_note": "ER ~1.2 m in roads — keep as ER, advisory",
-      "hydrant_spacing_m": {"residential": 150, "commercial": 90},
+      "hydrant_spacing_m": {"residential": 150, "commercial": 90, "commercial_max": 120},
+      "fire_main_min_diameter_mm": 160,
       "pages_fls": "48-49",
-      "note": "ER silent on min diameter; use declared §5.3.7"
+      "note": "Fire-main min D 160 mm OD from CMP Q166 (tier 1). General min D 110 declared §5.3.7 (tier 5) where ER silent"
     },
     "storm": {
       "clause": "§7.5.3 / §7.5.7–7.5.8 / Table 7-8 / Table 7-11",
@@ -74,15 +402,17 @@
     "sewer": {
       "cover_m": 1.0,
       "source": "declared",
+      "source_tier": 5,
       "clause": "§6.3.3",
-      "note": "soffit cover < 1.0 m → special protection (report §6.3.3); ER silent on numeric cover"
+      "note": "soffit cover 1.0 m (report §6.3.3) — W8 vs governing crown 1.2 m CMP Q185; not used as W3 governing"
     },
     "water": {
       "min_diameter_mm": 110,
       "min_diameter_mm_by_use": {"service": 110, "distribution": 160},
       "source": "declared",
+      "source_tier": 5,
       "clause": "§5.3.7",
-      "note": "declared min D 110 / 160 mm (report §5.3.7); ER silent"
+      "note": "declared min D 110 / 160 mm (report §5.3.7); ER silent on general min D. Fire-main 160 also CMP Q166 tier 1"
     }
   },
   "er_conflicts": {
@@ -127,10 +457,10 @@
   },
   "severity": {
     "tag": "DQ-12",
-    "major": ["pressure", "fire", "min_gradient", "adverse", "mh_spacing"],
-    "minor": ["cover", "diameter_labels", "report_vs_model", "drafting_label"]
+    "major": ["pressure", "fire", "min_gradient", "adverse", "mh_spacing", "max_depth"],
+    "minor": ["cover", "diameter_labels", "report_vs_model", "drafting_label", "declared_weaker"]
   },
-  "phase": "A",
-  "phase_scope": ["W1", "W2", "W3", "W5_geometry", "W6_plan"],
-  "phase_out": ["W4", "W5_hydraulics", "W7", "W8", "wntr", "binary_out"]
+  "phase": "A+",
+  "phase_scope": ["W1", "W2", "W3", "W5_geometry", "W6_plan", "W8"],
+  "phase_out": ["W4", "W5_hydraulics", "W7", "wntr", "binary_out"]
 }

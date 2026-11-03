@@ -57,6 +57,7 @@ SECTION_HINTS = {
 CLAUSE_HINTS = [
     ("potable_water", "§5.3", re.compile(
         rf"(?:§\s*)?{_SEC}5\.3\b|section\s+5\.3\b", re.I)),
+    ("potable_water", "Table 5.3", re.compile(r"Table\s*5\.3\b", re.I)),
     ("sewer", "§6.3", re.compile(rf"(?:§\s*)?{_SEC}6\.3\b|section\s+6\.3\b", re.I)),
     ("sewer", "Table 6.1", re.compile(r"Table\s*6\.1\b", re.I)),
     ("sewer", "Table 6.3", re.compile(r"Table\s*6\.3\b", re.I)),
@@ -170,9 +171,55 @@ HEAD_LOSS_VALUES = re.compile(
     r"(\d+(?:\.\d+)?)\s*m\s*/\s*km.*?(\d+(?:\.\d+)?)\s*m\s*/\s*km",
     re.I | re.S,
 )
+# B1: "D < 600 → 20" / "1000 > D ≥ 600 → 10" (m/km implied by Table 5.3)
+_ARROW = r"(?:\s*(?:→|->|=>|:)\s*|\s+)"
+HEAD_LOSS_LT_600 = re.compile(
+    rf"(?:D\s*<\s*600|< ?600\s*mm){_ARROW}(\d+(?:\.\d+)?)",
+    re.I,
+)
+HEAD_LOSS_600_1000 = re.compile(
+    rf"(?:1000\s*>\s*D\s*[≥>=≤<=]{{0,2}}\s*600"
+    rf"|600\s*[≤<=]{{1,2}}\s*D\s*<\s*1000"
+    rf"|D\s*[≥>=]{{1,2}}\s*600){_ARROW}(\d+(?:\.\d+)?)",
+    re.I,
+)
 VALVE_SPACING = re.compile(
     r"(?:isolat(?:ion|ing)\s+)?valves?[^0-9]{0,80}"
     r"(?:every|maximum\s+distance\s+of\s+every)?\s*(\d+(?:\.\d+)?)\s*m(?:eters?)?\b",
+    re.I,
+)
+# §5.5 — fire residual at hydrant (NMAR: p.75 "pressure of 1.40 bar at each fire hydrant")
+FIRE_RESIDUAL_BAR = re.compile(
+    r"pressure\s+of\s+(\d+(?:\.\d+)?)\s*bars?\s+at\s+(?:each\s+)?(?:fire\s+)?hydrant|"
+    r"(?:fire|hydrant)[^.]{0,100}?"
+    r"(?:residual\s+)?pressure[^0-9.]{0,40}"
+    r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|minimum(?:\s+of)?|≥|>=)?"
+    r"[^0-9]{0,20}(\d+(?:\.\d+)?)\s*bars?\b|"
+    r"(?:residual\s+)?pressure\s+at\s+(?:the\s+)?(?:fire\s+)?hydrants?[^0-9]{0,40}"
+    r"(\d+(?:\.\d+)?)\s*bars?\b|"
+    r"fire\s+residual[^0-9]{0,30}(\d+(?:\.\d+)?)\s*bars?\b",
+    re.I,
+)
+# B1 p.77: "Where the depth of the pipe soffit is less than 1.0m, the pipeline should be protected"
+SEWER_SOFFIT_COVER = re.compile(
+    r"(?:depth\s+of\s+(?:the\s+)?pipe\s+)?soffit[^0-9]{0,40}"
+    r"(?:is\s+)?(?:less\s+than|below|<\s*)\s*(\d+(?:\.\d+)?)\s*m\b|"
+    r"(?:soffit\s+)?cover[^0-9]{0,40}(?:of\s+|≥|>=|minimum(?:\s+of)?\s+)?"
+    r"(\d+(?:\.\d+)?)\s*m\b|"
+    r"cover\s+(?:to\s+)?soffit[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+    re.I,
+)
+SEWER_MAX_DEPTH = re.compile(
+    r"(?:max(?:imum)?\s+)?(?:sewer\s+)?(?:network\s+)?depth[^0-9]{0,40}"
+    r"(\d+(?:\.\d+)?)\s*m?\s*(?:–|-|to|/)\s*(\d+(?:\.\d+)?)\s*m\b|"
+    r"max(?:imum)?\s+depth[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+    re.I,
+)
+# B1 p.78: "depth of flow shall not exceed 0.7 (70%) of the pipe diameters"
+D_OVER_D = re.compile(
+    r"(?:d\s*/\s*D|depth\s*/\s*diameter|proportional\s+depth)[^0-9]{0,25}"
+    r"(?:≤|<=|max(?:imum)?(?:\s+of)?|=|:)?\s*(\d+(?:\.\d+)?)|"
+    r"depth\s+of\s+flow[^0-9]{0,60}(?:not\s+exceed|≤|<=)\s*(\d+(?:\.\d+)?)",
     re.I,
 )
 SEWER_GRAVITY_MIN_D = re.compile(
@@ -185,15 +232,38 @@ SEWER_GRAVITY_MIN_D = re.compile(
 HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I)
 
 # Table 6.1 — MH spacing by diameter range → spacing m
-# e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m",
-# "up to 1000 → 200 m", "1200 and above → 300 m" (V4)
+# C1: "150 - 200" (hyphen + spaces); "1200 and above → 300 (in agreement …)"
+# D1: real skill-2 spans — group by y (~6 pt), diameter x<200, value x≥200
+TABLE_61_Y_TOL = 6.0
+TABLE_61_VALUE_X = 200.0
+TABLE_61_HEADER = re.compile(r"Maximum\s+Manhole\s+Spacing", re.I)
+TABLE_61_CAPTION = re.compile(r"TABLE\s*6\.1\b", re.I)
 _DASH = r"[–—−‐-]"  # en/em/minus/hyphen variants from PDF extract
+_SEP61 = rf"(?:[:→=>]|to|{_DASH})"  # separator between range and spacing value
 TABLE_61_RANGE = re.compile(
     r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
     r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
-    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)"
+    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)(?:\s+than)?"
     rf"|(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}}))"
-    r"\s*(?:mm)?\s*(?:[:→=>\s]|to)?\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
+    r"\s*(?:mm)?\s*"
+    rf"(?:{_SEP61}\s*)?"
+    r"(?P<span>\d+(?:\.\d+)?)"
+    r"(?:\s*\([^)]{0,120}\))?"  # value continues after "300 (in agreement …)"
+    r"\s*m?\b",
+    re.I,
+)
+# Range / "and above" without spacing on this line (span on the next line)
+TABLE_61_RANGE_HEAD = re.compile(
+    r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
+    r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
+    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)(?:\s+than)?"
+    rf"|(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}}))"
+    r"\s*(?:mm)?\s*$",
+    re.I,
+)
+TABLE_61_SPAN_ONLY = re.compile(
+    rf"^\s*(?:{_SEP61}\s*)?(?P<span>\d+(?:\.\d+)?)"
+    r"(?:\s*\([^)]{0,120}\))?\s*m?\b",
     re.I,
 )
 TABLE_61_SIMPLE = re.compile(
@@ -469,10 +539,43 @@ def _parse_storm_109_row(text, page):
     }
 
 
+# Plausible ranges for declared criteria (A2) — reject coordinate / TOC misreads.
+_PLAUSIBLE = {
+    "cover_m": (0.3, 3.0),
+    "max_depth_m": (1.0, 15.0),
+    "min_diameter_mm": (50.0, 3000.0),
+    "mh_spacing_m": (10.0, 500.0),
+    "pressure_min_bar": (0.5, 10.0),
+    "pressure_max_bar": (1.0, 20.0),
+    "min_velocity_ms": (0.05, 5.0),
+    "max_velocity_ms": (0.2, 10.0),
+    "valve_spacing_m": (50.0, 5000.0),
+    "d_over_d_max": (0.4, 0.95),
+    "return_period_yr": (1.0, 100.0),
+}
+
+
+def _plausible(key, value):
+    """True when value is in the A2 plausible range for the criterion (if known)."""
+    bounds = _PLAUSIBLE.get(key)
+    if bounds is None or value is None:
+        return True
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bounds[0] - 1e-12 <= v <= bounds[1] + 1e-12
+
+
 def _set_criterion(bucket, key, value, page, text, clause=None, extra=None):
     if key in bucket:
         return
-    row = {"value": value, "page": page, "text": text[:240], "clause": clause}
+    if not _plausible(key, value):
+        return  # A2: reject storm cover_m 3512 / max_depth_m 30-style misreads
+    row = {
+        "value": value, "page": page, "text": text[:240], "clause": clause,
+        "as_written": (text or "")[:160].strip(),
+    }
     if extra:
         row.update(extra)
     bucket[key] = row
@@ -685,14 +788,18 @@ def _extract_pw_criteria(bucket, text, page):
     if vmv:
         _set_criterion(bucket, "valve_spacing_m", float(vmv.group(1)), page, text, "§5.3.11")
 
-    # Table 5.3 head-loss gradient 20 / 10 m/km (U3: store values, not only name)
-    if HEAD_LOSS_TABLE.search(text) or re.search(r"Table\s*5\.3", text, re.I):
+    # Table 5.3 head-loss gradient 20 / 10 m/km (B1: also "D < 600 → 20" rows)
+    hl_hit = HEAD_LOSS_TABLE.search(text) or re.search(r"Table\s*5\.3", text, re.I)
+    lt_m = HEAD_LOSS_LT_600.search(text)
+    ge_m = HEAD_LOSS_600_1000.search(text)
+    if hl_hit or lt_m or ge_m:
         hl = HEAD_LOSS_VALUES.search(text)
         payload = {
             "value": "Table 5.3",
             "page": page,
             "text": text[:240],
             "clause": "Table 5.3",
+            "as_written": text[:160].strip(),
         }
         if hl:
             payload["lt_600_mm_m_per_km"] = float(hl.group(1))
@@ -703,15 +810,32 @@ def _extract_pw_criteria(bucket, text, page):
             if len(mkms) >= 2:
                 payload["lt_600_mm_m_per_km"] = mkms[0]
                 payload["d_600_to_1000_m_per_km"] = mkms[1]
+            elif lt_m or ge_m:
+                if lt_m:
+                    payload["lt_600_mm_m_per_km"] = float(lt_m.group(1))
+                if ge_m:
+                    payload["d_600_to_1000_m_per_km"] = float(ge_m.group(1))
             elif re.search(r"\b20\b", text) and re.search(r"\b10\b", text):
                 payload["lt_600_mm_m_per_km"] = 20.0
                 payload["d_600_to_1000_m_per_km"] = 10.0
         existing = bucket.get("head_loss_table")
-        if existing is None or (
-            existing.get("lt_600_mm_m_per_km") is None
-            and payload.get("lt_600_mm_m_per_km") is not None
-        ):
+        if existing is None:
             bucket["head_loss_table"] = payload
+        else:
+            # Merge values across TOC name-only hit then table-body rows (B1 p.73)
+            for k in ("lt_600_mm_m_per_km", "d_600_to_1000_m_per_km"):
+                if existing.get(k) is None and payload.get(k) is not None:
+                    existing[k] = payload[k]
+            if existing.get("lt_600_mm_m_per_km") is None and payload.get("lt_600_mm_m_per_km") is not None:
+                bucket["head_loss_table"] = payload
+            elif payload.get("as_written") and (
+                existing.get("lt_600_mm_m_per_km") is not None
+                or payload.get("lt_600_mm_m_per_km") is not None
+            ):
+                if "D <" in payload["as_written"] or "→" in payload["as_written"] or "m/km" in payload["as_written"].casefold():
+                    existing["as_written"] = payload["as_written"]
+                    existing["text"] = payload["text"]
+                    existing["page"] = payload["page"]
 
     for key, rx in CRITERION_PATTERNS:
         m = rx.search(text)
@@ -719,6 +843,90 @@ def _extract_pw_criteria(bucket, text, page):
                          "pressure_min_bar", "pressure_max_bar",
                          "min_velocity_ms", "max_velocity_ms"):
             _set_criterion(bucket, key, float(m.group(1)), page, text, "§5.3")
+
+    # §5.5 fire residual at hydrant (p.63) — keep separate from §5.3 distribution min P
+    fr = FIRE_RESIDUAL_BAR.search(text)
+    if fr and (
+        re.search(r"5\.5|fire|hydrant", text, re.I)
+        or "fire_residual_bar" not in bucket
+    ):
+        val = float(next(g for g in fr.groups() if g is not None))
+        # Prefer ~1.4 design residual over unrelated larger pressures
+        existing = bucket.get("fire_residual_bar")
+        take = existing is None or (
+            abs(val - 1.4) < 0.15
+            and abs(float(existing.get("value", 0)) - 1.4) > 0.15
+        ) or (existing is not None and abs(float(existing["value"]) - 1.4) > 0.15
+              and abs(val - 1.4) < abs(float(existing["value"]) - 1.4))
+        if take and 0.5 <= val <= 3.0:
+            if re.search(r"5\.5", text) or "hydrant" in text.casefold() or "fire" in text.casefold():
+                bucket["fire_residual_bar"] = {
+                    "value": val, "page": page, "text": text[:240],
+                    "clause": "§5.5", "as_written": text[:160].strip(),
+                }
+
+
+def _extract_sewer_criteria(bucket, text, page):
+    """Fill sewer declared design criteria used by W8 (cover, max depth, d/D)."""
+    if re.search(r"soffit|§\s*6\.3\.3|6\.3\.3", text, re.I) or (
+        re.search(r"cover", text, re.I) and re.search(r"1\.0\s*m", text)
+        and re.search(r"sewer|protection|special", text, re.I)
+    ):
+        sm = SEWER_SOFFIT_COVER.search(text)
+        if sm:
+            val = float(next(g for g in sm.groups() if g is not None))
+            if _plausible("cover_m", val):
+                existing = bucket.get("cover_m")
+                # Prefer the §6.3.3 protection sentence (B1 p.77) over bare defaults
+                prefer = (
+                    "soffit" in text.casefold()
+                    and ("protect" in text.casefold() or "less than" in text.casefold())
+                )
+                if existing is None or abs(val - 1.0) < 0.05 or prefer:
+                    bucket["cover_m"] = {
+                        "value": val, "page": page, "text": text[:240],
+                        "clause": "§6.3.3", "note": "soffit",
+                        "as_written": text[:160].strip(),
+                    }
+
+    dm = SEWER_MAX_DEPTH.search(text)
+    if dm and re.search(r"max|depth", text, re.I):
+        nums = [g for g in dm.groups() if g is not None]
+        if len(nums) >= 2:
+            lo, hi = float(nums[0]), float(nums[1])
+            # Design max depth band (e.g. 8–10 m), not configuration 1.4–3.5
+            if hi >= 6.0 and lo >= 4.0 and _plausible("max_depth_m", hi):
+                bucket["max_depth_m"] = {
+                    "value": {"min": lo, "max": hi},
+                    "min_m": lo, "max_m": hi,
+                    "page": page, "text": text[:240], "clause": "§6.3",
+                    "as_written": text[:160].strip(),
+                }
+        elif len(nums) == 1:
+            val = float(nums[0])
+            if val >= 6.0 and _plausible("max_depth_m", val):
+                bucket.setdefault("max_depth_m", {
+                    "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+                    "as_written": text[:160].strip(),
+                })
+
+    dd = D_OVER_D.search(text) or re.search(
+        r"d\s*/\s*D[^0-9]{0,15}(\d+(?:\.\d+)?)", text, re.I,
+    )
+    if dd and re.search(
+        r"d\s*/\s*D|proportional\s+depth|depth\s+of\s+flow|pipe\s+diameters?",
+        text, re.I,
+    ):
+        val = float(next(g for g in dd.groups() if g is not None))
+        # 0.7 or 70% → store fractional d/D
+        if val > 1.0 and val <= 100.0:
+            val = val / 100.0
+        if _plausible("d_over_d_max", val):
+            bucket["d_over_d_max"] = {
+                "value": val, "page": page, "text": text[:240],
+                "clause": "§6.3.6" if re.search(r"6\.3\.6", text) else "§6.3",
+                "as_written": text[:160].strip(),
+            }
 
 
 def _store_total(declared_totals, key, network, value, page, text, *, force=False):
@@ -747,6 +955,262 @@ def _store_depth(declared_totals, network, lo, hi, page, text, *, force=False):
         declared_totals[key] = payload
 
 
+def extract_table_61_from_spans(spans):
+    """D1: Table 6.1 from skill-2 positioned spans (not line-joined text).
+
+    Anchor between "Maximum Manhole Spacing (m)" and "TABLE 6.1". Group spans
+    into rows by y with ~6 pt tolerance (captures separate '-' and wrapped
+    row-5 value ~5 pt above the label). Diameter = spans with x < 200 joined;
+    value = first numeric span with x ≥ 200 in the row band.
+    """
+    if not spans:
+        return []
+    by_page = {}
+    for s in spans:
+        if s.get("plain"):
+            continue
+        by_page.setdefault(s["page"], []).append(s)
+
+    rows_out = []
+    for page, items in sorted(by_page.items()):
+        # Detect header / caption y from single spans or same-y joins (D1)
+        header_ys = []
+        caption_ys = []
+        seen_y = set()
+        for s in items:
+            y = round(s["bbox"][1], 1)
+            if y in seen_y:
+                continue
+            seen_y.add(y)
+            band = [
+                x for x in items
+                if abs(x["bbox"][1] - s["bbox"][1]) < TABLE_61_Y_TOL
+            ]
+            band.sort(key=lambda x: x["bbox"][0])
+            joined = " ".join((x.get("text") or "").strip() for x in band if (x.get("text") or "").strip())
+            if TABLE_61_HEADER.search(joined):
+                header_ys.append(s["bbox"][1])
+            if TABLE_61_CAPTION.search(joined):
+                caption_ys.append(s["bbox"][1])
+
+        header_ys = sorted(set(header_ys))
+        caption_ys = sorted(set(caption_ys))
+        if not header_ys and not caption_ys:
+            continue
+
+        # y-band between the two anchors (order-agnostic); exclude the anchor lines
+        if header_ys and caption_ys:
+            y_lo = min(min(header_ys), min(caption_ys))
+            y_hi = max(max(header_ys), max(caption_ys))
+        elif header_ys:
+            y_lo = min(header_ys)
+            y_hi = y_lo + 120.0
+        else:
+            y_hi = max(caption_ys)
+            y_lo = max(0.0, y_hi - 120.0)
+
+        def _is_anchor_line(s):
+            y = s["bbox"][1]
+            band = [
+                x for x in items
+                if abs(x["bbox"][1] - y) < TABLE_61_Y_TOL
+            ]
+            band.sort(key=lambda x: x["bbox"][0])
+            joined = " ".join(
+                (x.get("text") or "").strip() for x in band if (x.get("text") or "").strip()
+            )
+            return bool(TABLE_61_HEADER.search(joined) or TABLE_61_CAPTION.search(joined))
+
+        body = [
+            s for s in items
+            if y_lo < s["bbox"][1] < y_hi and not _is_anchor_line(s)
+        ]
+        if not body:
+            continue
+
+        # Cluster into rows by y (6 pt) — seed clusters from label-column spans (x < 200)
+        body_sorted = sorted(body, key=lambda s: (s["bbox"][1], s["bbox"][0]))
+        clusters = []  # each: {"y": float, "spans": [...]}
+        for s in body_sorted:
+            y = s["bbox"][1]
+            placed = False
+            for cl in clusters:
+                if abs(y - cl["y"]) <= TABLE_61_Y_TOL:
+                    cl["spans"].append(s)
+                    # Keep cluster y as median of label-column members when present
+                    label_ys = [
+                        x["bbox"][1] for x in cl["spans"]
+                        if x["bbox"][0] < TABLE_61_VALUE_X
+                    ]
+                    cl["y"] = (
+                        sorted(label_ys)[len(label_ys) // 2]
+                        if label_ys else sorted(x["bbox"][1] for x in cl["spans"])[
+                            len(cl["spans"]) // 2
+                        ]
+                    )
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({"y": y, "spans": [s]})
+
+        for cl in clusters:
+            sp = sorted(cl["spans"], key=lambda x: (x["bbox"][0], x["bbox"][1]))
+            diam_parts = [
+                (x.get("text") or "").strip()
+                for x in sp
+                if x["bbox"][0] < TABLE_61_VALUE_X and (x.get("text") or "").strip()
+            ]
+            # Skip header leftover bands with no diameter digits
+            diam_txt = " ".join(diam_parts)
+            diam_txt = re.sub(r"\s+", " ", diam_txt).strip()
+            if not re.search(r"\d", diam_txt):
+                continue
+            # First numeric span with x ≥ 200
+            value = None
+            for x in sp:
+                if x["bbox"][0] < TABLE_61_VALUE_X:
+                    continue
+                t = (x.get("text") or "").strip()
+                m = re.match(r"(\d+(?:\.\d+)?)", t)
+                if m:
+                    value = float(m.group(1))
+                    break
+            if value is None or not (20 <= value <= 400):
+                continue
+            # Parse diameter range from joined label text
+            row = _parse_table_61_diameter(diam_txt, value, page)
+            if row is None:
+                continue
+            key = (
+                row.get("diameter_min_mm"), row.get("diameter_max_mm"),
+                row["diameter_mm"], row["mh_spacing_m"],
+            )
+            if any(
+                (r.get("diameter_min_mm"), r.get("diameter_max_mm"),
+                 r["diameter_mm"], r["mh_spacing_m"]) == key
+                for r in rows_out
+            ):
+                continue
+            rows_out.append(row)
+
+    rows_out.sort(key=lambda r: (
+        float(r["diameter_min_mm"]) if r.get("diameter_min_mm") is not None
+        else float(r["diameter_mm"]),
+        float(r["mh_spacing_m"]),
+    ))
+    return rows_out
+
+
+def _parse_table_61_diameter(diam_txt, value, page):
+    """Turn joined diameter-column text + spacing value into a Table 6.1 row."""
+    text = diam_txt
+    # Normalise "150 - 200" / "150-200" / "Up to 1000" / "1200 and above"
+    probe = f"{text} → {value:g}"
+    m = TABLE_61_RANGE.search(probe)
+    if m:
+        return _table_61_row_from_match(m, value, page)
+    # Compact forms without arrow in diameter alone
+    m2 = re.search(
+        rf"(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}})",
+        text, re.I,
+    )
+    if m2:
+        lo, hi = float(m2.group("lo")), float(m2.group("hi"))
+        return {
+            "diameter_mm": lo, "diameter_min_mm": lo, "diameter_max_mm": hi,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m3 = re.search(
+        r"(?P<above>\d{2,4})\s+and\s+above", text, re.I,
+    )
+    if m3:
+        d0 = float(m3.group("above"))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": None,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m4 = re.search(r"up\s+to\s+(\d{2,4})", text, re.I)
+    if m4:
+        d0 = float(m4.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": None, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m5 = re.search(r"[≤<=]\s*(\d{2,4})", text)
+    if m5:
+        d0 = float(m5.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": None, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m6 = re.search(r"[≥>=]\s*(\d{2,4})", text)
+    if m6:
+        d0 = float(m6.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": None,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    # Compact "300-500" already covered; bare number
+    m7 = re.fullmatch(r"(\d{2,4})", text.strip())
+    if m7:
+        d0 = float(m7.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    return None
+
+
+def _table_61_row_from_match(m, span, page):
+    """Build a Table 6.1 row dict from a RANGE / RANGE_HEAD match (C1)."""
+    gd = m.groupdict()
+    op = (gd.get("op") or "").strip()
+    if gd.get("single"):
+        d0 = float(m.group("single"))
+        d_min = d_max = None
+        if op in ("≥", ">=", ">"):
+            d_min = d0
+        elif op in ("≤", "<=", "<"):
+            d_max = d0
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": d_min,
+            "diameter_max_mm": d_max,
+            "page": page,
+            "text": m.group(0),
+        }
+    elif gd.get("upto"):
+        d0 = float(m.group("upto"))
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": None,
+            "diameter_max_mm": d0,
+            "page": page,
+            "text": m.group(0),
+        }
+    elif gd.get("above"):
+        d0 = float(m.group("above"))
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": d0,
+            "diameter_max_mm": None,
+            "page": page,
+            "text": m.group(0),
+        }
+    else:
+        lo, hi = float(m.group("lo")), float(m.group("hi"))
+        row = {
+            "diameter_mm": lo,
+            "diameter_min_mm": lo,
+            "diameter_max_mm": hi,
+            "page": page,
+            "text": m.group(0),
+        }
+    if span is not None:
+        row["mh_spacing_m"] = float(span)
+    return row
+
+
 def extract(lines):
     toc_pages = mark_toc_pages(lines)
     criteria = {k: {} for k in SECTION_HINTS}
@@ -762,6 +1226,7 @@ def extract(lines):
     in_table_61 = False
     in_table_63 = False
     table_63_page = None  # U3: only accept Table 6.3 rows from the block page
+    pending_61 = None  # C1: range head awaiting span on following line
     in_config = {k: False for k in CONFIG_ANCHORS}
 
     for ln in lines:
@@ -791,6 +1256,12 @@ def extract(lines):
                         in_table_109 = True
                         in_table_63 = False
                         current = "storm"
+                elif clause == "Table 5.3":
+                    # B1: head-loss table lives under PW criteria (p.73)
+                    if not in_table_109:
+                        current = "potable_water"
+                        in_table_61 = False
+                        in_table_63 = False
                 elif clause == "Table 6.1":
                     if in_table_109:
                         pass  # V1: keep storm table open across repeated headers
@@ -835,22 +1306,57 @@ def extract(lines):
 
         bucket = criteria[current]
 
-        # PW §5.3 structured criteria (force section on §5.3.x sub-clauses).
+        # PW §5.3 / §5.5 structured criteria (force section on §5.3.x / §5.5.x).
         # V1: require section lookbehind so lengths like "25.30" do not match "5.3",
         # and never steal the cursor while Table 10.9 is open.
         if (
             not in_table_109
             and current != "sewer"
-            and re.search(rf"(?:§\s*)?{_SEC}5\.3(?:\.\d+)?\b", text)
+            and re.search(rf"(?:§\s*)?{_SEC}5\.[35](?:\.\d+)?\b", text)
         ):
             current = "potable_water"
             bucket = criteria[current]
         if current == "potable_water":
             _extract_pw_criteria(bucket, text, page)
+        if current == "sewer":
+            _extract_sewer_criteria(bucket, text, page)
+        if current == "storm":
+            # Declared storm return / cover for W8 equal checks (B1 p.130–131)
+            rp = re.search(
+                r"(\d+)\s*[- ]?year\s+return\s+period|"
+                r"(?:return\s+period|design\s+storm)[^0-9]{0,40}(\d+)\s*(?:[- ]?year|yr)",
+                text, re.I,
+            )
+            if rp:
+                yr = float(next(g for g in rp.groups() if g is not None))
+                if _plausible("return_period_yr", yr):
+                    bucket.setdefault("return_period_yr", {
+                        "value": int(yr), "page": page, "text": text[:240],
+                        "clause": "§10.2", "as_written": text[:160].strip(),
+                    })
+            # "Soil cover above top of pipe shall not be less than 1.2m" (p.131)
+            sc = re.search(
+                r"(?:soil\s+)?cover[^0-9]{0,80}"
+                r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|"
+                r"minimum(?:\s+of)?|≥|>=|:)?\s*(\d+(?:\.\d+)?)\s*m\b|"
+                r"(?:min(?:imum)?\s+)?cover[^0-9]{0,40}(\d+(?:\.\d+)?)\s*m\b",
+                text, re.I,
+            )
+            if sc:
+                val = float(next(g for g in sc.groups() if g is not None))
+                if _plausible("cover_m", val):
+                    bucket.setdefault("cover_m", {
+                        "value": val, "page": page, "text": text[:240],
+                        "clause": "§10.2.7" if re.search(r"10\.2\.7", text) else "§10.2",
+                        "as_written": text[:160].strip(),
+                    })
 
         for key, rx in CRITERION_PATTERNS:
             m = rx.search(text)
             if not m:
+                continue
+            # A2: never write storm cover/max_depth from generic patterns (misread risk)
+            if current == "storm" and key in ("cover_m", "max_depth_m"):
                 continue
             if current == "potable_water" and key in (
                 "valve_spacing_m", "cover_m", "hw_c", "min_diameter_mm",
@@ -908,64 +1414,42 @@ def extract(lines):
                     "clause": "§5.5.1",
                 })
 
-        # Table 6.1 — MH spacing by diameter range (T3 / U3: all 5 rows)
+        # Table 6.1 — MH spacing by diameter range (C1: spaced hyphen + parenthetical span)
         if in_table_61 and current == "sewer":
             if re.search(r"Table\s*6\.3\b", text, re.I):
                 in_table_61 = False
                 in_table_63 = True
                 table_63_page = page
+                pending_61 = None
             else:
                 matched = False
+                # Continue a prior "1200 and above" / "150 - 200" head with span on this line
+                if pending_61 is not None:
+                    sm = TABLE_61_SPAN_ONLY.match(text)
+                    if sm:
+                        span = float(sm.group("span"))
+                        if 20 <= span <= 400:
+                            row = dict(pending_61)
+                            row["mh_spacing_m"] = span
+                            row["page"] = page
+                            row["text"] = f"{row.get('text', '')} {sm.group(0)}".strip()
+                            key = (row.get("diameter_min_mm"), row.get("diameter_max_mm"),
+                                   row["diameter_mm"], span)
+                            if not any(
+                                (r.get("diameter_min_mm"), r.get("diameter_max_mm"),
+                                 r["diameter_mm"], r["mh_spacing_m"]) == key
+                                for r in mh_spacing_table
+                            ):
+                                mh_spacing_table.append(row)
+                            matched = True
+                            pending_61 = None
+                    else:
+                        pending_61 = None  # abandoned incomplete head
                 for m in TABLE_61_RANGE.finditer(text):
                     span = float(m.group("span"))
                     if not (20 <= span <= 400):
                         continue
-                    op = (m.group("op") or "").strip()
-                    if m.group("single"):
-                        d0 = float(m.group("single"))
-                        d_min = d_max = None
-                        if op in ("≥", ">=", ">"):
-                            d_min = d0
-                        elif op in ("≤", "<=", "<"):
-                            d_max = d0
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": d_min,
-                            "diameter_max_mm": d_max,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    elif m.group("upto"):
-                        d0 = float(m.group("upto"))
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": None,
-                            "diameter_max_mm": d0,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    elif m.group("above"):
-                        d0 = float(m.group("above"))
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": d0,
-                            "diameter_max_mm": None,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    else:
-                        lo, hi = float(m.group("lo")), float(m.group("hi"))
-                        row = {
-                            "diameter_mm": lo,
-                            "diameter_min_mm": lo,
-                            "diameter_max_mm": hi,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
+                    row = _table_61_row_from_match(m, span, page)
                     key = (row.get("diameter_min_mm"), row.get("diameter_max_mm"),
                            row["diameter_mm"], span)
                     if any(
@@ -977,20 +1461,25 @@ def extract(lines):
                     mh_spacing_table.append(row)
                     matched = True
                 if not matched:
-                    for m in TABLE_61_SIMPLE.finditer(text):
-                        d = float(m.group("d"))
-                        span = float(m.group("span"))
-                        if not (100 <= d <= 2000 and 20 <= span <= 400):
-                            continue
-                        if any(r.get("diameter_mm") == d and r.get("diameter_min_mm") is None
-                               for r in mh_spacing_table):
-                            continue
-                        mh_spacing_table.append({
-                            "diameter_mm": d,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        })
+                    head = TABLE_61_RANGE_HEAD.search(text)
+                    if head:
+                        pending_61 = _table_61_row_from_match(head, None, page)
+                        pending_61["text"] = head.group(0).strip()
+                    else:
+                        for m in TABLE_61_SIMPLE.finditer(text):
+                            d = float(m.group("d"))
+                            span = float(m.group("span"))
+                            if not (100 <= d <= 2000 and 20 <= span <= 400):
+                                continue
+                            if any(r.get("diameter_mm") == d and r.get("diameter_min_mm") is None
+                                   for r in mh_spacing_table):
+                                continue
+                            mh_spacing_table.append({
+                                "diameter_mm": d,
+                                "mh_spacing_m": span,
+                                "page": page,
+                                "text": m.group(0),
+                            })
 
         # Table 6.3 — mm/m both columns; only from the Table 6.3 block page (U3)
         if current in ("sewer", "storm"):
@@ -1129,6 +1618,18 @@ def main(argv=None):
         lines = lines_of(spans)
         (criteria, grads, storm_pipes, totals, declared_tables,
          storm_109, mh_61, toc_pages) = extract(lines)
+        # D1: prefer span-geometry Table 6.1 when the real skill-2 layout is present
+        mh_from_spans = extract_table_61_from_spans(spans)
+        if mh_from_spans:
+            # Prefer spans when they recover more rows (or any when text path missed 150–200 / 1200+)
+            text_spans = {
+                float(r["mh_spacing_m"]) for r in mh_61 if r.get("mh_spacing_m") is not None
+            }
+            span_spans = {
+                float(r["mh_spacing_m"]) for r in mh_from_spans if r.get("mh_spacing_m") is not None
+            }
+            if len(mh_from_spans) >= len(mh_61) or span_spans - text_spans:
+                mh_61 = mh_from_spans
         doc = {
             "criteria_version": "1.0",
             "source": {"path": str(path), "kind": "skill2_pdf_json"},

@@ -1,4 +1,4 @@
-"""Skill 11 0.1.0 — synthetic T11-1…T11-6 (SPC-0006 Rev Q §4.19 phase A).
+"""Skill 11 0.1.1 — synthetic T11-1…T11-6 + DQ-7a / W3 crown / W8 (SPC-0006 Rev Q §4.19).
 
 No real project data. Synthetic fixture uses the real OpenFlows table/column names
 (HMIModelingElement / Conduit / …), not invented Elements/Physical (R1).
@@ -104,6 +104,13 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
           DomainElementID INTEGER, AlternativeID INTEGER,
           HMIGeometryScaledLength REAL,
           HMIRealGeometry BLOB,
+          HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIRealGeometry BLOB,
+          HMIGeometry BLOB,
           PRIMARY KEY (DomainElementID, AlternativeID)
         );
         CREATE TABLE GravityLinkBase_Physical_Data (
@@ -182,8 +189,8 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                 (1000.0 + eid * 10 + L_m / FT, 2000.0),
             ])
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
-                (eid, alt, L_m / FT, wkb),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb, None),
             )
             c.execute(
                 "INSERT OR IGNORE INTO BaseIdahoNode_Physical_Data VALUES (?, ?, ?)",
@@ -229,8 +236,8 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                     little=False, with_z=True,
                 )
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
-                (eid, alt, L_m / FT, wkb),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb, None),
             )
             c.execute(
                 "INSERT INTO GravityLinkBase_Physical_Data VALUES (?, ?, ?, ?)",
@@ -1002,12 +1009,12 @@ def test_t11_criteria_reader(tmp_path):
                 "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
                 "House connections minimum diameter 160 mm\n"
                 "Table 6.1 Manhole spacing\n"
-                # V4: hyphen range + "1200 and above" wording from real report
+                # C1: spaced ASCII hyphen; 1200 value continues after parenthetical
                 "150 - 200 → 100\n"
                 "300 – 500: 120 m\n"
                 "600 – 800: 160 m\n"
                 "≤ 1000: 200 m\n"
-                "1200 and above → 300\n"
+                "1200 and above → 300 (in agreement with ER manhole spacing)\n"
                 "Table 6.3 Minimum gradients mm/m\n"
                 "200: 5.00 / 3.20\n"
                 "300: 3.50 / 2.50\n"
@@ -1089,8 +1096,12 @@ def test_t11_criteria_reader(tmp_path):
     hl = pw["head_loss_table"]
     assert abs(hl["lt_600_mm_m_per_km"] - 20) < 1e-9
     assert abs(hl["d_600_to_1000_m_per_km"] - 10) < 1e-9
-    # U3/V4 Tables 6.1 (5 rows incl. 150-200 + 1200 and above) / 6.3 1200+
-    assert len(doc["mh_spacing_table"]) >= 5
+    # C1: Table 6.1 all 5 rows — spacing 100 / 120 / 160 / 200 / 300
+    spans = sorted(float(r["mh_spacing_m"]) for r in doc["mh_spacing_table"]
+                   if r.get("mh_spacing_m") is not None)
+    assert spans[:5] == [100.0, 120.0, 160.0, 200.0, 300.0] or set(spans) >= {
+        100.0, 120.0, 160.0, 200.0, 300.0
+    }, doc["mh_spacing_table"]
     assert any(abs(r["mh_spacing_m"] - 100) < 0.5
                and r.get("diameter_min_mm") == 150
                and r.get("diameter_max_mm") == 200
@@ -1137,19 +1148,112 @@ def test_t11_criteria_reader(tmp_path):
     assert total_109_km > 0.3  # synthetic subset; real ≈ 6.07 km
 
 
-def test_t11_params_declared_not_er():
-    """R6: sewer cover and water min D are declared, not ER; water cover stays ER advisory."""
+def _span(text, x0, y0, *, w=None, h=8.0):
+    """Skill-2 word span; bbox [x0,y0,x1,y1] in pt (D1 re-review 3 §3)."""
+    width = w if w is not None else max(len(text) * 3.5, 4.0)
+    return {"text": text, "bbox": [x0, y0, x0 + width, y0 + h]}
+
+
+def test_t11_d1_table_61_from_real_skill2_spans(tmp_path):
+    """D1: Table 6.1 from exact skill-2 span coordinates (re-review 3 §3, page 77)."""
+    # Coordinates copied from S35-PR29-skill11-0.1.1-rereview3.md §3.
+    # Row 5 value sits 5 pt above the label (y 168.5 vs 173.8) at x 249.2.
+    # Hyphen on row 1 is its own span 3.5 pt lower (y 109.4 vs 105.9).
+    words = [
+        # Anchors: header above rows, TABLE 6.1 caption below
+        _span("Maximum Manhole Spacing (m)", 200.0, 95.0, w=180),
+        # Row 1
+        _span("150", 129.6, 105.9),
+        _span("-", 144.2, 109.4, w=4),
+        _span("200", 148.5, 105.9),
+        _span("100", 383.3, 105.9),
+        # Row 2
+        _span("300-500", 130.4, 121.6, w=40),
+        _span("120", 383.3, 121.6),
+        # Row 3
+        _span("600-800", 130.7, 137.3, w=40),
+        _span("160", 383.3, 137.3),
+        # Row 4
+        _span("Up", 127.0, 153.1),
+        _span("to", 137.0, 153.1),
+        _span("1000", 146.7, 153.0),
+        _span("200", 382.6, 153.0),
+        # Row 5 — label y 173.8; wrapped value y 168.5 / x 249.2
+        _span("1200", 129.6, 173.8),
+        _span("and", 148.0, 173.8),
+        _span("above", 165.0, 173.8),
+        _span("300", 249.2, 168.5),
+        _span("(in", 265.0, 168.5),
+        _span("agreement", 280.0, 168.5, w=50),
+        _span("…)", 330.0, 168.5),
+        _span("TABLE 6.1", 120.0, 190.0, w=60),
+    ]
+    src = write(tmp_path / "report.pdf.json", {
+        "pages": [{"page": 77, "words": words}],
+    })
+    out = tmp_path / "criteria.json"
+    rc, msg = run("read_wet_criteria.py", "--text", src, "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    mh = doc["mh_spacing_table"]
+    spans = sorted(float(r["mh_spacing_m"]) for r in mh)
+    assert spans == [100.0, 120.0, 160.0, 200.0, 300.0], mh
+    r150 = next(
+        r for r in mh
+        if r.get("diameter_min_mm") == 150 and r.get("diameter_max_mm") == 200
+    )
+    assert abs(r150["mh_spacing_m"] - 100) < 0.5
+    assert "150" in r150["text"] and "200" in r150["text"]
+    r1200 = next(
+        r for r in mh
+        if r.get("diameter_min_mm") == 1200 or abs(float(r["diameter_mm"]) - 1200) < 0.5
+    )
+    assert abs(r1200["mh_spacing_m"] - 300) < 0.5
+
+    # W8 quotes 150–200 → 100 m for sewer MH spacing
+    criteria = {
+        "criteria": {"sewer": {}},
+        "mh_spacing_table": mh,
+        "gradient_tables": {"sewer": []},
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path / "w8", _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    w8 = [
+        f for f in cand["findings"]
+        if f["issue_type"] == "inconsistency" and "mh spacing" in f["title"].casefold()
+    ]
+    assert w8, cand["findings"]
+    stmt = w8[0]["statement"]
+    assert "150" in stmt and "200" in stmt and "100" in stmt, stmt
+
+
+def test_t11_params_source_tiers_dq7a():
+    """DQ-7a: every governing threshold has source_tier / source / value; crown from CMP."""
     p = load(REF / "params.json")
-    assert "cover_m" not in (p["er"].get("sewer") or {})
-    assert "min_diameter_mm" not in (p["er"].get("water") or {})
-    assert p["er"]["water"]["cover_m"] == 1.2
-    assert p["er"]["water"].get("cover_advisory") is True
-    assert p["declared"]["sewer"]["source"] == "declared"
-    assert p["declared"]["sewer"]["cover_m"] == 1.0
-    assert "6.3.3" in p["declared"]["sewer"]["clause"]
-    assert p["declared"]["water"]["source"] == "declared"
-    assert p["declared"]["water"]["min_diameter_mm"] == 110
-    assert "5.3.7" in p["declared"]["water"]["clause"]
+    thr = p["thresholds"]
+    for key, row in thr.items():
+        assert "source_tier" in row, key
+        assert 1 <= int(row["source_tier"]) <= 5, key
+        assert row.get("source"), key
+        # other-D gradient may be null until CMP confirmed [GAP]
+        if key != "sewer.min_slope_pct.other":
+            assert row.get("value") is not None, key
+    assert thr["sewer.cover_to_crown_m"]["value"] == 1.2
+    assert thr["sewer.cover_to_crown_m"]["source_tier"] == 1
+    assert "CMP Q185" in thr["sewer.cover_to_crown_m"]["source"]
+    assert thr["sewer.max_depth_to_crown_m"]["value"] == 6.0
+    assert thr["water.valve_spacing_m"]["value"] == 500
+    assert thr["water.pressure_min_bar"].get("approx") is True
+    assert p["er"]["sewer"]["cover_to_crown_m"] == 1.2
+    assert p["er"]["sewer"]["max_depth_to_crown_m"] == 6.0
+    assert p["declared"]["sewer"]["cover_m"] == 1.0  # soffit — W8 only
+    assert p["declared"]["sewer"]["source_tier"] == 5
+    assert "W8" in p["phase_scope"]
+    assert len(p["same_tier_alternatives"]) >= 4
+    assert len(p["w8_comparisons"]) >= 8
 
 
 def test_t11_wet_layers_agreed_real_names():
@@ -1224,8 +1328,8 @@ def test_t11_w1_missing_storm_model(tmp_path):
     assert calc
 
 
-def test_t11_w3_declared_cover_and_w5_declared_min_d(tmp_path):
-    """R6: W3 cover uses declared 1.0 m; W5 min D uses declared 110 mm."""
+def test_t11_w3_crown_cover_cmp_and_w5_declared_min_d(tmp_path):
+    """DQ-7a: W3 crown cover uses CMP 1.2 m; 0.8 → Minor; W5 min D stays declared 110."""
     sewer = {
         "networks_version": "1.0",
         "network": "sewer",
@@ -1252,8 +1356,12 @@ def test_t11_w3_declared_cover_and_w5_declared_min_d(tmp_path):
     cover = [r for r in cons["comparisons"]
              if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
              and r["result"] == "flag"]
-    assert cover and cover[0]["values"].get("source") == "declared"
-    assert any("6.3.3" in f["statement"] for f in cand["findings"])
+    assert cover and "CMP Q185" in str(cover[0]["values"].get("source"))
+    assert cover[0]["severity"] == "Minor"
+    assert any(
+        "allowed to 0.5 m if protected" in f["statement"].casefold()
+        for f in cand["findings"]
+    )
 
     water = {
         "networks_version": "1.0",
@@ -1287,5 +1395,621 @@ def test_skill_md_under_500_and_frontmatter():
     assert text.startswith("---\n")
     assert len(text.splitlines()) < 500
     assert 'name: reviewing-wet-utilities' in text
-    assert 'version: "0.1.0"' in text
+    assert 'version: "0.1.1"' in text
     assert "WUT" in text
+    assert "DQ-7a" in text or "source_tier" in text or "W8" in text
+
+
+PRESENCE_OK = {
+    "networks": {
+        "sewer": {"plan": True, "model": True},
+        "water": {"plan": True, "model": True},
+        "irrigation": {"plan": True, "model": True},
+        "storm": {"plan": True, "model": True},
+    },
+    "hydraulic_calculations": True,
+}
+
+
+def _sewer_net(cover, *, slope=0.5, length=40.0, d_mm=200):
+    return {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "C1", "element_id": 1, "source": "model", "network": "sewer",
+            "diameter_mm": d_mm, "length_m": length,
+            "invert_start_m": 100.0,
+            "invert_stop_m": 100.0 - length * slope / 100.0,
+            "slope_pct": slope, "cover_m": cover,
+            "start_node_id": 1, "stop_node_id": 2,
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": length / 1000.0},
+        "plan": [],
+    }
+
+
+def test_t11_source_tier_wins(tmp_path):
+    """DQ-7a: governing = lowest source_tier (CMP/ER tier 1 over declared tier 5)."""
+    sys.path.insert(0, str(SK))
+    from wet_common import governing_threshold, load_params
+    params = load_params(REF / "params.json")
+    cover = governing_threshold(params, "sewer.cover_to_crown_m")
+    assert cover and cover["source_tier"] == 1 and abs(cover["value"] - 1.2) < 1e-9
+    assert "CMP" in cover["source"]
+    depth = governing_threshold(params, "sewer.max_depth_to_crown_m")
+    assert depth and depth["source_tier"] == 1 and abs(depth["value"] - 6.0) < 1e-9
+    # Declared soffit 1.0 must not govern W3
+    cons, _, _ = check(tmp_path, _sewer_net(1.05), presence=PRESENCE_OK)
+    cover_rows = [r for r in cons["comparisons"]
+                  if r["check"] == "W3" and str(r["quantity"]).startswith("cover")]
+    assert cover_rows and cover_rows[0]["result"] == "flag"
+    assert abs(cover_rows[0]["values"]["min_m"] - 1.2) < 1e-9
+
+
+def test_t11_er_over_differing_cmp_observation(tmp_path):
+    """Same-tier CMP≠ER → Observation findings (DQ-15 style); ER remains governing."""
+    _cons, cand, _ = check(tmp_path, _sewer_net(1.5), presence=PRESENCE_OK)
+    alts = [
+        f for f in cand["findings"]
+        if f["issue_type"] == "er_ambiguity"
+        and ("same-tier" in f["statement"].casefold() or "Same-tier" in f["title"])
+        and "CMP" in f["statement"]
+    ]
+    assert len(alts) >= 4, [f["title"] for f in cand["findings"] if f["issue_type"] == "er_ambiguity"]
+    assert all(f["severity"] == "Observation" for f in alts)
+    # Governing MH spacing still ER 80 (not CMP 100–200)
+    cons2, _cand2, _ = check(tmp_path / "mh", _sewer_net(1.5, length=80.02), presence=PRESENCE_OK)
+    sp = [r for r in cons2["comparisons"]
+          if r["check"] == "W3" and str(r["quantity"]).startswith("mh_spacing")
+          and r["result"] == "flag"]
+    assert sp and abs(sp[0]["values"]["max_m"] - 80) < 1e-9
+
+
+def test_t11_w8_equal_stricter_weaker(tmp_path):
+    """W8: equal → no finding; stricter → Observation; weaker → Minor Confirmed."""
+    criteria = {
+        "criteria": {
+            "potable_water": {
+                "pressure_min_bar": {
+                    "value": 1.50, "page": 72, "clause": "§5.3", "text": "1.50 bars",
+                    "as_written": "Minimum residual pressure 1.50 bars",
+                },
+                "valve_spacing_m": {
+                    "value": 1000, "page": 72, "clause": "§5.3.11", "text": "1000 m",
+                },
+                "max_velocity_ms": {
+                    "value": 2.0, "page": 72, "clause": "§5.3", "text": "2.0 m/s",
+                },
+                "head_loss_table": {
+                    "lt_600_mm_m_per_km": 20, "page": 72, "clause": "Table 5.3",
+                    "as_written": "Head loss <600 mm: 20 m/km",
+                },
+                "fire_residual_bar": {
+                    "value": 1.40, "page": 63, "clause": "§5.5", "text": "1.40 bars",
+                    "as_written": "residual pressure at the fire hydrants shall not be less than 1.40 bars",
+                },
+            },
+            "sewer": {
+                "cover_m": {"value": 1.0, "page": 64, "clause": "§6.3.3", "note": "soffit"},
+                "max_depth_m": {
+                    "value": {"min": 8.0, "max": 10.0},
+                    "min_m": 8.0, "max_m": 10.0,
+                    "page": 64, "clause": "§6.3",
+                },
+                "d_over_d_max": {"value": 0.70, "page": 64, "clause": "§6.3"},
+            },
+            "storm": {
+                "return_period_yr": {"value": 10, "page": 100, "clause": "§10.2"},
+                "cover_m": {"value": 1.2, "page": 100, "clause": "§10.2"},
+            },
+        },
+        "mh_spacing_table": [{
+            "diameter_mm": 150, "diameter_min_mm": 150, "diameter_max_mm": 200,
+            "mh_spacing_m": 100, "page": 64, "text": "150-200 → 100",
+        }],
+        "gradient_tables": {
+            "sewer": [{
+                "diameter_mm": 200, "min_slope_mm_per_m": 5.0,
+                "min_slope_pct": 0.50, "page": 64, "text": "200: 5.00 / 3.20",
+            }],
+        },
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path, _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    w8 = [f for f in cand["findings"] if f["issue_type"] == "inconsistency"
+          and "governing" in f["statement"].casefold()]
+    titles = " | ".join(f["title"] for f in w8)
+    stmts = " | ".join(f["statement"] for f in w8)
+    # weaker
+    assert any("pressure" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("head loss" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("isolation" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("fire residual" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("mh spacing" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("cover" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    assert any("max depth" in f["title"].casefold() and "weaker" in f["statement"]
+               for f in w8), titles
+    # stricter
+    assert any("d/d" in f["title"].casefold() and "stricter" in f["statement"]
+               for f in w8), titles
+    assert all(
+        f["severity"] == ("Observation" if "stricter" in f["statement"] else "Minor")
+        and f["proposed_status"] == "Confirmed"
+        for f in w8
+    )
+    # equal / inside range → no finding
+    assert "max velocity" not in titles.casefold()
+    assert "min gradient 200" not in titles.casefold()
+    assert "return period" not in titles.casefold()
+    assert "storm cover" not in titles.casefold()
+    # A2: quote declared as written with parsed number in [brackets]
+    assert any(
+        "1.50 bars" in f["statement"] and "[1.5" in f["statement"]
+        for f in w8 if "pressure" in f["title"].casefold()
+    ), stmts
+    assert any(
+        "[" in f["statement"] and "]" in f["statement"] for f in w8
+    ), stmts
+    # pass rows for equals
+    eq = [r for r in cons["comparisons"]
+          if r["check"] == "W8" and r["result"] == "pass"
+          and r["values"].get("relation") == "equal"]
+    assert any(r["values"].get("criterion") == "pw_velocity_max" for r in eq)
+    assert any(r["values"].get("criterion") == "sewer_min_grad_200" for r in eq)
+    assert any(r["values"].get("criterion") == "storm_cover" for r in eq)
+    assert "1.50" in stmts and "~3.5" in stmts or "3.5" in stmts
+
+
+def test_t11_w8_range_edge(tmp_path):
+    """Declared value on governing range edge counts as equal (no W8 finding)."""
+    criteria = {
+        "criteria": {
+            "potable_water": {
+                "max_velocity_ms": {"value": 3.0, "page": 1, "clause": "§5.3"},
+            },
+        },
+        "gradient_tables": {"sewer": []},
+        "mh_spacing_table": [],
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path, _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    assert not any(
+        "max velocity" in f["title"].casefold() and "governing" in f["statement"].casefold()
+        for f in cand["findings"]
+    )
+    row = next(
+        r for r in cons["comparisons"]
+        if r["check"] == "W8" and r["values"].get("criterion") == "pw_velocity_max"
+    )
+    assert row["result"] == "pass" and row["values"]["relation"] == "equal"
+
+
+def test_t11_w3_crown_cover_1_19_and_0_49(tmp_path):
+    """Crown cover 1.19 → Minor; 0.49 → Major (CMP Q185)."""
+    cons119, cand119, _ = check(
+        tmp_path / "c119", _sewer_net(1.19), presence=PRESENCE_OK,
+    )
+    c119 = [r for r in cons119["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
+            and r["result"] == "flag"]
+    assert c119 and c119[0]["severity"] == "Minor"
+    assert any("protected — confirm" in f["statement"] for f in cand119["findings"])
+
+    cons049, cand049, _ = check(
+        tmp_path / "c049", _sewer_net(0.49), presence=PRESENCE_OK,
+    )
+    c049 = [r for r in cons049["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("cover")
+            and r["result"] == "flag"]
+    assert c049 and c049[0]["severity"] == "Major"
+    assert any("protected minimum" in f["title"].casefold() for f in cand049["findings"])
+
+
+def test_t11_w3_depth_6_00_and_6_02(tmp_path):
+    """Depth to crown 6.00 pass; 6.02 Major (max 6.0 + 0.01 tol)."""
+    cons600, _, _ = check(tmp_path / "d600", _sewer_net(6.00), presence=PRESENCE_OK)
+    d600 = [r for r in cons600["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")]
+    assert d600 and d600[0]["result"] == "pass"
+
+    cons602, cand602, _ = check(tmp_path / "d602", _sewer_net(6.02), presence=PRESENCE_OK)
+    d602 = [r for r in cons602["comparisons"]
+            if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")
+            and r["result"] == "flag"]
+    assert d602 and d602[0]["severity"] == "Major"
+    assert any(
+        f["issue_type"] == "design_error" and "depth to crown" in f["title"].casefold()
+        and "CMP" in (f["reference"].get("source_doc") or "")
+        for f in cand602["findings"]
+    )
+
+
+def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
+    """B1: read Table 5.3 / fire 1.40 / d/D 0.7 / storm 10-yr+1.2 / sewer soffit sentence."""
+    text = {
+        "pages": [{
+            "page": 73,
+            "text": (
+                "Table 5.3 Head loss gradients\n"
+                "1000 > D ≥ 600 → 10\n"
+                "D < 600 → 20\n"
+            ),
+        }, {
+            "page": 75,
+            "text": (
+                "§5.5 Fire fighting\n"
+                "The system shall maintain a pressure of 1.40 bar at each fire hydrant "
+                "during the fire scenario.\n"
+            ),
+        }, {
+            "page": 77,
+            "text": (
+                "Sewer network design criteria §6.3\n"
+                "§6.3.3 Where the depth of the pipe soffit is less than 1.0m, "
+                "the pipeline should be protected with special measures.\n"
+                "Maximum depth 8 – 10 m\n"
+            ),
+        }, {
+            "page": 78,
+            "text": (
+                "§6.3.6 The design depth of flow shall not exceed 0.7 (70%) of the "
+                "pipe diameters at peak flow.\n"
+            ),
+        }, {
+            "page": 130,
+            "text": (
+                "Storm water drainage §10.2\n"
+                "The network is designed for the 10-year return period storm event. "
+                "In addition, a 20% climate change allowance is applied.\n"
+                # A2: misreads that must NOT become storm cover_m / max_depth_m
+                "Sheet cover reference 3512 m easting noise\n"
+                "maximum depth of channel 30 m in the catchment description\n"
+            ),
+        }, {
+            "page": 131,
+            "text": (
+                "§10.2.7 Soil cover above top of pipe shall not be less than 1.2m, "
+                "otherwise pipe shall be encased in concrete.\n"
+            ),
+        }],
+    }
+    src = write(tmp_path / "report.pdf.json", text)
+    out = tmp_path / "criteria.json"
+    rc, msg = run("read_wet_criteria.py", "--text", src, "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    pw = doc["criteria"]["potable_water"]
+    hl = pw.get("head_loss_table") or {}
+    assert abs(float(hl.get("lt_600_mm_m_per_km")) - 20) < 1e-9, hl
+    assert abs(float(hl.get("d_600_to_1000_m_per_km")) - 10) < 1e-9, hl
+    assert hl.get("page") == 73
+    fr = pw.get("fire_residual_bar")
+    assert fr and abs(float(fr["value"]) - 1.40) < 1e-9
+    assert fr.get("page") == 75
+    assert "1.40" in (fr.get("as_written") or "")
+    sewer = doc["criteria"]["sewer"]
+    assert abs(float(sewer["cover_m"]["value"]) - 1.0) < 1e-9
+    assert sewer["cover_m"].get("page") == 77
+    assert "soffit" in (sewer["cover_m"].get("as_written") or "").casefold()
+    assert "protect" in (sewer["cover_m"].get("as_written") or "").casefold()
+    md = sewer["max_depth_m"]
+    assert abs(float(md.get("min_m") or md["value"]["min"]) - 8.0) < 1e-9
+    assert abs(float(md.get("max_m") or md["value"]["max"]) - 10.0) < 1e-9
+    assert abs(float(sewer["d_over_d_max"]["value"]) - 0.70) < 1e-9
+    assert sewer["d_over_d_max"].get("page") == 78
+    storm = doc["criteria"]["storm"]
+    assert storm.get("return_period_yr") and int(storm["return_period_yr"]["value"]) == 10
+    assert storm["return_period_yr"].get("page") == 130
+    assert storm.get("cover_m") and abs(float(storm["cover_m"]["value"]) - 1.2) < 1e-9
+    assert storm["cover_m"].get("page") == 131
+    assert storm.get("max_depth_m") is None  # 30 m rejected
+    assert float(storm["cover_m"]["value"]) != 3512
+
+
+def test_t11_a1_both_ends_cover_depth_report_mh(tmp_path):
+    """A1: both ends checked; finding quotes end + MH label."""
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "C-DEEP", "element_id": 1, "source": "model", "network": "sewer",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 99.8,
+            "slope_pct": 0.5,
+            "cover_start_m": 1.5, "cover_stop_m": 6.24,
+            "cover_m": 6.24,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "MH-3",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole",
+             "depth_to_crown_m": 1.5},
+            {"element_id": 2, "label": "MH-3", "element_type": "manhole",
+             "depth_to_crown_m": 6.24},
+            {"element_id": 3, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    # Link OF for adverse walk completeness
+    networks["conduits"][0]["stop_node_id"] = 2
+    cons, cand, _ = check(tmp_path, networks, presence=PRESENCE_OK)
+    depth_flags = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")
+        and r["result"] == "flag"
+    ]
+    assert depth_flags, cons["comparisons"]
+    assert any(r["values"].get("mh") == "MH-3" and r["values"].get("end") == "stop"
+               for r in depth_flags)
+    assert any(
+        "MH-3" in f["statement"] and "stop end" in f["statement"]
+        for f in cand["findings"] if "depth to crown" in f["title"].casefold()
+    )
+    # Shallow start end still passes cover
+    cover_start = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and r["quantity"] == "cover:C-DEEP:start"
+    ]
+    assert cover_start and cover_start[0]["result"] == "pass"
+
+
+def test_t11_a3_adverse_outfall_only_no_topology_infer(tmp_path):
+    """A3: without Outfall element_type, adverse is not_run (no stops−starts infer)."""
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "b" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "ADV", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 100.10,
+            "slope_pct": -0.25, "cover_m": 1.5,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "MH-2",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            # Topology sink but NOT an Outfall model element
+            {"element_id": 2, "label": "MH-2", "element_type": "manhole"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons, cand, _ = check(tmp_path, networks, presence=PRESENCE_OK)
+    adv_flag = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag"
+    ]
+    assert not adv_flag
+    assert not any("adverse" in f["title"].casefold() for f in cand["findings"])
+    assert any(
+        r["check"] == "W3" and r["quantity"] == "adverse" and r["result"] == "not_run"
+        for r in cons["comparisons"]
+    )
+
+
+def test_t11_a3_adverse_reversed_and_real_rise(tmp_path):
+    """A3 synthetic: reversed-stored downhill → no flag; real rise toward Outfall → 1 flag."""
+    # Reversed-stored: start=outfall, stop=upstream; inverts drop toward outfall
+    rev = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "c" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "REV", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 99.50, "invert_stop_m": 100.00,
+            "slope_pct": -1.25, "cover_m": 1.5,
+            "start_node_id": 2, "stop_node_id": 1,
+            "start_label": "OF-1", "stop_label": "MH-1",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons_rev, cand_rev, _ = check(tmp_path / "rev", rev, presence=PRESENCE_OK)
+    assert not any(
+        r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag" for r in cons_rev["comparisons"]
+    )
+    assert not any("adverse" in f["title"].casefold() for f in cand_rev["findings"])
+
+    rise = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "d" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "RISE", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 100.10,
+            "slope_pct": -0.25, "cover_m": 1.5,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "OF-1",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons_rise, cand_rise, _ = check(tmp_path / "rise", rise, presence=PRESENCE_OK)
+    adv = [
+        r for r in cons_rise["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag"
+    ]
+    assert len(adv) == 1
+    assert sum(1 for f in cand_rise["findings"] if "adverse" in f["title"].casefold()) == 1
+
+
+def test_t11_a4_wkb_srid_z_m_flags(tmp_path):
+    """A4: EWKB type word with Z + SRID flags yields correct E/N (US ft → m)."""
+    import struct
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location("rbs", SK / "read_bentley_sqlite.py")
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Little-endian Point with Z + SRID: type = 1 | 0x80000000 | 0x20000000
+    # Coordinates in US feet ≈ NMAR Co-17 start
+    x_ft, y_ft, z_ft = CO17_START_FT[0], CO17_START_FT[1], 100.0
+    gtype = 1 | 0x80000000 | 0x20000000
+    srid = 32637
+    blob = b"".join([
+        struct.pack("<B", 1),
+        struct.pack("<I", gtype),
+        struct.pack("<i", srid),
+        struct.pack("<3d", x_ft, y_ft, z_ft),
+    ])
+    verts = mod.parse_wkb_vertices_ft(blob)
+    assert len(verts) == 1
+    assert abs(verts[0][0] - x_ft) < 1e-6
+    assert abs(verts[0][1] - y_ft) < 1e-6
+    geo = mod.geometry_from_wkb_ft(blob)
+    assert geo["has_geometry"]
+    assert abs(geo["e_m"] - 657629.4) < 0.1
+    assert abs(geo["n_m"] - 2714320.5) < 0.1
+
+    # ZM + SRID Point
+    gtype_zm = 1 | 0x80000000 | 0x40000000 | 0x20000000
+    blob_zm = b"".join([
+        struct.pack("<B", 1),
+        struct.pack("<I", gtype_zm),
+        struct.pack("<i", srid),
+        struct.pack("<4d", x_ft, y_ft, z_ft, 0.0),
+    ])
+    verts_zm = mod.parse_wkb_vertices_ft(blob_zm)
+    assert len(verts_zm) == 1 and abs(verts_zm[0][0] - x_ft) < 1e-6
+
+
+def test_t11_b2_hmigeometry_fallback_when_real_null(tmp_path):
+    """B2: HMIGeometry 2D point WKB (feet) used when HMIRealGeometry is null."""
+    import sqlite3
+    import struct
+    from importlib.util import spec_from_file_location, module_from_spec
+
+    # O-1 example from S35 re-review (21-byte LE Point, US feet)
+    o1_blob = bytes.fromhex("0101000000764647353e774041c3794264a2fc6041")
+    db = tmp_path / "hmigeom.sqlite"
+    # Minimal OpenFlows sewer with null RealGeometry, filled HMIGeometry
+    conn = sqlite3.connect(db)
+    c = conn.cursor()
+    c.executescript(
+        """
+        CREATE TABLE Alternatives (AlternativeID INTEGER PRIMARY KEY, Label TEXT);
+        CREATE TABLE HMIModelingElement (
+          ElementID INTEGER PRIMARY KEY, Label TEXT, IsDeleted INTEGER DEFAULT 0
+        );
+        CREATE TABLE Conduit (DomainElementID INTEGER PRIMARY KEY);
+        CREATE TABLE Conduit_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER, ConduitDiameter REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE PhysicalLink_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_UpstreamInvert REAL, Physical_DownstreamInvert REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseLink_HMIDataSetTopology_Data (
+          DomainElementID INTEGER PRIMARY KEY,
+          HMITopologyStartNodeID INTEGER, HMITopologyStopNodeID INTEGER
+        );
+        CREATE TABLE BaseLink_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIGeometryScaledLength REAL,
+          HMIRealGeometry BLOB, HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE GravityLinkBase_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_Material TEXT, Physical_ManningsN REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_GroundElevation REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIRealGeometry BLOB, HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE Outfall (DomainElementID INTEGER PRIMARY KEY);
+        """
+    )
+    c.execute("INSERT INTO Alternatives VALUES (1, 'Base')")
+    c.execute("INSERT INTO HMIModelingElement VALUES (101, 'O-1', 0)")
+    c.execute("INSERT INTO HMIModelingElement VALUES (102, 'MH-2', 0)")
+    c.execute("INSERT INTO HMIModelingElement VALUES (1, 'C-1', 0)")
+    c.execute("INSERT INTO Outfall VALUES (101)")
+    c.execute("INSERT INTO Conduit VALUES (1)")
+    c.execute("INSERT INTO BaseLink_HMIDataSetTopology_Data VALUES (1, 101, 102)")
+    c.execute(
+        "INSERT INTO Conduit_Physical_Data VALUES (1, 1, ?)",
+        (200.0 / FT_MM,),
+    )
+    c.execute(
+        "INSERT INTO PhysicalLink_Physical_Data VALUES (1, 1, ?, ?)",
+        (100.0 / FT, 99.8 / FT),
+    )
+    c.execute(
+        "INSERT INTO BaseNode_Physical_Data VALUES (101, 1, ?)", (110.0 / FT,),
+    )
+    c.execute(
+        "INSERT INTO BaseNode_Physical_Data VALUES (102, 1, ?)", (109.5 / FT,),
+    )
+    # Link: RealGeometry null; HMIGeometry = short 2D line from O-1
+    x0, y0 = struct.unpack("<2d", o1_blob[5:21])
+    link_wkb = make_linestring_wkb([(x0, y0), (x0 + 10.0, y0)], little=True)
+    c.execute(
+        "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (1, 1, ?, NULL, ?)",
+        (40.0 / FT, link_wkb),
+    )
+    c.execute(
+        "INSERT INTO GravityLinkBase_Physical_Data VALUES (1, 1, 'PVC', 0.013)",
+    )
+    # Node O-1: RealGeometry null; HMIGeometry = 21-byte point
+    c.execute(
+        "INSERT INTO BaseNode_HmiDataSetGeometry_Data VALUES (101, 1, NULL, ?)",
+        (o1_blob,),
+    )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "networks.json"
+    rc, msg = run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
+                  "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    o1 = next(n for n in doc["nodes"] if n.get("label") == "O-1")
+    assert o1.get("has_geometry")
+    assert abs(o1["e_m"] - 657820.71) < 0.05, o1
+    assert abs(o1["n_m"] - 2714549.75) < 0.05, o1
+    c1 = next(c for c in doc["conduits"] if c.get("id") == "C-1")
+    assert c1.get("has_geometry")
+    assert abs(c1["e_m"] - 657820.71) < 0.05, c1

@@ -8,22 +8,24 @@ description: >-
   reviews STO / SWN / PWT / IRR plans or SewerGEMS / WaterGEMS models for
   WUT-0xx / WUT-1xx wet-utility checks.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   spec: "SPC-0006 Rev Q §4.19"
 ---
 
 # Reviewing wet utilities
 
 This skill checks the **own design of each wet network** in one submittal against
-(a) the Employer's Requirements (connected 83-page edition) and Parsons' declared
-criteria where the ER is silent, and (b) report ↔ model ↔ drawing agreement.
-The scripts do the work. Run them in order, read their one-line JSON results and
-report. Do not re-do a check by hand, do not read the scripts' source, and never
-edit a result file.
+(a) the Employer's Requirements / CMP (connected 83-page edition) and Parsons'
+declared criteria where the ER is silent, and (b) report ↔ model ↔ drawing
+agreement. The scripts do the work. Run them in order, read their one-line JSON
+results and report. Do not re-do a check by hand, do not read the scripts'
+source, and never edit a result file.
 
-**Phase A (0.1.0):** **W1**, **W2**, **W3**, **W5-geometry**, **W6-plan / report
-table**. Out of this version: W4, W5 hydraulics, W7, W8, `wntr` recompute, binary
-`.out` decoders (phase B).
+**0.1.1 (DQ-7a):** **W1**, **W2**, **W3**, **W5-geometry**, **W6-plan / report
+table**, **W8** (declared vs governing). Every threshold in
+`references/params.json` carries `source_tier` (1–5), `source`, and `value`;
+governing = lowest tier that supplies a value. Out of this version: W4, W5
+hydraulics, W7, `wntr` recompute, binary `.out` decoders.
 
 Rules covered (report only until DQ-11): **WUT-001…049** presence / design,
 **WUT-1xx** consistency — cited in finding text only. Agent code `WUT`. Owner
@@ -46,18 +48,24 @@ Packages: Python 3.11+, `ezdxf`, `jsonschema` (stdlib `sqlite3` for models).
    (DQ-6). Map layers through `references/wet_layers.json` (per site). Do not
    invent layer→utility mappings mid-run.
 3. Read declared criteria with `read_wet_criteria.py` on skill-2 `*.pdf.json`
-   (skill 10 pattern). ER thresholds live in `references/params.json` (DQ-7 /
-   DQ-14). Do not put deposited rulebook numbers into Git.
-4. W3–W6 compare against the **ER** first; Parsons' declared values only where
-   the ER is silent. W8 (declared weaker than ER) is inactive until the WUT
-   table is approved (DQ-10) — not in phase A.
-5. W6 applies Table 7-8 / 7-11 and §7.5.7–7.5.8; ER storm conflicts are
+   (skill 10 pattern). Thresholds live in `references/params.json` with DQ-7a
+   source tiers. Do not put deposited rulebook numbers into Git.
+4. W3–W6 compare against the **governing** threshold (lowest source_tier). Same-
+   tier CMP≠ER alternatives are **Observation** findings (DQ-15 style). W8
+   compares each declared (tier 5) criterion with governing: Observation if
+   declared stricter, Minor if weaker; Confirmed; no finding when equal / inside
+   range.
+5. W3 crown cover / depth to crown = `GL−(IL+D)` (stored as `cover_m`). Cover
+   < 1.2 m → Minor ("allowed to 0.5 m if protected — confirm"); < 0.5 m → Major.
+   Depth > 6.0 + 0.01 m → Major (CMP Q185).
+6. W6 applies Table 7-8 / 7-11 and §7.5.7–7.5.8; ER storm conflicts are
    **Observation** findings (DQ-13 / DQ-15).
-6. Severity (DQ-12): pressure / fire / min gradient / adverse / MH spacing =
-   Major; cover, diameter labels, report-vs-model = Minor.
-7. Status: DWG label vs model value → Confirmed (unless PDF status_cap); model-
-   only geometry → Probable.
-8. Write outputs only under the context / evidence folders. Submittal folders are
+7. Severity (DQ-12): pressure / fire / min gradient / adverse / MH spacing /
+   max depth = Major; cover, diameter labels, report-vs-model, declared-weaker =
+   Minor.
+8. Status: DWG label vs model value → Confirmed (unless PDF status_cap); model-
+   only geometry → Probable; W8 text → Confirmed.
+9. Write outputs only under the context / evidence folders. Submittal folders are
    read-only. Never commit real project data.
 
 ## Procedure (plan → read → check → verify)
@@ -76,9 +84,10 @@ Packages: Python 3.11+, `ezdxf`, `jsonschema` (stdlib `sqlite3` for models).
    `python "<SK>/read_network_plan.py" --dxf "<SWN-10000>.dxf" --site <SITE> --network sewer --merge-networks "<EV>/networks.json" --out "<EV>/networks.json"`
 4. **Read — criteria** (skill-2 PDF text JSON):
    `python "<SK>/read_wet_criteria.py" --text "<CTX>/<report>.pdf.json" --out "<EV>/criteria.json"`
-5. **Check — W1 / W2 / W3 / W5-geom / W6:**
+5. **Check — W1 / W2 / W3 / W5-geom / W6 / W8:**
    `python "<SK>/check_wet.py" --networks "<EV>/networks.json" --criteria "<EV>/criteria.json" --presence "<EV>/wet_presence.json" --site <SITE> --sub <sub-id> --stage "<stage>" --out-consistency "<CTX>/consistency.json" --out-candidates "findings/<run>/candidates/wut.json"`
-   Omit `--presence` to infer from `networks.json`; omit `--criteria` when absent.
+   Omit `--presence` to infer from `networks.json`; omit `--criteria` when absent
+   (W8 then limited to params-declared fallbacks).
 6. **Verify** — confirm outputs validate against `templates/*.schema.json`. Report
    conduit counts, length_km, finding counts by check. Do **not** turn report-only
    findings into rule-backed CRS rows (DQ-11).

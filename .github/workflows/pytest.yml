@@ -23,9 +23,9 @@ jobs:
             openpyxl pdfplumber reportlab python-docx 'ezdwg==0.16.0' PyYAML
       - name: Full suite via check_suite (expect recorded count)
         run: |
-          # 747 = prior 737 + PR #28 R1–R7 fixes (real OpenFlows fixture, declared params,
-          # label/layer parsers, expanded T11-R* + criteria real gates).
+          # 767 = prior 753 + skill 11 0.1.1 DQ-7a (source tiers, W3 crown/depth, W8,
+          # synthetic + env-gated real gates).
           # Cursor without LDIP_SKILL11_* / LDIP_REVIEW_ROOT: real gates skipped.
-          python tools/check_suite.py --expect 753 --tests tests
+          python tools/check_suite.py --expect 779 --tests tests
       - name: No project data in Git (name + content fingerprints)
         run: python tools/check_no_data.py --all
