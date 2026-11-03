@@ -1384,6 +1384,7 @@ def test_t11_w8_equal_stricter_weaker(tmp_path):
             "potable_water": {
                 "pressure_min_bar": {
                     "value": 1.50, "page": 72, "clause": "§5.3", "text": "1.50 bars",
+                    "as_written": "Minimum residual pressure 1.50 bars",
                 },
                 "valve_spacing_m": {
                     "value": 1000, "page": 72, "clause": "§5.3.11", "text": "1000 m",
@@ -1393,9 +1394,11 @@ def test_t11_w8_equal_stricter_weaker(tmp_path):
                 },
                 "head_loss_table": {
                     "lt_600_mm_m_per_km": 20, "page": 72, "clause": "Table 5.3",
+                    "as_written": "Head loss <600 mm: 20 m/km",
                 },
                 "fire_residual_bar": {
                     "value": 1.40, "page": 63, "clause": "§5.5", "text": "1.40 bars",
+                    "as_written": "residual pressure at the fire hydrants shall not be less than 1.40 bars",
                 },
             },
             "sewer": {
@@ -1460,12 +1463,21 @@ def test_t11_w8_equal_stricter_weaker(tmp_path):
     assert "min gradient 200" not in titles.casefold()
     assert "return period" not in titles.casefold()
     assert "storm cover" not in titles.casefold()
+    # A2: quote declared as written with parsed number in [brackets]
+    assert any(
+        "1.50 bars" in f["statement"] and "[1.5" in f["statement"]
+        for f in w8 if "pressure" in f["title"].casefold()
+    ), stmts
+    assert any(
+        "[" in f["statement"] and "]" in f["statement"] for f in w8
+    ), stmts
     # pass rows for equals
     eq = [r for r in cons["comparisons"]
           if r["check"] == "W8" and r["result"] == "pass"
           and r["values"].get("relation") == "equal"]
     assert any(r["values"].get("criterion") == "pw_velocity_max" for r in eq)
     assert any(r["values"].get("criterion") == "sewer_min_grad_200" for r in eq)
+    assert any(r["values"].get("criterion") == "storm_cover" for r in eq)
     assert "1.50" in stmts and "~3.5" in stmts or "3.5" in stmts
 
 
@@ -1555,6 +1567,15 @@ def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
                 "d/D ≤ 0.70\n"
                 "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
             ),
+        }, {
+            "page": 100,
+            "text": (
+                "Storm water drainage §10.2\n"
+                # A2: misreads that must NOT become storm cover_m / max_depth_m
+                "Sheet cover reference 3512 m easting noise\n"
+                "maximum depth of channel 30 m in the catchment description\n"
+                "minimum cover 1.2 m\n"
+            ),
         }],
     }
     src = write(tmp_path / "report.pdf.json", text)
@@ -1571,3 +1592,190 @@ def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
     assert abs(float(md.get("min_m") or md["value"]["min"]) - 8.0) < 1e-9
     assert abs(float(md.get("max_m") or md["value"]["max"]) - 10.0) < 1e-9
     assert abs(float(sewer["d_over_d_max"]["value"]) - 0.70) < 1e-9
+    storm = doc["criteria"]["storm"]
+    assert storm.get("cover_m") and abs(float(storm["cover_m"]["value"]) - 1.2) < 1e-9
+    assert storm.get("max_depth_m") is None  # 30 m rejected
+    assert float(storm["cover_m"]["value"]) != 3512
+
+
+def test_t11_a1_both_ends_cover_depth_report_mh(tmp_path):
+    """A1: both ends checked; finding quotes end + MH label."""
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "a" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "C-DEEP", "element_id": 1, "source": "model", "network": "sewer",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 99.8,
+            "slope_pct": 0.5,
+            "cover_start_m": 1.5, "cover_stop_m": 6.24,
+            "cover_m": 6.24,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "MH-3",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole",
+             "depth_to_crown_m": 1.5},
+            {"element_id": 2, "label": "MH-3", "element_type": "manhole",
+             "depth_to_crown_m": 6.24},
+            {"element_id": 3, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    # Link OF for adverse walk completeness
+    networks["conduits"][0]["stop_node_id"] = 2
+    cons, cand, _ = check(tmp_path, networks, presence=PRESENCE_OK)
+    depth_flags = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")
+        and r["result"] == "flag"
+    ]
+    assert depth_flags, cons["comparisons"]
+    assert any(r["values"].get("mh") == "MH-3" and r["values"].get("end") == "stop"
+               for r in depth_flags)
+    assert any(
+        "MH-3" in f["statement"] and "stop end" in f["statement"]
+        for f in cand["findings"] if "depth to crown" in f["title"].casefold()
+    )
+    # Shallow start end still passes cover
+    cover_start = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and r["quantity"] == "cover:C-DEEP:start"
+    ]
+    assert cover_start and cover_start[0]["result"] == "pass"
+
+
+def test_t11_a3_adverse_outfall_only_no_topology_infer(tmp_path):
+    """A3: without Outfall element_type, adverse is not_run (no stops−starts infer)."""
+    networks = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "b" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "ADV", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 100.10,
+            "slope_pct": -0.25, "cover_m": 1.5,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "MH-2",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            # Topology sink but NOT an Outfall model element
+            {"element_id": 2, "label": "MH-2", "element_type": "manhole"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons, cand, _ = check(tmp_path, networks, presence=PRESENCE_OK)
+    adv_flag = [
+        r for r in cons["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag"
+    ]
+    assert not adv_flag
+    assert not any("adverse" in f["title"].casefold() for f in cand["findings"])
+    assert any(
+        r["check"] == "W3" and r["quantity"] == "adverse" and r["result"] == "not_run"
+        for r in cons["comparisons"]
+    )
+
+
+def test_t11_a3_adverse_reversed_and_real_rise(tmp_path):
+    """A3 synthetic: reversed-stored downhill → no flag; real rise toward Outfall → 1 flag."""
+    # Reversed-stored: start=outfall, stop=upstream; inverts drop toward outfall
+    rev = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "c" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "REV", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 99.50, "invert_stop_m": 100.00,
+            "slope_pct": -1.25, "cover_m": 1.5,
+            "start_node_id": 2, "stop_node_id": 1,
+            "start_label": "OF-1", "stop_label": "MH-1",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons_rev, cand_rev, _ = check(tmp_path / "rev", rev, presence=PRESENCE_OK)
+    assert not any(
+        r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag" for r in cons_rev["comparisons"]
+    )
+    assert not any("adverse" in f["title"].casefold() for f in cand_rev["findings"])
+
+    rise = {
+        "networks_version": "1.0",
+        "network": "sewer",
+        "source": {"path": "syn", "sha256": "d" * 64, "kind": "synthetic"},
+        "conduits": [{
+            "id": "RISE", "element_id": 1, "source": "model",
+            "diameter_mm": 200, "length_m": 40.0,
+            "invert_start_m": 100.0, "invert_stop_m": 100.10,
+            "slope_pct": -0.25, "cover_m": 1.5,
+            "start_node_id": 1, "stop_node_id": 2,
+            "start_label": "MH-1", "stop_label": "OF-1",
+        }],
+        "nodes": [
+            {"element_id": 1, "label": "MH-1", "element_type": "manhole"},
+            {"element_id": 2, "label": "OF-1", "element_type": "outfall"},
+        ],
+        "summary": {"conduit_count": 1, "length_km": 0.04},
+        "plan": [],
+    }
+    cons_rise, cand_rise, _ = check(tmp_path / "rise", rise, presence=PRESENCE_OK)
+    adv = [
+        r for r in cons_rise["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag"
+    ]
+    assert len(adv) == 1
+    assert sum(1 for f in cand_rise["findings"] if "adverse" in f["title"].casefold()) == 1
+
+
+def test_t11_a4_wkb_srid_z_m_flags(tmp_path):
+    """A4: EWKB type word with Z + SRID flags yields correct E/N (US ft → m)."""
+    import struct
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location("rbs", SK / "read_bentley_sqlite.py")
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Little-endian Point with Z + SRID: type = 1 | 0x80000000 | 0x20000000
+    # Coordinates in US feet ≈ NMAR Co-17 start
+    x_ft, y_ft, z_ft = CO17_START_FT[0], CO17_START_FT[1], 100.0
+    gtype = 1 | 0x80000000 | 0x20000000
+    srid = 32637
+    blob = b"".join([
+        struct.pack("<B", 1),
+        struct.pack("<I", gtype),
+        struct.pack("<i", srid),
+        struct.pack("<3d", x_ft, y_ft, z_ft),
+    ])
+    verts = mod.parse_wkb_vertices_ft(blob)
+    assert len(verts) == 1
+    assert abs(verts[0][0] - x_ft) < 1e-6
+    assert abs(verts[0][1] - y_ft) < 1e-6
+    geo = mod.geometry_from_wkb_ft(blob)
+    assert geo["has_geometry"]
+    assert abs(geo["e_m"] - 657629.4) < 0.1
+    assert abs(geo["n_m"] - 2714320.5) < 0.1
+
+    # ZM + SRID Point
+    gtype_zm = 1 | 0x80000000 | 0x40000000 | 0x20000000
+    blob_zm = b"".join([
+        struct.pack("<B", 1),
+        struct.pack("<I", gtype_zm),
+        struct.pack("<i", srid),
+        struct.pack("<4d", x_ft, y_ft, z_ft, 0.0),
+    ])
+    verts_zm = mod.parse_wkb_vertices_ft(blob_zm)
+    assert len(verts_zm) == 1 and abs(verts_zm[0][0] - x_ft) < 1e-6

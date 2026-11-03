@@ -146,13 +146,32 @@ MH_SPACING_TOL_M = 0.01
 CROWN_COVER_MIN_M = 1.2
 MAX_DEPTH_TO_CROWN_M = 6.0
 MAX_DEPTH_TOL_M = 0.01
-# Owner 2 Nov: max depth >6 counts / site max crown depth
+# A1 / owner: max depth >6 — conduit count + MH depths (NRJS MH-3 6.24 / MH-2 6.98)
 MAX_DEPTH_EXPECT = {
-    "NRJS": {"flags": 3, "max_m": 6.98},
-    "NMAR": {"flags": 0, "max_m": 3.60},
-    "QRWN": {"flags": 0, "max_m": 5.30},
+    "NRJS": {
+        "conduits": 3, "max_m": 6.98,
+        "mhs": {"MH-3": 6.24, "MH-2": 6.98},
+    },
+    "NMAR": {"conduits": 0, "max_m": 3.60, "mhs": {}},
+    "QRWN": {"conduits": 0, "max_m": 5.30, "mhs": {}},
 }
 CROWN_COVER_LT_12_EXPECT = {"NRJS": 0, "NMAR": 0, "QRWN": 0}
+ADVERSE_EXPECT = {"NMAR": 0, "QRWN": 0, "NRJS": 0}
+# A4: NMAR node E/N envelope after SRID/Z WKB parse
+NMAR_NODE_E_RANGE = (600000.0, 700000.0)
+NMAR_NODE_N_RANGE = (2700000.0, 2800000.0)
+# A5 W8 must-include / must-not (titles/statements, casefold)
+W8_MUST_INCLUDE = [
+    ("head loss", "weaker"),
+    ("fire residual", "weaker"),
+    ("d/d", "stricter"),
+]
+W8_MUST_NOT = [
+    "storm cover",
+    "max velocity",
+    "min gradient 200",
+    "return period",
+]
 
 
 
@@ -614,7 +633,7 @@ def test_t11_real_plan_wet_layers(site, plan_key, tmp_path):
 
 @pytest.mark.parametrize("site", ["NRJS", "NMAR", "QRWN"])
 def test_t11_r_max_depth_to_crown(site, tmp_path):
-    """DQ-7a: depth to crown > 6.0+0.01 — NRJS 3 (max 6.98); NMAR 0 (3.60); QRWN 0 (5.30)."""
+    """A1: depth to crown both ends — NRJS 3 conduits / MH-3 6.24 / MH-2 6.98; NMAR/QRWN 0."""
     exp = EXPECT[site]["sewer"]
     db = _resolve(site, "sqlite", exp["globs"])
     _skip_unless(db, f"{site} sewer sqlite")
@@ -622,7 +641,13 @@ def test_t11_r_max_depth_to_crown(site, tmp_path):
     run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
         "--site", site, "--out", out)
     doc = json.loads(out.read_text(encoding="utf-8"))
-    depths = [c["cover_m"] for c in doc["conduits"] if c.get("cover_m") is not None]
+    # Deeper of both ends per conduit
+    depths = []
+    for c in doc["conduits"]:
+        ends = [v for v in (c.get("cover_start_m"), c.get("cover_stop_m"), c.get("cover_m"))
+                if v is not None]
+        if ends:
+            depths.append(max(ends))
     assert depths, f"{site}: no crown depths"
     assert abs(max(depths) - MAX_DEPTH_EXPECT[site]["max_m"]) <= 0.05, (
         site, max(depths), MAX_DEPTH_EXPECT[site]["max_m"]
@@ -638,14 +663,32 @@ def test_t11_r_max_depth_to_crown(site, tmp_path):
         if r["check"] == "W3" and str(r["quantity"]).startswith("max_depth")
         and r["result"] == "flag"
     ]
-    assert len(depth_flags) == MAX_DEPTH_EXPECT[site]["flags"], (
-        site, len(depth_flags), [r["values"] for r in depth_flags[:5]]
+    # Unique conduits (quantity max_depth:<id>:<end>)
+    conduit_ids = set()
+    for r in depth_flags:
+        parts = str(r["quantity"]).split(":")
+        if len(parts) >= 2:
+            conduit_ids.add(parts[1])
+    assert len(conduit_ids) == MAX_DEPTH_EXPECT[site]["conduits"], (
+        site, len(conduit_ids), sorted(conduit_ids),
+        [r["values"] for r in depth_flags[:8]]
     )
+    # A1 MH depths from node depth_to_crown_m
+    by_label = {
+        n.get("label"): n.get("depth_to_crown_m")
+        for n in doc.get("nodes") or []
+        if n.get("label") and n.get("depth_to_crown_m") is not None
+    }
+    for mh, expect_d in MAX_DEPTH_EXPECT[site]["mhs"].items():
+        assert mh in by_label, (site, mh, sorted(by_label))
+        assert abs(by_label[mh] - expect_d) <= 0.05, (site, mh, by_label[mh], expect_d)
+    if depth_flags:
+        assert all(r["values"].get("mh") and r["values"].get("end") for r in depth_flags)
 
 
 @pytest.mark.parametrize("site", ["NRJS", "NMAR", "QRWN"])
 def test_t11_r_crown_cover_below_1_2(site, tmp_path):
-    """DQ-7a: crown cover < 1.2 m → 0 flags on NRJS / NMAR / QRWN."""
+    """A1/A5: crown cover < 1.2 m at either end → 0 flags on NRJS / NMAR / QRWN."""
     exp = EXPECT[site]["sewer"]
     db = _resolve(site, "sqlite", exp["globs"])
     _skip_unless(db, f"{site} sewer sqlite")
@@ -653,11 +696,12 @@ def test_t11_r_crown_cover_below_1_2(site, tmp_path):
     run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
         "--site", site, "--out", out)
     doc = json.loads(out.read_text(encoding="utf-8"))
-    shallow = [
-        c for c in doc["conduits"]
-        if c.get("cover_m") is not None
-        and c["cover_m"] + MAX_DEPTH_TOL_M < CROWN_COVER_MIN_M
-    ]
+    shallow = []
+    for c in doc["conduits"]:
+        ends = [v for v in (c.get("cover_start_m"), c.get("cover_stop_m"), c.get("cover_m"))
+                if v is not None]
+        if ends and min(ends) < CROWN_COVER_MIN_M - 1e-12:
+            shallow.append(c)
     assert len(shallow) == CROWN_COVER_LT_12_EXPECT[site], (site, len(shallow))
     cons = tmp_path / "consistency.json"
     cand = tmp_path / "candidates.json"
@@ -752,21 +796,83 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
 
     assert has_weaker("pressure"), blob
     assert "1.50" in blob and ("3.5" in blob or "~3.5" in blob)
-    assert has_weaker("head loss"), blob
-    assert "20" in blob
     assert has_weaker("isolation"), blob
     assert "1000" in blob and "500" in blob
-    assert has_weaker("fire residual") or has_weaker("residual"), blob
-    assert "1.40" in blob and "1.5" in blob
     assert has_weaker("mh spacing") or has_weaker("manhole"), blob
     assert has_weaker("cover"), blob
     assert has_weaker("max depth") or has_weaker("depth"), blob
-    assert any("d/d" in f["title"].casefold() and "stricter" in f["statement"].casefold()
-               for f in w8), blob
-    # Must NOT raise notes for velocity / min grad 200 / storm return / storm cover
-    assert not any("max velocity" in f["title"].casefold() for f in w8), blob
-    assert not any("min gradient 200" in f["title"].casefold() for f in w8), blob
-    assert not any("return period" in f["title"].casefold() for f in w8), blob
-    assert not any(
-        "storm cover" in f["title"].casefold() for f in w8
-    ), blob
+    # A2 / A5 must-include: head loss weaker, fire residual weaker, d/D stricter
+    for label, rel in W8_MUST_INCLUDE:
+        assert any(
+            label in (f["title"] + f["statement"]).casefold()
+            and rel in f["statement"].casefold()
+            for f in w8
+        ), (label, rel, blob)
+    assert "20" in blob and "1.40" in blob and "1.5" in blob
+    # A2: quote-as-written with parsed brackets when as_written present
+    assert any("[" in f["statement"] and "]" in f["statement"] for f in w8), blob
+    # A5 must-not (storm cover equal to ER → no note)
+    for banned in W8_MUST_NOT:
+        assert not any(banned in f["title"].casefold() for f in w8), (banned, blob)
+    # Storm cover_m must be plausible 1.2 when present (no 3512 misread)
+    storm = (crit.get("criteria") or {}).get("storm") or {}
+    if storm.get("cover_m"):
+        assert abs(float(storm["cover_m"]["value"]) - 1.2) < 0.05
+    assert storm.get("max_depth_m") is None or _plausible_storm_depth(storm)
+
+
+def _plausible_storm_depth(storm):
+    md = storm.get("max_depth_m") or {}
+    val = md.get("value")
+    if isinstance(val, dict):
+        val = val.get("max")
+    if val is None:
+        val = md.get("max_m")
+    return val is None or 1.0 <= float(val) <= 15.0
+
+
+@pytest.mark.parametrize("site", ["NMAR", "QRWN", "NRJS"])
+def test_t11_r_adverse_outfall_only_zero(site, tmp_path):
+    """A3/A5: adverse flags 0/0/0 — Outfall elements only (no topology-sink infer)."""
+    exp = EXPECT[site]["sewer"]
+    db = _resolve(site, "sqlite", exp["globs"])
+    _skip_unless(db, f"{site} sewer sqlite")
+    out = tmp_path / "networks.json"
+    run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
+        "--site", site, "--out", out)
+    cons = tmp_path / "consistency.json"
+    cand = tmp_path / "candidates.json"
+    run("check_wet.py", "--networks", out, "--site", site, "--sub", "REAL",
+        "--out-consistency", cons, "--out-candidates", cand,
+        "--presence", _write_presence(tmp_path, storm_model=False, from_root=_site_dir(site)))
+    cdoc = json.loads(cons.read_text(encoding="utf-8"))
+    adv = [
+        r for r in cdoc["comparisons"]
+        if r["check"] == "W3" and str(r["quantity"]).startswith("adverse")
+        and r["result"] == "flag"
+    ]
+    assert len(adv) == ADVERSE_EXPECT[site], (site, len(adv), adv[:3])
+    finds = json.loads(cand.read_text(encoding="utf-8"))["findings"]
+    assert sum(1 for f in finds if "adverse" in f["title"].casefold()) == ADVERSE_EXPECT[site]
+
+
+@pytest.mark.parametrize("site", ["NMAR"])
+def test_t11_r_nmar_node_en_envelope(site, tmp_path):
+    """A4/A5: all NMAR nodes inside E 600k–700k / N 2.7M–2.8M after Z/M/SRID WKB parse."""
+    exp = EXPECT[site]["sewer"]
+    db = _resolve(site, "sqlite", exp["globs"])
+    _skip_unless(db, f"{site} sewer sqlite")
+    out = tmp_path / "networks.json"
+    run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
+        "--site", site, "--out", out)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    nodes = [n for n in doc.get("nodes") or [] if n.get("e_m") is not None and n.get("n_m") is not None]
+    assert nodes, "NMAR nodes missing E/N"
+    outside = [
+        n for n in nodes
+        if not (NMAR_NODE_E_RANGE[0] <= n["e_m"] <= NMAR_NODE_E_RANGE[1]
+                and NMAR_NODE_N_RANGE[0] <= n["n_m"] <= NMAR_NODE_N_RANGE[1])
+    ]
+    assert not outside, [
+        (n.get("label"), n.get("e_m"), n.get("n_m")) for n in outside[:10]
+    ]

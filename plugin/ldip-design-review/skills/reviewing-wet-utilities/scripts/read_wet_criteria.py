@@ -497,10 +497,43 @@ def _parse_storm_109_row(text, page):
     }
 
 
+# Plausible ranges for declared criteria (A2) — reject coordinate / TOC misreads.
+_PLAUSIBLE = {
+    "cover_m": (0.3, 3.0),
+    "max_depth_m": (1.0, 15.0),
+    "min_diameter_mm": (50.0, 3000.0),
+    "mh_spacing_m": (10.0, 500.0),
+    "pressure_min_bar": (0.5, 10.0),
+    "pressure_max_bar": (1.0, 20.0),
+    "min_velocity_ms": (0.05, 5.0),
+    "max_velocity_ms": (0.2, 10.0),
+    "valve_spacing_m": (50.0, 5000.0),
+    "d_over_d_max": (0.4, 0.95),
+    "return_period_yr": (1.0, 100.0),
+}
+
+
+def _plausible(key, value):
+    """True when value is in the A2 plausible range for the criterion (if known)."""
+    bounds = _PLAUSIBLE.get(key)
+    if bounds is None or value is None:
+        return True
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bounds[0] - 1e-12 <= v <= bounds[1] + 1e-12
+
+
 def _set_criterion(bucket, key, value, page, text, clause=None, extra=None):
     if key in bucket:
         return
-    row = {"value": value, "page": page, "text": text[:240], "clause": clause}
+    if not _plausible(key, value):
+        return  # A2: reject storm cover_m 3512 / max_depth_m 30-style misreads
+    row = {
+        "value": value, "page": page, "text": text[:240], "clause": clause,
+        "as_written": (text or "")[:160].strip(),
+    }
     if extra:
         row.update(extra)
     bucket[key] = row
@@ -721,6 +754,7 @@ def _extract_pw_criteria(bucket, text, page):
             "page": page,
             "text": text[:240],
             "clause": "Table 5.3",
+            "as_written": text[:160].strip(),
         }
         if hl:
             payload["lt_600_mm_m_per_km"] = float(hl.group(1))
@@ -763,11 +797,10 @@ def _extract_pw_criteria(bucket, text, page):
         ) or (existing is not None and abs(float(existing["value"]) - 1.4) > 0.15
               and abs(val - 1.4) < abs(float(existing["value"]) - 1.4))
         if take and 0.5 <= val <= 3.0:
-            clause = "§5.5" if re.search(r"5\.5", text) else "§5.5"
             if re.search(r"5\.5", text) or "hydrant" in text.casefold() or "fire" in text.casefold():
                 bucket["fire_residual_bar"] = {
                     "value": val, "page": page, "text": text[:240],
-                    "clause": "§5.5",
+                    "clause": "§5.5", "as_written": text[:160].strip(),
                 }
 
 
@@ -780,12 +813,13 @@ def _extract_sewer_criteria(bucket, text, page):
         sm = SEWER_SOFFIT_COVER.search(text)
         if sm:
             val = float(next(g for g in sm.groups() if g is not None))
-            if 0.5 <= val <= 2.0:
+            if _plausible("cover_m", val):
                 existing = bucket.get("cover_m")
                 if existing is None or abs(val - 1.0) < 0.05:
                     bucket["cover_m"] = {
                         "value": val, "page": page, "text": text[:240],
                         "clause": "§6.3.3", "note": "soffit",
+                        "as_written": text[:160].strip(),
                     }
 
     dm = SEWER_MAX_DEPTH.search(text)
@@ -794,17 +828,19 @@ def _extract_sewer_criteria(bucket, text, page):
         if len(nums) >= 2:
             lo, hi = float(nums[0]), float(nums[1])
             # Design max depth band (e.g. 8–10 m), not configuration 1.4–3.5
-            if hi >= 6.0 and lo >= 4.0:
+            if hi >= 6.0 and lo >= 4.0 and _plausible("max_depth_m", hi):
                 bucket["max_depth_m"] = {
                     "value": {"min": lo, "max": hi},
                     "min_m": lo, "max_m": hi,
                     "page": page, "text": text[:240], "clause": "§6.3",
+                    "as_written": text[:160].strip(),
                 }
         elif len(nums) == 1:
             val = float(nums[0])
-            if val >= 6.0:
+            if val >= 6.0 and _plausible("max_depth_m", val):
                 bucket.setdefault("max_depth_m", {
                     "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+                    "as_written": text[:160].strip(),
                 })
 
     dd = D_OVER_D.search(text) or re.search(
@@ -812,9 +848,10 @@ def _extract_sewer_criteria(bucket, text, page):
     )
     if dd and re.search(r"d\s*/\s*D|proportional\s+depth", text, re.I):
         val = float(dd.group(1))
-        if 0.5 <= val <= 0.95:
+        if _plausible("d_over_d_max", val):
             bucket["d_over_d_max"] = {
                 "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+                "as_written": text[:160].strip(),
             }
 
 
@@ -947,29 +984,32 @@ def extract(lines):
         if current == "sewer":
             _extract_sewer_criteria(bucket, text, page)
         if current == "storm":
-            # Declared storm return / cover for W8 equal checks
+            # Declared storm return / cover for W8 equal checks (A2: units + range)
             rp = re.search(
                 r"(?:return\s+period|design\s+storm)[^0-9]{0,20}(\d+)\s*(?:[- ]?year|yr)",
                 text, re.I,
             )
-            if rp:
+            if rp and _plausible("return_period_yr", float(rp.group(1))):
                 bucket.setdefault("return_period_yr", {
                     "value": int(rp.group(1)), "page": page, "text": text[:240],
-                    "clause": "§10.2",
+                    "clause": "§10.2", "as_written": text[:160].strip(),
                 })
             sc = re.search(
                 r"(?:min(?:imum)?\s+)?cover[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
                 text, re.I,
             )
-            if sc and 0.8 <= float(sc.group(1)) <= 2.0:
+            if sc and _plausible("cover_m", float(sc.group(1))):
                 bucket.setdefault("cover_m", {
                     "value": float(sc.group(1)), "page": page, "text": text[:240],
-                    "clause": "§10.2",
+                    "clause": "§10.2", "as_written": text[:160].strip(),
                 })
 
         for key, rx in CRITERION_PATTERNS:
             m = rx.search(text)
             if not m:
+                continue
+            # A2: never write storm cover/max_depth from generic patterns (misread risk)
+            if current == "storm" and key in ("cover_m", "max_depth_m"):
                 continue
             if current == "potable_water" and key in (
                 "valve_spacing_m", "cover_m", "hw_c", "min_diameter_mm",

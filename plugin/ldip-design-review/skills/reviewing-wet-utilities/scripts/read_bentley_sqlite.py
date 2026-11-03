@@ -157,9 +157,11 @@ def _safe_index(cur, table, base_alt, required_cols=()):
         return {}, []
 
 
-# --------------------------------------------------------------------------- X2 WKB (HMIRealGeometry)
-# OGC WKB / ISO SQL-MM: byte order, type (1 Point / 2 LineString / 5 MultiLineString),
-# Z via type+1000 or EWKB 0x80000000. Coordinates stored in US feet → convert to m.
+# --------------------------------------------------------------------------- X2 / A4 WKB (HMIRealGeometry)
+# OGC WKB / ISO SQL-MM + PostGIS EWKB type-word flags:
+#   Z = 0x80000000, M = 0x40000000, SRID = 0x20000000 (skip int32 after type).
+# ISO dimension offsets: +1000 Z, +2000 M, +3000 ZM.
+# Coordinates stored in US feet → convert to m.
 
 
 def _wkb_endian(byte_order):
@@ -170,23 +172,36 @@ def _wkb_endian(byte_order):
     return None
 
 
-def _wkb_has_z(gtype):
-    """Return (base_type, has_z) for ISO (+1000/+2000/+3000) or EWKB high bits."""
+def _wkb_type_flags(gtype):
+    """Return (base_type, has_z, has_m, has_srid) from the WKB/EWKB type word (A4)."""
     t = int(gtype) & 0xFFFFFFFF
-    has_z = bool(t & 0x80000000) or (1000 <= (t % 10000) < 2000) or (3000 <= (t % 10000) < 4000)
-    # Strip EWKB flags then ISO dimension offsets
+    has_z = bool(t & 0x80000000)
+    has_m = bool(t & 0x40000000)
+    has_srid = bool(t & 0x20000000)
+    # Strip EWKB high flags (Z/M/SRID) before ISO dimension decode
     base = t & 0x0FFFFFFF
-    if base >= 3000:
+    iso = base % 10000
+    if 3000 <= iso < 4000:
+        has_z = True
+        has_m = True
         base -= 3000
-    elif base >= 2000:
+    elif 2000 <= iso < 3000:
+        has_m = True
         base -= 2000
-    elif base >= 1000:
+    elif 1000 <= iso < 2000:
+        has_z = True
         base -= 1000
+    return base, has_z, has_m, has_srid
+
+
+def _wkb_has_z(gtype):
+    """Back-compat: (base_type, has_z). Prefer ``_wkb_type_flags`` (A4)."""
+    base, has_z, _has_m, _srid = _wkb_type_flags(gtype)
     return base, has_z
 
 
-def _wkb_read_point(buf, off, fmt, has_z):
-    n = 3 if has_z else 2
+def _wkb_read_point(buf, off, fmt, has_z, has_m=False):
+    n = 2 + (1 if has_z else 0) + (1 if has_m else 0)
     need = 8 * n
     if off + need > len(buf):
         return None, off
@@ -195,9 +210,9 @@ def _wkb_read_point(buf, off, fmt, has_z):
 
 
 def parse_wkb_vertices_ft(blob):
-    """Parse WKB blob → list of (x_ft, y_ft) vertices. Both endiannesses; 2D/3D.
+    """Parse WKB blob → list of (x_ft, y_ft). Endian-safe; Z/M/SRID type flags (A4).
 
-    Supports Point, LineString, MultiLineString. Returns [] on empty/unreadable.
+    Supports Point, LineString, MultiLineString, MultiPoint. Returns [] on empty/unreadable.
     """
     if blob is None:
         return []
@@ -228,10 +243,14 @@ def parse_wkb_vertices_ft(blob):
             return [], off
         gtype = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
         off += 4
-        base, has_z = _wkb_has_z(gtype)
+        base, has_z, has_m, has_srid = _wkb_type_flags(gtype)
+        if has_srid:
+            if off + 4 > len(buf):
+                return [], off
+            off += 4  # skip SRID int32
         pts = []
         if base == 1:  # Point
-            pt, off = _wkb_read_point(buf, off, endian, has_z)
+            pt, off = _wkb_read_point(buf, off, endian, has_z, has_m)
             if pt:
                 pts.append(pt)
         elif base == 2:  # LineString
@@ -240,7 +259,7 @@ def parse_wkb_vertices_ft(blob):
             n = struct.unpack(f"{endian}I", buf[off:off + 4])[0]
             off += 4
             for _ in range(n):
-                pt, off = _wkb_read_point(buf, off, endian, has_z)
+                pt, off = _wkb_read_point(buf, off, endian, has_z, has_m)
                 if pt is None:
                     break
                 pts.append(pt)
@@ -370,6 +389,80 @@ def _ground_map(cur, tables, base_alt):
     return ground
 
 
+# OpenFlows element-type tables (A3): Outfall = Outfall rows only — never topology sinks.
+_NODE_TYPE_TABLES = (
+    ("Outfall", "outfall"),
+    ("Manhole", "manhole"),
+    ("CatchBasin", "catch_basin"),
+    ("Transition", "transition"),
+    ("WetWell", "wet_well"),
+    ("PressureJunction", "junction"),
+    ("Tap", "tap"),
+    ("Pump", "pump"),
+    ("Reservoir", "reservoir"),
+    ("Tank", "tank"),
+)
+
+
+def _element_type_map(cur, tables, element_ids):
+    """Map element_id → OpenFlows type from typed tables (Outfall / Manhole / …)."""
+    out = {}
+    want = set(element_ids or [])
+    for table, kind in _NODE_TYPE_TABLES:
+        if not _has(tables, table):
+            continue
+        cols = _cols(cur, table)
+        id_col = _col(cols, "DomainElementID", "ElementID")
+        if not id_col:
+            continue
+        for r in cur.execute(f'SELECT * FROM "{table}"'):
+            try:
+                eid = int(r[id_col])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if want and eid not in want:
+                continue
+            # First match wins; Outfall listed first so it is never overwritten
+            out.setdefault(eid, kind)
+    return out
+
+
+def _node_geometry_map(cur, tables, base_alt):
+    """Node E/N from BaseNode / BaseDirectedNode HMIRealGeometry (A4 WKB flags)."""
+    geo = {}
+    for table in (
+        "BaseNode_HmiDataSetGeometry_Data",
+        "BaseDirectedNode_HmiDataSetGeometry_Data",
+        "BaseNode_HMIDataSetGeometry_Data",
+        "BaseIdahoNode_HmiDataSetGeometry_Data",
+    ):
+        if not _has(tables, table):
+            continue
+        rows, cols = _safe_index(cur, table, base_alt)
+        wkb_col = _col(cols, "HMIRealGeometry", "RealGeometry", "Geometry")
+        if not wkb_col:
+            continue
+        for eid, r in rows.items():
+            if eid in geo:
+                continue
+            blob = r[wkb_col] if wkb_col in r.keys() else None
+            parsed = geometry_from_wkb_ft(blob)
+            if parsed.get("has_geometry"):
+                geo[eid] = {
+                    "e_m": parsed["e_m"],
+                    "n_m": parsed["n_m"],
+                    "has_geometry": True,
+                }
+    return geo
+
+
+def _crown_cover_m(ground_m, invert_m, diameter_mm):
+    """Crown cover / depth-to-crown = GL − (IL + D)."""
+    if ground_m is None or invert_m is None or diameter_mm is None:
+        return None
+    return float(ground_m) - (float(invert_m) + float(diameter_mm) / 1000.0)
+
+
 def _alternatives_list(cur, tables, base_alt, all_alts):
     alts = []
     if _has(tables, "Alternatives"):
@@ -454,6 +547,7 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
     n_col = _col(grav_cols, "Physical_ManningsN", "ManningsN")
 
     ground = _ground_map(cur, tables, base_alt)
+    node_geo = _node_geometry_map(cur, tables, base_alt)
     conduits = []
     for eid in sorted(conduit_ids):
         el = elements[eid]
@@ -472,10 +566,14 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
                 start_id = int(topo[eid][start_col])
             if stop_col and topo[eid][stop_col] is not None:
                 stop_id = int(topo[eid][stop_col])
-        g = ground.get(start_id) if start_id is not None else None
-        cover = None
-        if g is not None and inv_s_m is not None and d_mm is not None:
-            cover = g - (inv_s_m + d_mm / 1000.0)
+        # A1: crown cover / depth at BOTH ends = GL − (IL + D)
+        g_start = ground.get(start_id) if start_id is not None else None
+        g_stop = ground.get(stop_id) if stop_id is not None else None
+        cover_start = _crown_cover_m(g_start, inv_s_m, d_mm)
+        cover_stop = _crown_cover_m(g_stop, inv_e_m, d_mm)
+        covers = [v for v in (cover_start, cover_stop) if v is not None]
+        # Legacy cover_m = deeper end (max depth-to-crown); both ends kept separately
+        cover = max(covers) if covers else None
         material = None
         roughness = None
         if eid in grav:
@@ -483,6 +581,8 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
                 material = grav[eid][mat_col]
             if n_col:
                 roughness = _as_float(grav[eid][n_col])
+        start_label = (elements.get(start_id) or {}).get("label")
+        stop_label = (elements.get(stop_id) or {}).get("label")
         c_row = {
             "id": el["label"],
             "element_id": eid,
@@ -498,13 +598,17 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
                 if slope_pct(length_m, drop) is not None else None
             ),
             "cover_m": round(cover, 6) if cover is not None else None,
+            "cover_start_m": round(cover_start, 6) if cover_start is not None else None,
+            "cover_stop_m": round(cover_stop, 6) if cover_stop is not None else None,
+            "ground_start_m": round(g_start, 6) if g_start is not None else None,
+            "ground_stop_m": round(g_stop, 6) if g_stop is not None else None,
             "material": material,
             "roughness": roughness,
             "roughness_type": "Manning" if roughness is not None else None,
             "start_node_id": start_id,
             "stop_node_id": stop_id,
-            "start_label": (elements.get(start_id) or {}).get("label"),
-            "stop_label": (elements.get(stop_id) or {}).get("label"),
+            "start_label": start_label,
+            "stop_label": stop_label,
             "alternative_id": _row_alt(diam.get(eid) or inv.get(eid) or geom.get(eid),
                                        diam_cols or inv_cols or geom_cols) or base_alt,
             "units_source": "US_feet",
@@ -519,42 +623,76 @@ def read_sewer_network(cur, tables, elements, base_alt, network):
             node_ids.add(c["start_node_id"])
         if c["stop_node_id"] is not None:
             node_ids.add(c["stop_node_id"])
+    # Include orphan ground nodes so Outfall table rows are typed even without links
+    type_ids = set(node_ids) | set(ground.keys()) | set(node_geo.keys())
+    type_map = _element_type_map(cur, tables, type_ids)
+
+    # Per-node max depth-to-crown from incident conduit ends (A1 MH reporting)
+    node_depth = {}
+    for c in conduits:
+        for nid, cov in (
+            (c.get("start_node_id"), c.get("cover_start_m")),
+            (c.get("stop_node_id"), c.get("cover_stop_m")),
+        ):
+            if nid is None or cov is None:
+                continue
+            prev = node_depth.get(nid)
+            if prev is None or cov > prev:
+                node_depth[nid] = cov
+
     nodes = []
     for eid in sorted(node_ids):
         el = elements.get(eid) or {"element_id": eid, "label": str(eid)}
-        # Prefer start-point of an incident conduit that begins at this node
+        # Prefer native node WKB (A4); fall back to incident conduit endpoints
         e_m = n_m = None
-        for c in conduits:
-            if c.get("start_node_id") == eid and c.get("e_m") is not None:
-                e_m, n_m = c["e_m"], c["n_m"]
-                break
-            if c.get("stop_node_id") == eid and c.get("end_e_m") is not None:
-                e_m, n_m = c["end_e_m"], c["end_n_m"]
-                break
+        has_node_geom = False
+        ng = node_geo.get(eid)
+        if ng and ng.get("e_m") is not None:
+            e_m, n_m = ng["e_m"], ng["n_m"]
+            has_node_geom = True
+        else:
+            for c in conduits:
+                if c.get("start_node_id") == eid and c.get("e_m") is not None:
+                    e_m, n_m = c["e_m"], c["n_m"]
+                    break
+                if c.get("stop_node_id") == eid and c.get("end_e_m") is not None:
+                    e_m, n_m = c["end_e_m"], c["end_n_m"]
+                    break
+        et = type_map.get(eid) or "manhole"
         nodes.append({
             "element_id": eid,
             "label": el.get("label") or str(eid),
-            "element_type": "manhole",
+            "element_type": et,
             "e_m": e_m,
             "n_m": n_m,
             "ground_m": ground.get(eid),
+            "depth_to_crown_m": (
+                round(node_depth[eid], 6) if eid in node_depth else None
+            ),
+            "has_geometry": has_node_geom or e_m is not None,
             "source": "model",
         })
-    # orphan live elements that are not conduits (optional manholes without links)
+    # Orphan live elements (typed Outfalls / MHs with ground or geometry, no link)
     for eid, el in elements.items():
         if eid in used or eid in node_ids:
             continue
-        # skip if nothing else references — keep only those with ground data
-        if eid in ground:
-            nodes.append({
-                "element_id": eid,
-                "label": el["label"],
-                "element_type": "node",
-                "e_m": None,
-                "n_m": None,
-                "ground_m": ground[eid],
-                "source": "model",
-            })
+        et = type_map.get(eid)
+        if eid not in ground and eid not in node_geo and et is None:
+            continue
+        ng = node_geo.get(eid) or {}
+        nodes.append({
+            "element_id": eid,
+            "label": el["label"],
+            "element_type": et or "node",
+            "e_m": ng.get("e_m"),
+            "n_m": ng.get("n_m"),
+            "ground_m": ground.get(eid),
+            "depth_to_crown_m": (
+                round(node_depth[eid], 6) if eid in node_depth else None
+            ),
+            "has_geometry": bool(ng.get("has_geometry")),
+            "source": "model",
+        })
     return {
         "conduits": conduits,
         "nodes": nodes,

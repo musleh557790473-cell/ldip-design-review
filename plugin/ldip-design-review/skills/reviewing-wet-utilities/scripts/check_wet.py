@@ -479,32 +479,27 @@ def _min_slope_for_d(d_mm, er_table, declared_table):
 
 
 def _outfall_distances(conduits, nodes=None):
-    """BFS hops from each node to nearest outfall (T1 topology walk)."""
+    """BFS hops from each node to nearest Outfall model element (A3).
+
+    Outfalls = nodes with ``element_type`` containing 'outfall' only.
+    Do **not** infer sinks from topology (stops − starts).
+    """
     from collections import defaultdict, deque
 
     adj = defaultdict(set)
-    starts = set()
-    stops = set()
     for c in conduits:
         s, t = c.get("start_node_id"), c.get("stop_node_id")
         if s is None or t is None:
             continue
         adj[s].add(t)
         adj[t].add(s)
-        starts.add(s)
-        stops.add(t)
     outfalls = set()
     for n in (nodes or []):
         et = (n.get("element_type") or n.get("kind") or "").casefold()
-        if "outfall" in et or et in ("of", "outlet"):
+        if "outfall" in et:
             eid = n.get("element_id")
             if eid is not None:
                 outfalls.add(eid)
-    # Topological sinks: appear as stop but never as start
-    outfalls |= (stops - starts)
-    if not outfalls and stops:
-        # Degenerate single-component: treat pure sinks; else no walk
-        outfalls = stops - starts
     dist = {}
     q = deque()
     for o in outfalls:
@@ -517,6 +512,29 @@ def _outfall_distances(conduits, nodes=None):
                 dist[v] = dist[u] + 1
                 q.append(v)
     return dist, outfalls
+
+
+def _conduit_end_covers(c):
+    """Yield (end_name, cover_m, mh_label, node_id) for each known crown cover (A1)."""
+    ends = []
+    cs = c.get("cover_start_m")
+    if cs is None and c.get("cover_m") is not None and c.get("cover_stop_m") is None:
+        # Legacy single cover_m treated as start
+        cs = c.get("cover_m")
+    if cs is not None:
+        ends.append((
+            "start", float(cs),
+            c.get("start_label") or str(c.get("start_node_id") or "?"),
+            c.get("start_node_id"),
+        ))
+    ce = c.get("cover_stop_m")
+    if ce is not None:
+        ends.append((
+            "stop", float(ce),
+            c.get("stop_label") or str(c.get("stop_node_id") or "?"),
+            c.get("stop_node_id"),
+        ))
+    return ends
 
 
 def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
@@ -574,8 +592,15 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
         ))
         return
 
-    # T1: topology walk to outfall for adverse-grade direction
+    # A3: topology walk to Outfall model elements only (no stops−starts inference)
     dist_out, outfalls = _outfall_distances(conduits, (networks or {}).get("nodes") or [])
+    if not outfalls:
+        rows.append(comparison_row(
+            "W3", "adverse", ["model"],
+            {"outfall_count": 0},
+            None, None, None, "not_run",
+            note="A3: adverse requires Outfall model elements; no topology-sink inference",
+        ))
 
     for c in conduits:
         cid = c.get("id") or c.get("element_id")
@@ -675,99 +700,119 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                 "m", None, None, "pass",
             ))
 
-        # Crown cover = GL−(IL+D) already stored as cover_m (reader).
-        # Strict <1.2 → Minor ("allowed to 0.5 m if protected — confirm"); <0.5 → Major.
-        cover = c.get("cover_m")
-        if cover is not None and cover < cover_protected - 1e-12:
-            rows.append(comparison_row(
-                "W3", f"cover:{cid}", ["model", cover_source],
-                {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
-                 "source": cover_source, "source_tier": cover_tier,
-                 "measure": "crown_cover"},
-                "m", cover_min - cover, None, "flag",
-                severity="Major", status="Probable",
-                note="crown cover < 0.5 m (CMP Q185)",
-            ))
-            findings.append(finding_stub(
-                "W3", f"Sewer {cid} crown cover below protected minimum",
-                f"Crown cover {cover:.3f} m = GL−(IL+D) < {cover_protected} m protected "
-                f"minimum (governing {cover_min} m; source={cover_source}, tier {cover_tier}). "
-                f"WUT-013.",
-                "design_error", "Major", "Probable",
-                [evid("E01", "script_output",
-                      f"id={cid} crown_cover={cover} min={cover_min} "
-                      f"protected={cover_protected} source={cover_source}")],
-                meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap, source_doc=cover_source,
-                required_value=cover_protected, unit="m",
-            ))
-        elif cover is not None and cover < cover_min - 1e-12:
-            rows.append(comparison_row(
-                "W3", f"cover:{cid}", ["model", cover_source],
-                {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
-                 "source": cover_source, "source_tier": cover_tier,
-                 "measure": "crown_cover"},
-                "m", cover_min - cover, None, "flag",
-                severity="Minor", status="Probable",
-                note="crown cover < 1.2 m; allowed to 0.5 m if protected — confirm",
-            ))
-            findings.append(finding_stub(
-                "W3", f"Sewer {cid} crown cover below 1.2 m",
-                f"Crown cover {cover:.3f} m = GL−(IL+D) < {cover_min} m "
-                f"(source={cover_source}, tier {cover_tier}). "
-                f"Allowed to {cover_protected} m if protected — confirm. WUT-013.",
-                "design_error", "Minor", "Probable",
-                [evid("E01", "script_output",
-                      f"id={cid} crown_cover={cover} min={cover_min} "
-                      f"protected={cover_protected} source={cover_source}")],
-                meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap, source_doc=cover_source,
-                required_value=cover_min, unit="m",
-            ))
-        elif cover is not None:
-            rows.append(comparison_row(
-                "W3", f"cover:{cid}", ["model", cover_source],
-                {"cover_m": cover, "min_m": cover_min, "source": cover_source,
-                 "source_tier": cover_tier, "measure": "crown_cover"},
-                "m", None, None, "pass",
-                note=f"crown cover ≥ {cover_min} m ({cover_source})",
-            ))
+        # A1: crown cover / depth at BOTH ends; finding quotes end + MH.
+        # Cover <1.2 → Minor ("allowed to 0.5 m if protected — confirm"); <0.5 → Major.
+        # Depth > 6.0 + tol → Major (CMP Q185).
+        end_covers = _conduit_end_covers(c)
+        if not end_covers and c.get("cover_m") is not None:
+            end_covers = [("start", float(c["cover_m"]),
+                           c.get("start_label") or "?", c.get("start_node_id"))]
+        any_cover_flag = False
+        any_depth_flag = False
+        for end_name, cover, mh_label, _nid in end_covers:
+            end_tag = f"{end_name}:{mh_label}"
+            if cover < cover_protected - 1e-12:
+                any_cover_flag = True
+                rows.append(comparison_row(
+                    "W3", f"cover:{cid}:{end_name}", ["model", cover_source],
+                    {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
+                     "end": end_name, "mh": mh_label, "source": cover_source,
+                     "source_tier": cover_tier, "measure": "crown_cover"},
+                    "m", cover_min - cover, None, "flag",
+                    severity="Major", status="Probable",
+                    note="crown cover < 0.5 m (CMP Q185)",
+                ))
+                findings.append(finding_stub(
+                    "W3", f"Sewer {cid} crown cover below protected minimum",
+                    f"Crown cover at {end_name} end ({mh_label}) {cover:.3f} m = GL−(IL+D) "
+                    f"< {cover_protected} m protected minimum "
+                    f"(governing {cover_min} m; source={cover_source}, tier {cover_tier}). "
+                    f"WUT-013.",
+                    "design_error", "Major", "Probable",
+                    [evid("E01", "script_output",
+                          f"id={cid} end={end_name} mh={mh_label} crown_cover={cover} "
+                          f"min={cover_min} protected={cover_protected} "
+                          f"source={cover_source}")],
+                    meta["site"], meta["sub"], meta["run"],
+                    status_cap=status_cap, source_doc=cover_source,
+                    required_value=cover_protected, unit="m",
+                ))
+            elif cover < cover_min - 1e-12:
+                any_cover_flag = True
+                rows.append(comparison_row(
+                    "W3", f"cover:{cid}:{end_name}", ["model", cover_source],
+                    {"cover_m": cover, "min_m": cover_min, "protected_min_m": cover_protected,
+                     "end": end_name, "mh": mh_label, "source": cover_source,
+                     "source_tier": cover_tier, "measure": "crown_cover"},
+                    "m", cover_min - cover, None, "flag",
+                    severity="Minor", status="Probable",
+                    note="crown cover < 1.2 m; allowed to 0.5 m if protected — confirm",
+                ))
+                findings.append(finding_stub(
+                    "W3", f"Sewer {cid} crown cover below 1.2 m",
+                    f"Crown cover at {end_name} end ({mh_label}) {cover:.3f} m = GL−(IL+D) "
+                    f"< {cover_min} m (source={cover_source}, tier {cover_tier}). "
+                    f"Allowed to {cover_protected} m if protected — confirm. WUT-013.",
+                    "design_error", "Minor", "Probable",
+                    [evid("E01", "script_output",
+                          f"id={cid} end={end_name} mh={mh_label} crown_cover={cover} "
+                          f"min={cover_min} protected={cover_protected} "
+                          f"source={cover_source}")],
+                    meta["site"], meta["sub"], meta["run"],
+                    status_cap=status_cap, source_doc=cover_source,
+                    required_value=cover_min, unit="m",
+                ))
+            else:
+                rows.append(comparison_row(
+                    "W3", f"cover:{cid}:{end_name}", ["model", cover_source],
+                    {"cover_m": cover, "min_m": cover_min, "end": end_name, "mh": mh_label,
+                     "source": cover_source, "source_tier": cover_tier,
+                     "measure": "crown_cover"},
+                    "m", None, None, "pass",
+                    note=f"crown cover ≥ {cover_min} m ({cover_source})",
+                ))
 
-        # Max depth to crown = GL−(IL+D) (= cover_m). Flag when > 6.0 + w3_threshold_tol.
-        if cover is not None and cover > max_depth + thr:
-            rows.append(comparison_row(
-                "W3", f"max_depth:{cid}", ["model", depth_source],
-                {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
-                 "source": depth_source, "measure": "depth_to_crown"},
-                "m", cover - max_depth, None, "flag",
-                severity="Major", status="Probable",
-                note="depth to crown > 6.0 m (CMP Q185; DQ-12)",
-            ))
-            findings.append(finding_stub(
-                "W3", f"Sewer {cid} depth to crown exceeds maximum",
-                f"Depth to crown {cover:.3f} m = GL−(IL+D) > {max_depth:.1f} m + {thr} m tol "
-                f"(source={depth_source}). WUT-015.",
-                "design_error", "Major", "Probable",
-                [evid("E01", "script_output",
-                      f"id={cid} depth_to_crown={cover} max={max_depth} "
-                      f"tol={thr} source={depth_source}")],
-                meta["site"], meta["sub"], meta["run"],
-                status_cap=status_cap, source_doc=depth_source,
-                required_value=max_depth, unit="m",
-            ))
-        elif cover is not None:
-            rows.append(comparison_row(
-                "W3", f"max_depth:{cid}", ["model", depth_source],
-                {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
-                 "source": depth_source, "measure": "depth_to_crown"},
-                "m", None, None, "pass",
-                note=f"depth to crown ≤ {max_depth} m ({depth_source})",
-            ))
+            if cover > max_depth + thr:
+                any_depth_flag = True
+                rows.append(comparison_row(
+                    "W3", f"max_depth:{cid}:{end_name}", ["model", depth_source],
+                    {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
+                     "end": end_name, "mh": mh_label, "source": depth_source,
+                     "measure": "depth_to_crown"},
+                    "m", cover - max_depth, None, "flag",
+                    severity="Major", status="Probable",
+                    note="depth to crown > 6.0 m (CMP Q185; DQ-12)",
+                ))
+                findings.append(finding_stub(
+                    "W3", f"Sewer {cid} depth to crown exceeds maximum",
+                    f"Depth to crown at {end_name} end ({mh_label}) {cover:.3f} m = "
+                    f"GL−(IL+D) > {max_depth:.1f} m + {thr} m tol "
+                    f"(source={depth_source}). WUT-015.",
+                    "design_error", "Major", "Probable",
+                    [evid("E01", "script_output",
+                          f"id={cid} end={end_name} mh={mh_label} "
+                          f"depth_to_crown={cover} max={max_depth} "
+                          f"tol={thr} source={depth_source}")],
+                    meta["site"], meta["sub"], meta["run"],
+                    status_cap=status_cap, source_doc=depth_source,
+                    required_value=max_depth, unit="m",
+                ))
+            else:
+                rows.append(comparison_row(
+                    "W3", f"max_depth:{cid}:{end_name}", ["model", depth_source],
+                    {"depth_to_crown_m": cover, "max_m": max_depth, "tol_m": thr,
+                     "end": end_name, "mh": mh_label, "source": depth_source,
+                     "measure": "depth_to_crown"},
+                    "m", None, None, "pass",
+                    note=f"depth to crown ≤ {max_depth} m ({depth_source})",
+                ))
+        if end_covers and not any_cover_flag and not any_depth_flag:
+            pass  # per-end pass rows already emitted
 
-        # T1 adverse: invert rises along flow toward outfall (topology walk)
+        # A3 adverse: invert rises along flow toward Outfall model element only
         inv_s, inv_e = c.get("invert_start_m"), c.get("invert_stop_m")
         sid, tid = c.get("start_node_id"), c.get("stop_node_id")
-        if inv_s is not None and inv_e is not None and sid is not None and tid is not None:
+        if outfalls and inv_s is not None and inv_e is not None and sid is not None and tid is not None:
             ds, dt = dist_out.get(sid), dist_out.get(tid)
             if ds is not None and dt is not None and ds != dt:
                 # Downstream = closer to outfall
@@ -785,7 +830,7 @@ def run_w3(networks, criteria, params, rows, findings, meta, status_cap):
                          "flow_direction": flow},
                         "m", inv_down - inv_up, None, "flag",
                         severity="Major", status="Probable",
-                        note="adverse grade by topology walk to outfall",
+                        note="adverse grade by walk to Outfall element",
                     ))
                     findings.append(finding_stub(
                         "W3", f"Sewer {cid} adverse grade",
@@ -1235,62 +1280,74 @@ def _declared_lookup(criteria, path):
         roots.append(criteria["criteria"])
     roots.append(criteria)
     node = None
+    parent = None
     for root in roots:
         cur = root
+        prev = None
         ok = True
         for part in parts:
             if not isinstance(cur, dict) or part not in cur:
                 ok = False
                 break
+            prev = cur
             cur = cur[part]
         if ok:
             node = cur
+            parent = prev
             break
     if node is None:
         return None
     if isinstance(node, dict) and "value" in node:
         val = node["value"]
-        # max_depth stored as {value: {min,max}, min_m, max_m}
-        if isinstance(val, dict) and "min" in val and "max" in val:
-            return {
-                "value": {"min": float(val["min"]), "max": float(val["max"])},
-                "page": node.get("page"),
-                "clause": node.get("clause"),
-                "text": node.get("text"),
-                "source": f"declared {node.get('clause') or path}",
-            }
-        return {
-            "value": val,
+        base = {
             "page": node.get("page"),
             "clause": node.get("clause"),
             "text": node.get("text"),
+            "as_written": node.get("as_written") or node.get("text"),
             "source": f"declared {node.get('clause') or path}",
         }
+        # max_depth stored as {value: {min,max}, min_m, max_m}
+        if isinstance(val, dict) and "min" in val and "max" in val:
+            return {**base, "value": {"min": float(val["min"]), "max": float(val["max"])}}
+        return {**base, "value": val}
     if isinstance(node, (int, float)):
-        return {"value": float(node), "source": f"declared {path}"}
+        # A2: bare leaf (e.g. head_loss_table.lt_600…) — inherit as_written from parent
+        base = {"value": float(node), "source": f"declared {path}"}
+        if isinstance(parent, dict):
+            if parent.get("page") is not None:
+                base["page"] = parent.get("page")
+            if parent.get("clause"):
+                base["clause"] = parent.get("clause")
+                base["source"] = f"declared {parent.get('clause')}"
+            aw = parent.get("as_written") or parent.get("text")
+            if aw:
+                base["as_written"] = aw
+                base["text"] = parent.get("text") or aw
+        return base
     if isinstance(node, dict):
+        base = {
+            "page": node.get("page"),
+            "clause": node.get("clause"),
+            "text": node.get("text"),
+            "as_written": node.get("as_written") or node.get("text"),
+        }
         if node.get("min_m") is not None and node.get("max_m") is not None:
             return {
+                **base,
                 "value": {"min": float(node["min_m"]), "max": float(node["max_m"])},
-                "page": node.get("page"),
-                "clause": node.get("clause"),
-                "text": node.get("text"),
                 "source": f"declared {node.get('clause') or path}",
             }
         if node.get("min_bar") is not None:
             return {
+                **base,
                 "value": float(node["min_bar"]),
-                "page": node.get("page"),
-                "clause": node.get("clause"),
-                "text": node.get("text"),
                 "source": f"declared {node.get('clause') or path}",
             }
         if "lt_600_mm_m_per_km" in node:
             return {
+                **base,
                 "value": float(node["lt_600_mm_m_per_km"]),
-                "page": node.get("page"),
                 "clause": node.get("clause") or "Table 5.3",
-                "text": node.get("text"),
                 "source": "declared Table 5.3",
             }
     return None
@@ -1473,12 +1530,23 @@ def run_w8(networks, criteria, params, rows, findings, meta, status_cap):
             dec_txt = f"{dec_txt} ({d_note})"
         if g_note:
             gov_txt = f"{gov_txt} ({g_note})"
+        # A2: quote declared as written with parsed number in brackets
+        as_written = (declared.get("as_written") or declared.get("text") or "").strip()
+        if as_written:
+            # Prefer a short snippet that still shows the number
+            snippet = as_written.replace("\n", " ")
+            if len(snippet) > 80:
+                snippet = snippet[:77] + "…"
+            dec_quote = f'"{snippet}" [{dec_txt}]'
+        else:
+            dec_quote = f"[{dec_txt}]"
 
         values = {
             "criterion": spec.get("id"),
             "label": spec.get("label"),
             "declared": declared.get("value"),
             "declared_text": dec_txt,
+            "declared_as_written": as_written or None,
             "declared_source": dec_src,
             "declared_page": page,
             "governing": gov.get("value"),
@@ -1501,7 +1569,7 @@ def run_w8(networks, criteria, params, rows, findings, meta, status_cap):
         sev = "Observation" if rel == "stricter" else "Minor"
         title = f"Declared {spec.get('label')} {rel} than governing"
         statement = (
-            f"Declared {spec.get('label')} {dec_txt} ({dec_src}{page_bit}) is {rel} than "
+            f"Declared {spec.get('label')} {dec_quote} ({dec_src}{page_bit}) is {rel} than "
             f"governing {gov_txt} ({gov_src}, tier {gov.get('source_tier')}). "
             f"W8 declared vs governing (DQ-7a). WUT-040."
         )
