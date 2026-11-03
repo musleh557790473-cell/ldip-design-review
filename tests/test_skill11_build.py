@@ -1009,12 +1009,12 @@ def test_t11_criteria_reader(tmp_path):
                 "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
                 "House connections minimum diameter 160 mm\n"
                 "Table 6.1 Manhole spacing\n"
-                # V4: hyphen range + "1200 and above" wording from real report
+                # C1: spaced ASCII hyphen; 1200 value continues after parenthetical
                 "150 - 200 → 100\n"
                 "300 – 500: 120 m\n"
                 "600 – 800: 160 m\n"
                 "≤ 1000: 200 m\n"
-                "1200 and above → 300\n"
+                "1200 and above → 300 (in agreement with ER manhole spacing)\n"
                 "Table 6.3 Minimum gradients mm/m\n"
                 "200: 5.00 / 3.20\n"
                 "300: 3.50 / 2.50\n"
@@ -1096,8 +1096,12 @@ def test_t11_criteria_reader(tmp_path):
     hl = pw["head_loss_table"]
     assert abs(hl["lt_600_mm_m_per_km"] - 20) < 1e-9
     assert abs(hl["d_600_to_1000_m_per_km"] - 10) < 1e-9
-    # U3/V4 Tables 6.1 (5 rows incl. 150-200 + 1200 and above) / 6.3 1200+
-    assert len(doc["mh_spacing_table"]) >= 5
+    # C1: Table 6.1 all 5 rows — spacing 100 / 120 / 160 / 200 / 300
+    spans = sorted(float(r["mh_spacing_m"]) for r in doc["mh_spacing_table"]
+                   if r.get("mh_spacing_m") is not None)
+    assert spans[:5] == [100.0, 120.0, 160.0, 200.0, 300.0] or set(spans) >= {
+        100.0, 120.0, 160.0, 200.0, 300.0
+    }, doc["mh_spacing_table"]
     assert any(abs(r["mh_spacing_m"] - 100) < 0.5
                and r.get("diameter_min_mm") == 150
                and r.get("diameter_max_mm") == 200

@@ -49,7 +49,7 @@ EXPECT = {
             "report_depth": (1.40, 3.50),
             "model_depth": (1.70, 3.80),
             "plan_labels_identical_ls": 150,  # X1: maximum bipartite (was 149 from rounding)
-            "conduits_with_geometry": 163,  # X2: HMIRealGeometry on 163/164
+            "conduits_with_geometry": 164,  # C2: HMIGeometry fallback fills the last conduit
             "plan_node_labels": 164,
             "plan_pipe_labels": 164,
             "force_main_d1000": 1,
@@ -767,9 +767,16 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
     crit["criteria"]["sewer"] = sewer
     crit["criteria"]["storm"] = storm
     mh_rows = crit.get("mh_spacing_table") or []
+    # C1: all 5 Table 6.1 rows — 100 / 120 / 160 / 200 / 300
+    mh_spans = sorted({
+        float(r["mh_spacing_m"]) for r in mh_rows if r.get("mh_spacing_m") is not None
+    })
+    assert mh_spans == [100.0, 120.0, 160.0, 200.0, 300.0], mh_rows
     assert any(
         r.get("diameter_min_mm") is not None
         and float(r["diameter_min_mm"]) <= 150.5
+        and r.get("diameter_max_mm") is not None
+        and abs(float(r["diameter_max_mm"]) - 200) < 0.5
         and abs(float(r["mh_spacing_m"]) - 100) < 0.5
         for r in mh_rows
     ), mh_rows[:5]

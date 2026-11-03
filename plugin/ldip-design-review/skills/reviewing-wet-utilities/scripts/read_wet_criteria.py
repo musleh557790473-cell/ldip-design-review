@@ -232,15 +232,33 @@ SEWER_GRAVITY_MIN_D = re.compile(
 HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I)
 
 # Table 6.1 — MH spacing by diameter range → spacing m
-# e.g. "150 – 200: 100", "≤ 1000: 200", "≥ 1200: 300 m",
-# "up to 1000 → 200 m", "1200 and above → 300 m" (V4)
+# C1: "150 - 200" (hyphen + spaces); "1200 and above → 300 (in agreement …)"
 _DASH = r"[–—−‐-]"  # en/em/minus/hyphen variants from PDF extract
+_SEP61 = rf"(?:[:→=>]|to|{_DASH})"  # separator between range and spacing value
 TABLE_61_RANGE = re.compile(
     r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
     r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
-    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)"
+    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)(?:\s+than)?"
     rf"|(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}}))"
-    r"\s*(?:mm)?\s*(?:[:→=>\s]|to)?\s*(?P<span>\d+(?:\.\d+)?)\s*m?\b",
+    r"\s*(?:mm)?\s*"
+    rf"(?:{_SEP61}\s*)?"
+    r"(?P<span>\d+(?:\.\d+)?)"
+    r"(?:\s*\([^)]{0,120}\))?"  # value continues after "300 (in agreement …)"
+    r"\s*m?\b",
+    re.I,
+)
+# Range / "and above" without spacing on this line (span on the next line)
+TABLE_61_RANGE_HEAD = re.compile(
+    r"(?:(?P<op>[≤≥<>]=?)\s*(?P<single>\d{2,4})"
+    r"|(?:up\s+to)\s*(?P<upto>\d{2,4})"
+    r"|(?P<above>\d{2,4})\s*(?:and\s+)?(?:above|larger|over|greater)(?:\s+than)?"
+    rf"|(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}}))"
+    r"\s*(?:mm)?\s*$",
+    re.I,
+)
+TABLE_61_SPAN_ONLY = re.compile(
+    rf"^\s*(?:{_SEP61}\s*)?(?P<span>\d+(?:\.\d+)?)"
+    r"(?:\s*\([^)]{0,120}\))?\s*m?\b",
     re.I,
 )
 TABLE_61_SIMPLE = re.compile(
@@ -932,6 +950,56 @@ def _store_depth(declared_totals, network, lo, hi, page, text, *, force=False):
         declared_totals[key] = payload
 
 
+def _table_61_row_from_match(m, span, page):
+    """Build a Table 6.1 row dict from a RANGE / RANGE_HEAD match (C1)."""
+    gd = m.groupdict()
+    op = (gd.get("op") or "").strip()
+    if gd.get("single"):
+        d0 = float(m.group("single"))
+        d_min = d_max = None
+        if op in ("≥", ">=", ">"):
+            d_min = d0
+        elif op in ("≤", "<=", "<"):
+            d_max = d0
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": d_min,
+            "diameter_max_mm": d_max,
+            "page": page,
+            "text": m.group(0),
+        }
+    elif gd.get("upto"):
+        d0 = float(m.group("upto"))
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": None,
+            "diameter_max_mm": d0,
+            "page": page,
+            "text": m.group(0),
+        }
+    elif gd.get("above"):
+        d0 = float(m.group("above"))
+        row = {
+            "diameter_mm": d0,
+            "diameter_min_mm": d0,
+            "diameter_max_mm": None,
+            "page": page,
+            "text": m.group(0),
+        }
+    else:
+        lo, hi = float(m.group("lo")), float(m.group("hi"))
+        row = {
+            "diameter_mm": lo,
+            "diameter_min_mm": lo,
+            "diameter_max_mm": hi,
+            "page": page,
+            "text": m.group(0),
+        }
+    if span is not None:
+        row["mh_spacing_m"] = float(span)
+    return row
+
+
 def extract(lines):
     toc_pages = mark_toc_pages(lines)
     criteria = {k: {} for k in SECTION_HINTS}
@@ -947,6 +1015,7 @@ def extract(lines):
     in_table_61 = False
     in_table_63 = False
     table_63_page = None  # U3: only accept Table 6.3 rows from the block page
+    pending_61 = None  # C1: range head awaiting span on following line
     in_config = {k: False for k in CONFIG_ANCHORS}
 
     for ln in lines:
@@ -1134,64 +1203,42 @@ def extract(lines):
                     "clause": "§5.5.1",
                 })
 
-        # Table 6.1 — MH spacing by diameter range (T3 / U3: all 5 rows)
+        # Table 6.1 — MH spacing by diameter range (C1: spaced hyphen + parenthetical span)
         if in_table_61 and current == "sewer":
             if re.search(r"Table\s*6\.3\b", text, re.I):
                 in_table_61 = False
                 in_table_63 = True
                 table_63_page = page
+                pending_61 = None
             else:
                 matched = False
+                # Continue a prior "1200 and above" / "150 - 200" head with span on this line
+                if pending_61 is not None:
+                    sm = TABLE_61_SPAN_ONLY.match(text)
+                    if sm:
+                        span = float(sm.group("span"))
+                        if 20 <= span <= 400:
+                            row = dict(pending_61)
+                            row["mh_spacing_m"] = span
+                            row["page"] = page
+                            row["text"] = f"{row.get('text', '')} {sm.group(0)}".strip()
+                            key = (row.get("diameter_min_mm"), row.get("diameter_max_mm"),
+                                   row["diameter_mm"], span)
+                            if not any(
+                                (r.get("diameter_min_mm"), r.get("diameter_max_mm"),
+                                 r["diameter_mm"], r["mh_spacing_m"]) == key
+                                for r in mh_spacing_table
+                            ):
+                                mh_spacing_table.append(row)
+                            matched = True
+                            pending_61 = None
+                    else:
+                        pending_61 = None  # abandoned incomplete head
                 for m in TABLE_61_RANGE.finditer(text):
                     span = float(m.group("span"))
                     if not (20 <= span <= 400):
                         continue
-                    op = (m.group("op") or "").strip()
-                    if m.group("single"):
-                        d0 = float(m.group("single"))
-                        d_min = d_max = None
-                        if op in ("≥", ">=", ">"):
-                            d_min = d0
-                        elif op in ("≤", "<=", "<"):
-                            d_max = d0
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": d_min,
-                            "diameter_max_mm": d_max,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    elif m.group("upto"):
-                        d0 = float(m.group("upto"))
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": None,
-                            "diameter_max_mm": d0,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    elif m.group("above"):
-                        d0 = float(m.group("above"))
-                        row = {
-                            "diameter_mm": d0,
-                            "diameter_min_mm": d0,
-                            "diameter_max_mm": None,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
-                    else:
-                        lo, hi = float(m.group("lo")), float(m.group("hi"))
-                        row = {
-                            "diameter_mm": lo,
-                            "diameter_min_mm": lo,
-                            "diameter_max_mm": hi,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        }
+                    row = _table_61_row_from_match(m, span, page)
                     key = (row.get("diameter_min_mm"), row.get("diameter_max_mm"),
                            row["diameter_mm"], span)
                     if any(
@@ -1203,20 +1250,25 @@ def extract(lines):
                     mh_spacing_table.append(row)
                     matched = True
                 if not matched:
-                    for m in TABLE_61_SIMPLE.finditer(text):
-                        d = float(m.group("d"))
-                        span = float(m.group("span"))
-                        if not (100 <= d <= 2000 and 20 <= span <= 400):
-                            continue
-                        if any(r.get("diameter_mm") == d and r.get("diameter_min_mm") is None
-                               for r in mh_spacing_table):
-                            continue
-                        mh_spacing_table.append({
-                            "diameter_mm": d,
-                            "mh_spacing_m": span,
-                            "page": page,
-                            "text": m.group(0),
-                        })
+                    head = TABLE_61_RANGE_HEAD.search(text)
+                    if head:
+                        pending_61 = _table_61_row_from_match(head, None, page)
+                        pending_61["text"] = head.group(0).strip()
+                    else:
+                        for m in TABLE_61_SIMPLE.finditer(text):
+                            d = float(m.group("d"))
+                            span = float(m.group("span"))
+                            if not (100 <= d <= 2000 and 20 <= span <= 400):
+                                continue
+                            if any(r.get("diameter_mm") == d and r.get("diameter_min_mm") is None
+                                   for r in mh_spacing_table):
+                                continue
+                            mh_spacing_table.append({
+                                "diameter_mm": d,
+                                "mh_spacing_m": span,
+                                "page": page,
+                                "text": m.group(0),
+                            })
 
         # Table 6.3 — mm/m both columns; only from the Table 6.3 block page (U3)
         if current in ("sewer", "storm"):
