@@ -6,7 +6,7 @@ local review root (real drawings stay out of Git, brief §10.2).
 
 G-2 (real harness): select the **general plan** by drawing number (`00003` or `15000`), build the real
 network (`read_setout` → `build_network`) and real classification (`read_class`) before C3 — do **not**
-pick `*.dwg.json` alphabetically. G-1 (parking layer scoping) is deferred until before activation.
+pick `*.dwg.json` alphabetically. G-1: plan bays only from per-site `parking_layers` (empty → not_run).
 """
 import hashlib
 import json
@@ -116,7 +116,8 @@ def _assert_c3_pd_clean(cal, ped, pk, sec, cand):
                 or "bridge" in blob or "surface" in blob or "schedule" in blob
                 or "no element" in blob or "no speed" in blob or "no mini" in blob
                 or "no chicane" in blob or "no crosswalk" in blob or "no refuge" in blob
-                or "no parking" in blob or "detail" in blob), f"{rid}: unexpected reasons {hits}"
+                or "no parking" in blob or "parking_layers" in blob or "detail" in blob
+        or "g-1" in blob or "r-j3" in blob), f"{rid}: unexpected reasons {hits}"
     park_els = [e for s in sec.get("sections", []) for e in s.get("elements", []) if e.get("element") == "parking"]
     assert park_els == [], f"sections must have no parking element at 30%: {park_els}"
     assert cand == [] or all(f["reference"]["rule_id"] not in C3_RULES for f in cand)
@@ -278,7 +279,7 @@ def _build_real_network_and_class(o, pkg, rules):
 def test_tj8_real_ldip_review_pd(tmp_path):
     """G-2: when LDIP_REVIEW is set, build the real network + class from the general plan
     (drawing 00003 or 15000), then run C3 at 30 % and assert TJ8. Never pick files alphabetically.
-    G-1 (parking layer scoping) is intentionally not implemented here.
+    G-1: parking fails are mandatory (no xfail) — empty parking_layers → not_run, not false fails.
     """
     assert ROOT is not None
     if not ROOT.is_dir():
@@ -322,15 +323,10 @@ def test_tj8_real_ldip_review_pd(tmp_path):
                    "--rules", rules, "--stage", "30% Concept Design", "--site", site,
                    "--file", f"plan_geometry={plan}", "--out", o / "pk.json")[0] == 0
         cal, ped, pk = load(o / "cal.json"), load(o / "ped.json"), load(o / "pk.json")
-        # Calming + pedestrian remain mandatory; parking alone is G-1 xfail until activation.
-        for doc, name in ((cal, "calming"), (ped, "pedestrian")):
+        for doc, name in ((cal, "calming"), (ped, "pedestrian"), (pk, "parking")):
             fails = [c for c in doc.get("checks", []) if c.get("result") == "fail"]
             assert not fails, f"{site} {name} C3 fails at PD: {fails[:3]}"
-        pk_fails = [c for c in pk.get("checks", []) if c.get("result") == "fail"]
-        if pk_fails:
-            pytest.xfail(
-                "G-1: parking reader picks non-parking polygons — fix before ROD-059…062 activation"
-            )
+        assert pk.get("bays", 0) == 0, f"{site}: G-1 expected 0 plan bays without parking_layers, got {pk.get('bays')}"
         if pkg.get("sections"):
             rc, _ = run("check_sections.py", "--sections", pkg["sections"], "--rules", rules,
                         "--out", o / "sec.json")

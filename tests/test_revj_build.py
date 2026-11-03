@@ -416,6 +416,66 @@ def test_tj7_parking_bays_and_section(tmp_path):
     assert any(c["rule_id"] == "ROD-061" and c["result"] == "fail" for c in pk["checks"])
     assert sum(1 for c in pk["checks"] if c["parameter"] == "tier2_er_ambiguity") == 1
 
+
+def test_g1_parking_layers_only_and_size_gate(tmp_path):
+    """G-1: plot-boundary polygons on a non-parking layer are ignored; only parking_layers bays count.
+
+    Temporarily sets NRJS parking_layers (R-I3 style) for the synthetic drawing — real site lists
+    stay empty until the owner supplies names (R-J3 GAP).
+    """
+    params_path = PLUGIN / "skills/reviewing-road-design/references/road_class_params.json"
+    original = params_path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(original)
+        data["sites"]["NRJS"]["parking_layers"] = ["RD_PARKING"]
+        params_path.write_text(json.dumps(data), encoding="utf-8")
+
+        # Bay-sized rectangle on plot layer (must NOT count) + real bay on RD_PARKING + oversize on parking layer.
+        # Long side along X so angle_class → parallel when no curb is present.
+        plot_bay = box(0, 0, 6.0, 2.5)          # 15 m², 2.5×6.0 — wrong layer
+        real_bay = box(20, 0, 26.0, 2.5)        # 15 m², 2.5×6.0 — parking layer
+        long_poly = box(40, 0, 52.0, 3.0)       # 36 m², 3×12 — length outside bay_length_m
+        plan = dwg(tmp_path, "PL", texts=[], polys=[
+            ("MP-PLT-LIN", plot_bay),
+            ("RD_PARKING", real_bay),
+            ("RD_PARKING", long_poly),
+        ])
+        write_net(tmp_path, {"c3_bays": [], "c3_parking_areas": []})
+        (tmp_path / "class.json").write_text(json.dumps({
+            "roads": {"ROAD-A (15m R.O.W)": {"width": 15.0, "class": "local_access"}}}))
+        rc, out = run("check_parking.py", "--network", tmp_path / "network.json",
+                      "--class", tmp_path / "class.json", "--rules", rules_c3(tmp_path),
+                      "--stage", "60%", "--site", "NRJS",
+                      "--file", f"plan_geometry={plan}", "--out", tmp_path / "pk.json")
+        assert rc == 0, out
+        pk = load(tmp_path / "pk.json")
+        assert pk["bays"] == 1, f"expected only RD_PARKING bay, got {pk['bays']}: {pk}"
+        assert pk["parking_layers"] == ["RD_PARKING"]
+        assert any(c["rule_id"] == "ROD-059" and c["result"] == "pass" for c in pk["passed"])
+    finally:
+        params_path.write_text(original, encoding="utf-8")
+
+
+def test_g1_no_parking_layers_not_run(tmp_path):
+    """G-1: with empty parking_layers, bay-sized plan polygons are not read → not_run (R-J3)."""
+    # NRJS parking_layers is [] in road_class_params.json
+    plan = dwg(tmp_path, "PL", texts=[], polys=[
+        ("MP-PLT-LIN", box(0, 0, 2.5, 6.0)),
+        ("SOME_OTHER", box(10, 0, 12.5, 6.0)),
+    ])
+    write_net(tmp_path, {"c3_bays": [], "c3_parking_areas": []})
+    (tmp_path / "class.json").write_text(json.dumps({"roads": {}}))
+    rc, out = run("check_parking.py", "--network", tmp_path / "network.json",
+                  "--class", tmp_path / "class.json", "--rules", rules_c3(tmp_path),
+                  "--stage", "60%", "--site", "NRJS",
+                  "--file", f"plan_geometry={plan}", "--out", tmp_path / "pk.json")
+    assert rc == 0, out
+    pk = load(tmp_path / "pk.json")
+    assert pk["bays"] == 0
+    assert not [c for c in pk.get("checks", []) if c.get("result") == "fail"]
+    reasons = " ".join(n.get("reason", "") for n in pk.get("not_run", []))
+    assert "parking_layers" in reasons and "G-1" in reasons
+
     # section PARKING LANE 2.50 / 2.20
     sec = dwg(tmp_path, "SEC", texts=[
         ("RIGHT OF WAY", 0, 10, "ROW", 90), ("RIGHT OF WAY", 15, 10, "ROW", 90),
