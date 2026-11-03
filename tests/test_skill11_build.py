@@ -1148,6 +1148,88 @@ def test_t11_criteria_reader(tmp_path):
     assert total_109_km > 0.3  # synthetic subset; real ≈ 6.07 km
 
 
+def _span(text, x0, y0, *, w=None, h=8.0):
+    """Skill-2 word span; bbox [x0,y0,x1,y1] in pt (D1 re-review 3 §3)."""
+    width = w if w is not None else max(len(text) * 3.5, 4.0)
+    return {"text": text, "bbox": [x0, y0, x0 + width, y0 + h]}
+
+
+def test_t11_d1_table_61_from_real_skill2_spans(tmp_path):
+    """D1: Table 6.1 from exact skill-2 span coordinates (re-review 3 §3, page 77)."""
+    # Coordinates copied from S35-PR29-skill11-0.1.1-rereview3.md §3.
+    # Row 5 value sits 5 pt above the label (y 168.5 vs 173.8) at x 249.2.
+    # Hyphen on row 1 is its own span 3.5 pt lower (y 109.4 vs 105.9).
+    words = [
+        # Anchors: header above rows, TABLE 6.1 caption below
+        _span("Maximum Manhole Spacing (m)", 200.0, 95.0, w=180),
+        # Row 1
+        _span("150", 129.6, 105.9),
+        _span("-", 144.2, 109.4, w=4),
+        _span("200", 148.5, 105.9),
+        _span("100", 383.3, 105.9),
+        # Row 2
+        _span("300-500", 130.4, 121.6, w=40),
+        _span("120", 383.3, 121.6),
+        # Row 3
+        _span("600-800", 130.7, 137.3, w=40),
+        _span("160", 383.3, 137.3),
+        # Row 4
+        _span("Up", 127.0, 153.1),
+        _span("to", 137.0, 153.1),
+        _span("1000", 146.7, 153.0),
+        _span("200", 382.6, 153.0),
+        # Row 5 — label y 173.8; wrapped value y 168.5 / x 249.2
+        _span("1200", 129.6, 173.8),
+        _span("and", 148.0, 173.8),
+        _span("above", 165.0, 173.8),
+        _span("300", 249.2, 168.5),
+        _span("(in", 265.0, 168.5),
+        _span("agreement", 280.0, 168.5, w=50),
+        _span("…)", 330.0, 168.5),
+        _span("TABLE 6.1", 120.0, 190.0, w=60),
+    ]
+    src = write(tmp_path / "report.pdf.json", {
+        "pages": [{"page": 77, "words": words}],
+    })
+    out = tmp_path / "criteria.json"
+    rc, msg = run("read_wet_criteria.py", "--text", src, "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    mh = doc["mh_spacing_table"]
+    spans = sorted(float(r["mh_spacing_m"]) for r in mh)
+    assert spans == [100.0, 120.0, 160.0, 200.0, 300.0], mh
+    r150 = next(
+        r for r in mh
+        if r.get("diameter_min_mm") == 150 and r.get("diameter_max_mm") == 200
+    )
+    assert abs(r150["mh_spacing_m"] - 100) < 0.5
+    assert "150" in r150["text"] and "200" in r150["text"]
+    r1200 = next(
+        r for r in mh
+        if r.get("diameter_min_mm") == 1200 or abs(float(r["diameter_mm"]) - 1200) < 0.5
+    )
+    assert abs(r1200["mh_spacing_m"] - 300) < 0.5
+
+    # W8 quotes 150–200 → 100 m for sewer MH spacing
+    criteria = {
+        "criteria": {"sewer": {}},
+        "mh_spacing_table": mh,
+        "gradient_tables": {"sewer": []},
+        "declared_totals": {},
+        "storm_pipe_table": [],
+    }
+    cons, cand, _ = check(
+        tmp_path / "w8", _sewer_net(1.5), criteria=criteria, presence=PRESENCE_OK,
+    )
+    w8 = [
+        f for f in cand["findings"]
+        if f["issue_type"] == "inconsistency" and "mh spacing" in f["title"].casefold()
+    ]
+    assert w8, cand["findings"]
+    stmt = w8[0]["statement"]
+    assert "150" in stmt and "200" in stmt and "100" in stmt, stmt
+
+
 def test_t11_params_source_tiers_dq7a():
     """DQ-7a: every governing threshold has source_tier / source / value; crown from CMP."""
     p = load(REF / "params.json")

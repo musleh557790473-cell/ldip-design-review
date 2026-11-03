@@ -233,6 +233,11 @@ HOUSE_CONNECTION = re.compile(r"house\s+connect|lateral|service\s+connect", re.I
 
 # Table 6.1 — MH spacing by diameter range → spacing m
 # C1: "150 - 200" (hyphen + spaces); "1200 and above → 300 (in agreement …)"
+# D1: real skill-2 spans — group by y (~6 pt), diameter x<200, value x≥200
+TABLE_61_Y_TOL = 6.0
+TABLE_61_VALUE_X = 200.0
+TABLE_61_HEADER = re.compile(r"Maximum\s+Manhole\s+Spacing", re.I)
+TABLE_61_CAPTION = re.compile(r"TABLE\s*6\.1\b", re.I)
 _DASH = r"[–—−‐-]"  # en/em/minus/hyphen variants from PDF extract
 _SEP61 = rf"(?:[:→=>]|to|{_DASH})"  # separator between range and spacing value
 TABLE_61_RANGE = re.compile(
@@ -950,6 +955,212 @@ def _store_depth(declared_totals, network, lo, hi, page, text, *, force=False):
         declared_totals[key] = payload
 
 
+def extract_table_61_from_spans(spans):
+    """D1: Table 6.1 from skill-2 positioned spans (not line-joined text).
+
+    Anchor between "Maximum Manhole Spacing (m)" and "TABLE 6.1". Group spans
+    into rows by y with ~6 pt tolerance (captures separate '-' and wrapped
+    row-5 value ~5 pt above the label). Diameter = spans with x < 200 joined;
+    value = first numeric span with x ≥ 200 in the row band.
+    """
+    if not spans:
+        return []
+    by_page = {}
+    for s in spans:
+        if s.get("plain"):
+            continue
+        by_page.setdefault(s["page"], []).append(s)
+
+    rows_out = []
+    for page, items in sorted(by_page.items()):
+        # Detect header / caption y from single spans or same-y joins (D1)
+        header_ys = []
+        caption_ys = []
+        seen_y = set()
+        for s in items:
+            y = round(s["bbox"][1], 1)
+            if y in seen_y:
+                continue
+            seen_y.add(y)
+            band = [
+                x for x in items
+                if abs(x["bbox"][1] - s["bbox"][1]) < TABLE_61_Y_TOL
+            ]
+            band.sort(key=lambda x: x["bbox"][0])
+            joined = " ".join((x.get("text") or "").strip() for x in band if (x.get("text") or "").strip())
+            if TABLE_61_HEADER.search(joined):
+                header_ys.append(s["bbox"][1])
+            if TABLE_61_CAPTION.search(joined):
+                caption_ys.append(s["bbox"][1])
+
+        header_ys = sorted(set(header_ys))
+        caption_ys = sorted(set(caption_ys))
+        if not header_ys and not caption_ys:
+            continue
+
+        # y-band between the two anchors (order-agnostic); exclude the anchor lines
+        if header_ys and caption_ys:
+            y_lo = min(min(header_ys), min(caption_ys))
+            y_hi = max(max(header_ys), max(caption_ys))
+        elif header_ys:
+            y_lo = min(header_ys)
+            y_hi = y_lo + 120.0
+        else:
+            y_hi = max(caption_ys)
+            y_lo = max(0.0, y_hi - 120.0)
+
+        def _is_anchor_line(s):
+            y = s["bbox"][1]
+            band = [
+                x for x in items
+                if abs(x["bbox"][1] - y) < TABLE_61_Y_TOL
+            ]
+            band.sort(key=lambda x: x["bbox"][0])
+            joined = " ".join(
+                (x.get("text") or "").strip() for x in band if (x.get("text") or "").strip()
+            )
+            return bool(TABLE_61_HEADER.search(joined) or TABLE_61_CAPTION.search(joined))
+
+        body = [
+            s for s in items
+            if y_lo < s["bbox"][1] < y_hi and not _is_anchor_line(s)
+        ]
+        if not body:
+            continue
+
+        # Cluster into rows by y (6 pt) — seed clusters from label-column spans (x < 200)
+        body_sorted = sorted(body, key=lambda s: (s["bbox"][1], s["bbox"][0]))
+        clusters = []  # each: {"y": float, "spans": [...]}
+        for s in body_sorted:
+            y = s["bbox"][1]
+            placed = False
+            for cl in clusters:
+                if abs(y - cl["y"]) <= TABLE_61_Y_TOL:
+                    cl["spans"].append(s)
+                    # Keep cluster y as median of label-column members when present
+                    label_ys = [
+                        x["bbox"][1] for x in cl["spans"]
+                        if x["bbox"][0] < TABLE_61_VALUE_X
+                    ]
+                    cl["y"] = (
+                        sorted(label_ys)[len(label_ys) // 2]
+                        if label_ys else sorted(x["bbox"][1] for x in cl["spans"])[
+                            len(cl["spans"]) // 2
+                        ]
+                    )
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({"y": y, "spans": [s]})
+
+        for cl in clusters:
+            sp = sorted(cl["spans"], key=lambda x: (x["bbox"][0], x["bbox"][1]))
+            diam_parts = [
+                (x.get("text") or "").strip()
+                for x in sp
+                if x["bbox"][0] < TABLE_61_VALUE_X and (x.get("text") or "").strip()
+            ]
+            # Skip header leftover bands with no diameter digits
+            diam_txt = " ".join(diam_parts)
+            diam_txt = re.sub(r"\s+", " ", diam_txt).strip()
+            if not re.search(r"\d", diam_txt):
+                continue
+            # First numeric span with x ≥ 200
+            value = None
+            for x in sp:
+                if x["bbox"][0] < TABLE_61_VALUE_X:
+                    continue
+                t = (x.get("text") or "").strip()
+                m = re.match(r"(\d+(?:\.\d+)?)", t)
+                if m:
+                    value = float(m.group(1))
+                    break
+            if value is None or not (20 <= value <= 400):
+                continue
+            # Parse diameter range from joined label text
+            row = _parse_table_61_diameter(diam_txt, value, page)
+            if row is None:
+                continue
+            key = (
+                row.get("diameter_min_mm"), row.get("diameter_max_mm"),
+                row["diameter_mm"], row["mh_spacing_m"],
+            )
+            if any(
+                (r.get("diameter_min_mm"), r.get("diameter_max_mm"),
+                 r["diameter_mm"], r["mh_spacing_m"]) == key
+                for r in rows_out
+            ):
+                continue
+            rows_out.append(row)
+
+    rows_out.sort(key=lambda r: (
+        float(r["diameter_min_mm"]) if r.get("diameter_min_mm") is not None
+        else float(r["diameter_mm"]),
+        float(r["mh_spacing_m"]),
+    ))
+    return rows_out
+
+
+def _parse_table_61_diameter(diam_txt, value, page):
+    """Turn joined diameter-column text + spacing value into a Table 6.1 row."""
+    text = diam_txt
+    # Normalise "150 - 200" / "150-200" / "Up to 1000" / "1200 and above"
+    probe = f"{text} → {value:g}"
+    m = TABLE_61_RANGE.search(probe)
+    if m:
+        return _table_61_row_from_match(m, value, page)
+    # Compact forms without arrow in diameter alone
+    m2 = re.search(
+        rf"(?P<lo>\d{{2,4}})\s*(?:{_DASH}|to)\s*(?P<hi>\d{{2,4}})",
+        text, re.I,
+    )
+    if m2:
+        lo, hi = float(m2.group("lo")), float(m2.group("hi"))
+        return {
+            "diameter_mm": lo, "diameter_min_mm": lo, "diameter_max_mm": hi,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m3 = re.search(
+        r"(?P<above>\d{2,4})\s+and\s+above", text, re.I,
+    )
+    if m3:
+        d0 = float(m3.group("above"))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": None,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m4 = re.search(r"up\s+to\s+(\d{2,4})", text, re.I)
+    if m4:
+        d0 = float(m4.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": None, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m5 = re.search(r"[≤<=]\s*(\d{2,4})", text)
+    if m5:
+        d0 = float(m5.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": None, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    m6 = re.search(r"[≥>=]\s*(\d{2,4})", text)
+    if m6:
+        d0 = float(m6.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": None,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    # Compact "300-500" already covered; bare number
+    m7 = re.fullmatch(r"(\d{2,4})", text.strip())
+    if m7:
+        d0 = float(m7.group(1))
+        return {
+            "diameter_mm": d0, "diameter_min_mm": d0, "diameter_max_mm": d0,
+            "mh_spacing_m": float(value), "page": page, "text": f"{text} → {value:g}",
+        }
+    return None
+
+
 def _table_61_row_from_match(m, span, page):
     """Build a Table 6.1 row dict from a RANGE / RANGE_HEAD match (C1)."""
     gd = m.groupdict()
@@ -1407,6 +1618,18 @@ def main(argv=None):
         lines = lines_of(spans)
         (criteria, grads, storm_pipes, totals, declared_tables,
          storm_109, mh_61, toc_pages) = extract(lines)
+        # D1: prefer span-geometry Table 6.1 when the real skill-2 layout is present
+        mh_from_spans = extract_table_61_from_spans(spans)
+        if mh_from_spans:
+            # Prefer spans when they recover more rows (or any when text path missed 150–200 / 1200+)
+            text_spans = {
+                float(r["mh_spacing_m"]) for r in mh_61 if r.get("mh_spacing_m") is not None
+            }
+            span_spans = {
+                float(r["mh_spacing_m"]) for r in mh_from_spans if r.get("mh_spacing_m") is not None
+            }
+            if len(mh_from_spans) >= len(mh_61) or span_spans - text_spans:
+                mh_61 = mh_from_spans
         doc = {
             "criteria_version": "1.0",
             "source": {"path": str(path), "kind": "skill2_pdf_json"},
