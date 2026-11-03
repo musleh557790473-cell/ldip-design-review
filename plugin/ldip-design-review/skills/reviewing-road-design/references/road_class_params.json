@@ -1,5 +1,5 @@
 {
- "_doc": "Skill 10 location-register parameters (SPC-0006 Rev F §4.13C; K19-3, RC-1 ... RC-4, DF-6). Site-specific items are skill parameters (RC-3). Network values are [PROPOSED] until tested in the build (K19-3, owner 15 Oct 2026 15:41). PDF colour maps are used only when `pdf_colours_confirmed` is set (RC-4). Phase C1 (SPC-0006 Rev H §4.13E): `c1` (DH-3). Phase C2 (SPC-0006 Rev I §4.13F): `c2` and per site `curb_layers` / `plot_layers` (DI-1 ... DI-7, R-I3).",
+ "_doc": "Skill 10 location-register parameters (SPC-0006 Rev F §4.13C; K19-3, RC-1 ... RC-4, DF-6). Site-specific items are skill parameters (RC-3). Network values are [PROPOSED] until tested in the build (K19-3, owner 15 Oct 2026 15:41). PDF colour maps are used only when `pdf_colours_confirmed` is set (RC-4). Phase C1 (SPC-0006 Rev H §4.13E): `c1` (DH-3). Phase C2 (SPC-0006 Rev I §4.13F): `c2` and per site `curb_layers` / `plot_layers` (DI-1 ... DI-7, R-I3). G-1: per site `parking_layers` (same style as curb_layers) — empty or absent → check_parking does not read plan bays (not_run). c3.bay_width_m / bay_length_m are the stall size gate.",
  "network": {
   "status": "PROPOSED (K19-3; tested in build-025)",
   "end_on_alignment_m": 1.0,
@@ -17,6 +17,8 @@
   "mini_rb_max_d_m": 25.0,
   "mini_rb_search_m": 15.0,
   "bay_area_m2": [10, 40],
+  "bay_width_m": [2.0, 5.5],
+  "bay_length_m": [4.5, 7.0],
   "angle_classes_deg": {
    "parallel_max": 20,
    "angle_lo": 45,

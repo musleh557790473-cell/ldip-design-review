@@ -5,13 +5,18 @@ Plan bays by angle class; accessible bays with aisle; counts from the plan until
 is known (R-G1 / R-J2). Slope → phase D without a surface. Typical-section parking width is checked
 in check_sections.py 0.3.0 (ROD-059 at PD).
 
+G-1: plan bays are read only from site `parking_layers` in road_class_params.json (R-I3 style, like
+curb_layers). If that list is empty or absent, plan parking is not read — each rule is not_run with a
+clear GAP reason. Closed polygons must also pass the stall size gate (c3.bay_width_m / bay_length_m)
+and bay_area_m2 before counting as a stall. No inventing layer names.
+
 Usage: python check_parking.py --network <network.json> --class <road_class.json>
            --rules <rules_RDE.json> --stage <name> --site <SITE>
            --file plan_geometry=<dwg.json> [--dlus <dlus.json>] [--plots <cad.dwg.json>]
            [--plot-label-source <pls.json>] [--parking-areas <from B2 optional>] --out <parking_checks.json>
 Exit: 0 written · 2 input · 3 dependency. No network, no shell calls.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import argparse
 import math
@@ -21,7 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from c3_common import (ACCESSIBLE_DEFAULT, angle_class, c3_params, fail_rec, gate, load_carrier_files,  # noqa: E402
-                       min_rotated_rect, parse_file_args, src25_required)
+                       min_rotated_rect, parking_layer_match, parse_file_args, src25_required,
+                       stall_size_ok)
 from location_common import closed_polygons, plot_polygons, shapely_mods, xy  # noqa: E402
 from road_common import (EXIT_OK, atomic_write_json, emit, main_guard, param, read_json, rules_index,  # noqa: E402
                          term_hits, tol)
@@ -78,9 +84,11 @@ def main(argv=None):
         area_lo, area_hi = (c3.get("bay_area_m2") or [10, 40])[:2]
         ang_classes = c3.get("angle_classes_deg") or {"parallel_max": 20, "angle_lo": 45, "angle_hi": 75, "perp_min": 75}
         acc_terms = c3.get("accessible_terms") or ACCESSIBLE_DEFAULT
-        park_layers = site_p.get("parking_layers") or []
-        mark_layers = site_p.get("marking_layers") or []
+        # G-1: only explicit site parking_layers (R-I3). Empty/absent → do not read plan parking.
+        park_layers = list(site_p.get("parking_layers") or [])
         commercial_terms = c3.get("commercial_land_uses") or [r"commercial", r"retail"]
+        layers_gap_reason = (f"parking layers for {a.site} not set in road_class_params.json "
+                             f"[GAP: parking_layers] (G-1; same style as curb_layers / R-I3)")
 
         plots, dlus_rows = [], []
         if a.plots and a.dlus and a.plot_label_source:
@@ -95,37 +103,39 @@ def main(argv=None):
         curb_lines = []
         bays = []
         aisles = []
-        for carrier, path, ing, src in files:
-            for p in (ing.get("content") or {}).get("polylines", []):
-                layer = p.get("layer_short") or p.get("layer") or ""
-                if re.search(r"curb|kerb", layer, re.I):
-                    verts = [tuple(v[:2]) for v in (p.get("vertices") or [])]
-                    if len(verts) >= 2:
-                        curb_lines.append(g.LineString(verts))
-            for poly, layer, handle in closed_polygons(ing, []):
-                if park_layers and layer not in park_layers and not re.search(r"park|bay|mark", layer, re.I):
-                    continue
-                if not (area_lo - 1e-9 <= poly.area <= area_hi + 1e-9):
-                    # hatched aisle may be flagged separately
+        if park_layers:
+            for carrier, path, ing, src in files:
+                for p in (ing.get("content") or {}).get("polylines", []):
+                    layer = p.get("layer_short") or p.get("layer") or ""
+                    if re.search(r"curb|kerb", layer, re.I):
+                        verts = [tuple(v[:2]) for v in (p.get("vertices") or [])]
+                        if len(verts) >= 2:
+                            curb_lines.append(g.LineString(verts))
+                for poly, layer, handle in closed_polygons(ing, []):
+                    if not parking_layer_match(layer, park_layers):
+                        continue
+                    w_L = min_rotated_rect(poly)[:2]
+                    if not (area_lo - 1e-9 <= poly.area <= area_hi + 1e-9) or not stall_size_ok(w_L[0], w_L[1], c3):
+                        # hatched aisle may be flagged separately (still on a parking layer)
+                        texts = [t for t in (ing.get("content") or {}).get("texts", [])
+                                 if t.get("insert") and poly.intersects(g.Point(t["insert"][:2]))]
+                        if any(re.search(r"aisle|hatch", t.get("text", ""), re.I) for t in texts) or re.search(r"aisle", layer, re.I):
+                            aisles.append({"poly": poly, "handle": handle, "src": src, "layer": layer})
+                        continue
+                    delta, _ = bay_angle_to_curb(poly, curb_lines, g)
+                    kind = angle_class(delta, ang_classes)
+                    # accessible?
                     texts = [t for t in (ing.get("content") or {}).get("texts", [])
-                             if t.get("insert") and poly.intersects(g.Point(t["insert"][:2]))]
-                    if any(re.search(r"aisle|hatch", t.get("text", ""), re.I) for t in texts) or re.search(r"aisle", layer, re.I):
-                        aisles.append({"poly": poly, "handle": handle, "src": src, "layer": layer})
-                    continue
-                delta, _ = bay_angle_to_curb(poly, curb_lines, g)
-                kind = angle_class(delta, ang_classes)
-                # accessible?
-                texts = [t for t in (ing.get("content") or {}).get("texts", [])
-                         if t.get("insert") and poly.buffer(0.5).intersects(g.Point(t["insert"][:2]))]
-                blocks = [b for b in (ing.get("content") or {}).get("blocks", [])
-                          if b.get("insert") and poly.buffer(0.5).intersects(g.Point(b["insert"][:2]))]
-                labels = [t.get("text", "") for t in texts] + [str(b.get("name") or "") for b in blocks]
-                accessible = any(term_hits(lab, acc_terms) for lab in labels)
-                bays.append({"poly": poly, "handle": handle, "src": src, "layer": layer, "kind": kind,
-                             "accessible": accessible, "labels": labels,
-                             "w_L": min_rotated_rect(poly)[:2], "xy": xy((poly.centroid.x, poly.centroid.y))})
+                             if t.get("insert") and poly.buffer(0.5).intersects(g.Point(t["insert"][:2]))]
+                    blocks = [b for b in (ing.get("content") or {}).get("blocks", [])
+                              if b.get("insert") and poly.buffer(0.5).intersects(g.Point(b["insert"][:2]))]
+                    labels = [t.get("text", "") for t in texts] + [str(b.get("name") or "") for b in blocks]
+                    accessible = any(term_hits(lab, acc_terms) for lab in labels)
+                    bays.append({"poly": poly, "handle": handle, "src": src, "layer": layer, "kind": kind,
+                                 "accessible": accessible, "labels": labels,
+                                 "w_L": w_L, "xy": xy((poly.centroid.x, poly.centroid.y))})
 
-        # also accept pre-baked bays on network for deterministic tests
+        # also accept pre-baked bays on network for deterministic tests (not plan-derived)
         for tb in net.get("c3_bays") or []:
             bays.append({**tb, "poly": None, "w_L": (tb["width"], tb["length"]),
                          "xy": tb.get("xy") or [0, 0], "src": tb.get("src") or {"source_type": "dwg_vector"},
@@ -236,17 +246,22 @@ def main(argv=None):
                 (passed if ok else checks).append(rec)
 
         if not bays:
+            no_bay_reason = layers_gap_reason if not park_layers else "no parking bay element on the plan"
             for rid in ("ROD-059", "ROD-060", "ROD-061"):
                 rule, ph = gate(rules, skipped, rid, stage_map, a.stage)
                 if rule is None:
                     not_run.append({"rule_id": rid, "phase": "C3", "reason": ph})
                 else:
-                    not_run.append({"rule_id": rid, "phase": "C3", "reason": "no parking bay element on the plan"})
+                    not_run.append({"rule_id": rid, "phase": "C3", "reason": no_bay_reason})
 
         # ROD-062 counts per parking area
         rule, ph = gate(rules, skipped, "ROD-062", stage_map, a.stage)
         if rule is None:
             not_run.append({"rule_id": "ROD-062", "phase": "C3", "reason": ph})
+        elif not park_layers and not bays and not (net.get("c3_parking_areas") or []):
+            not_run.append({"rule_id": "ROD-062", "phase": "C3", "reason": layers_gap_reason})
+            not_run.append({"rule_id": "ROD-062", "parameter": "slope", "phase": "C3",
+                            "reason": "bay slope ≤ 2 % not run without a LandXML design surface (phase D)"})
         else:
             areas = net.get("c3_parking_areas") or []
             if not areas:
