@@ -104,6 +104,13 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
           DomainElementID INTEGER, AlternativeID INTEGER,
           HMIGeometryScaledLength REAL,
           HMIRealGeometry BLOB,
+          HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIRealGeometry BLOB,
+          HMIGeometry BLOB,
           PRIMARY KEY (DomainElementID, AlternativeID)
         );
         CREATE TABLE GravityLinkBase_Physical_Data (
@@ -182,8 +189,8 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                 (1000.0 + eid * 10 + L_m / FT, 2000.0),
             ])
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
-                (eid, alt, L_m / FT, wkb),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb, None),
             )
             c.execute(
                 "INSERT OR IGNORE INTO BaseIdahoNode_Physical_Data VALUES (?, ?, ?)",
@@ -229,8 +236,8 @@ def make_sqlite(path, *, alts=((1, "Base"), (2, "Alt")), conduits=None, nodes=No
                     little=False, with_z=True,
                 )
             c.execute(
-                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?)",
-                (eid, alt, L_m / FT, wkb),
+                "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (?, ?, ?, ?, ?)",
+                (eid, alt, L_m / FT, wkb, None),
             )
             c.execute(
                 "INSERT INTO GravityLinkBase_Physical_Data VALUES (?, ?, ?, ?)",
@@ -1549,32 +1556,51 @@ def test_t11_w3_depth_6_00_and_6_02(tmp_path):
 
 
 def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
-    """read_wet_criteria: fire residual §5.5; sewer soffit / max depth / d/D."""
+    """B1: read Table 5.3 / fire 1.40 / d/D 0.7 / storm 10-yr+1.2 / sewer soffit sentence."""
     text = {
         "pages": [{
-            "page": 63,
+            "page": 73,
+            "text": (
+                "Table 5.3 Head loss gradients\n"
+                "1000 > D ≥ 600 → 10\n"
+                "D < 600 → 20\n"
+            ),
+        }, {
+            "page": 75,
             "text": (
                 "§5.5 Fire fighting\n"
-                "The residual pressure at the fire hydrants shall not be less than "
-                "1.40 bars under fire conditions.\n"
+                "The system shall maintain a pressure of 1.40 bar at each fire hydrant "
+                "during the fire scenario.\n"
             ),
         }, {
-            "page": 64,
+            "page": 77,
             "text": (
                 "Sewer network design criteria §6.3\n"
-                "§6.3.3 Soffit cover 1.0 m — special protection if shallower.\n"
+                "§6.3.3 Where the depth of the pipe soffit is less than 1.0m, "
+                "the pipeline should be protected with special measures.\n"
                 "Maximum depth 8 – 10 m\n"
-                "d/D ≤ 0.70\n"
-                "§6.3.4 Minimum diameter gravity sewer 200 mm\n"
             ),
         }, {
-            "page": 100,
+            "page": 78,
+            "text": (
+                "§6.3.6 The design depth of flow shall not exceed 0.7 (70%) of the "
+                "pipe diameters at peak flow.\n"
+            ),
+        }, {
+            "page": 130,
             "text": (
                 "Storm water drainage §10.2\n"
+                "The network is designed for the 10-year return period storm event. "
+                "In addition, a 20% climate change allowance is applied.\n"
                 # A2: misreads that must NOT become storm cover_m / max_depth_m
                 "Sheet cover reference 3512 m easting noise\n"
                 "maximum depth of channel 30 m in the catchment description\n"
-                "minimum cover 1.2 m\n"
+            ),
+        }, {
+            "page": 131,
+            "text": (
+                "§10.2.7 Soil cover above top of pipe shall not be less than 1.2m, "
+                "otherwise pipe shall be encased in concrete.\n"
             ),
         }],
     }
@@ -1583,17 +1609,30 @@ def test_t11_criteria_fire_residual_and_sewer_w8_fields(tmp_path):
     rc, msg = run("read_wet_criteria.py", "--text", src, "--out", out)
     assert rc == 0, msg
     doc = load(out)
-    fr = doc["criteria"]["potable_water"].get("fire_residual_bar")
+    pw = doc["criteria"]["potable_water"]
+    hl = pw.get("head_loss_table") or {}
+    assert abs(float(hl.get("lt_600_mm_m_per_km")) - 20) < 1e-9, hl
+    assert abs(float(hl.get("d_600_to_1000_m_per_km")) - 10) < 1e-9, hl
+    assert hl.get("page") == 73
+    fr = pw.get("fire_residual_bar")
     assert fr and abs(float(fr["value"]) - 1.40) < 1e-9
-    assert "5.5" in str(fr.get("clause"))
+    assert fr.get("page") == 75
+    assert "1.40" in (fr.get("as_written") or "")
     sewer = doc["criteria"]["sewer"]
     assert abs(float(sewer["cover_m"]["value"]) - 1.0) < 1e-9
+    assert sewer["cover_m"].get("page") == 77
+    assert "soffit" in (sewer["cover_m"].get("as_written") or "").casefold()
+    assert "protect" in (sewer["cover_m"].get("as_written") or "").casefold()
     md = sewer["max_depth_m"]
     assert abs(float(md.get("min_m") or md["value"]["min"]) - 8.0) < 1e-9
     assert abs(float(md.get("max_m") or md["value"]["max"]) - 10.0) < 1e-9
     assert abs(float(sewer["d_over_d_max"]["value"]) - 0.70) < 1e-9
+    assert sewer["d_over_d_max"].get("page") == 78
     storm = doc["criteria"]["storm"]
+    assert storm.get("return_period_yr") and int(storm["return_period_yr"]["value"]) == 10
+    assert storm["return_period_yr"].get("page") == 130
     assert storm.get("cover_m") and abs(float(storm["cover_m"]["value"]) - 1.2) < 1e-9
+    assert storm["cover_m"].get("page") == 131
     assert storm.get("max_depth_m") is None  # 30 m rejected
     assert float(storm["cover_m"]["value"]) != 3512
 
@@ -1779,3 +1818,112 @@ def test_t11_a4_wkb_srid_z_m_flags(tmp_path):
     ])
     verts_zm = mod.parse_wkb_vertices_ft(blob_zm)
     assert len(verts_zm) == 1 and abs(verts_zm[0][0] - x_ft) < 1e-6
+
+
+def test_t11_b2_hmigeometry_fallback_when_real_null(tmp_path):
+    """B2: HMIGeometry 2D point WKB (feet) used when HMIRealGeometry is null."""
+    import sqlite3
+    import struct
+    from importlib.util import spec_from_file_location, module_from_spec
+
+    # O-1 example from S35 re-review (21-byte LE Point, US feet)
+    o1_blob = bytes.fromhex("0101000000764647353e774041c3794264a2fc6041")
+    db = tmp_path / "hmigeom.sqlite"
+    # Minimal OpenFlows sewer with null RealGeometry, filled HMIGeometry
+    conn = sqlite3.connect(db)
+    c = conn.cursor()
+    c.executescript(
+        """
+        CREATE TABLE Alternatives (AlternativeID INTEGER PRIMARY KEY, Label TEXT);
+        CREATE TABLE HMIModelingElement (
+          ElementID INTEGER PRIMARY KEY, Label TEXT, IsDeleted INTEGER DEFAULT 0
+        );
+        CREATE TABLE Conduit (DomainElementID INTEGER PRIMARY KEY);
+        CREATE TABLE Conduit_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER, ConduitDiameter REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE PhysicalLink_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_UpstreamInvert REAL, Physical_DownstreamInvert REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseLink_HMIDataSetTopology_Data (
+          DomainElementID INTEGER PRIMARY KEY,
+          HMITopologyStartNodeID INTEGER, HMITopologyStopNodeID INTEGER
+        );
+        CREATE TABLE BaseLink_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIGeometryScaledLength REAL,
+          HMIRealGeometry BLOB, HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE GravityLinkBase_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_Material TEXT, Physical_ManningsN REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_Physical_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          Physical_GroundElevation REAL,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE BaseNode_HmiDataSetGeometry_Data (
+          DomainElementID INTEGER, AlternativeID INTEGER,
+          HMIRealGeometry BLOB, HMIGeometry BLOB,
+          PRIMARY KEY (DomainElementID, AlternativeID)
+        );
+        CREATE TABLE Outfall (DomainElementID INTEGER PRIMARY KEY);
+        """
+    )
+    c.execute("INSERT INTO Alternatives VALUES (1, 'Base')")
+    c.execute("INSERT INTO HMIModelingElement VALUES (101, 'O-1', 0)")
+    c.execute("INSERT INTO HMIModelingElement VALUES (102, 'MH-2', 0)")
+    c.execute("INSERT INTO HMIModelingElement VALUES (1, 'C-1', 0)")
+    c.execute("INSERT INTO Outfall VALUES (101)")
+    c.execute("INSERT INTO Conduit VALUES (1)")
+    c.execute("INSERT INTO BaseLink_HMIDataSetTopology_Data VALUES (1, 101, 102)")
+    c.execute(
+        "INSERT INTO Conduit_Physical_Data VALUES (1, 1, ?)",
+        (200.0 / FT_MM,),
+    )
+    c.execute(
+        "INSERT INTO PhysicalLink_Physical_Data VALUES (1, 1, ?, ?)",
+        (100.0 / FT, 99.8 / FT),
+    )
+    c.execute(
+        "INSERT INTO BaseNode_Physical_Data VALUES (101, 1, ?)", (110.0 / FT,),
+    )
+    c.execute(
+        "INSERT INTO BaseNode_Physical_Data VALUES (102, 1, ?)", (109.5 / FT,),
+    )
+    # Link: RealGeometry null; HMIGeometry = short 2D line from O-1
+    x0, y0 = struct.unpack("<2d", o1_blob[5:21])
+    link_wkb = make_linestring_wkb([(x0, y0), (x0 + 10.0, y0)], little=True)
+    c.execute(
+        "INSERT INTO BaseLink_HmiDataSetGeometry_Data VALUES (1, 1, ?, NULL, ?)",
+        (40.0 / FT, link_wkb),
+    )
+    c.execute(
+        "INSERT INTO GravityLinkBase_Physical_Data VALUES (1, 1, 'PVC', 0.013)",
+    )
+    # Node O-1: RealGeometry null; HMIGeometry = 21-byte point
+    c.execute(
+        "INSERT INTO BaseNode_HmiDataSetGeometry_Data VALUES (101, 1, NULL, ?)",
+        (o1_blob,),
+    )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "networks.json"
+    rc, msg = run("read_bentley_sqlite.py", "--sqlite", db, "--network", "sewer",
+                  "--site", "NMAR", "--out", out)
+    assert rc == 0, msg
+    doc = load(out)
+    o1 = next(n for n in doc["nodes"] if n.get("label") == "O-1")
+    assert o1.get("has_geometry")
+    assert abs(o1["e_m"] - 657820.71) < 0.05, o1
+    assert abs(o1["n_m"] - 2714549.75) < 0.05, o1
+    c1 = next(c for c in doc["conduits"] if c.get("id") == "C-1")
+    assert c1.get("has_geometry")
+    assert abs(c1["e_m"] - 657820.71) < 0.05, c1

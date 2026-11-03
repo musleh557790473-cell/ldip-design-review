@@ -57,6 +57,7 @@ SECTION_HINTS = {
 CLAUSE_HINTS = [
     ("potable_water", "§5.3", re.compile(
         rf"(?:§\s*)?{_SEC}5\.3\b|section\s+5\.3\b", re.I)),
+    ("potable_water", "Table 5.3", re.compile(r"Table\s*5\.3\b", re.I)),
     ("sewer", "§6.3", re.compile(rf"(?:§\s*)?{_SEC}6\.3\b|section\s+6\.3\b", re.I)),
     ("sewer", "Table 6.1", re.compile(r"Table\s*6\.1\b", re.I)),
     ("sewer", "Table 6.3", re.compile(r"Table\s*6\.3\b", re.I)),
@@ -170,13 +171,26 @@ HEAD_LOSS_VALUES = re.compile(
     r"(\d+(?:\.\d+)?)\s*m\s*/\s*km.*?(\d+(?:\.\d+)?)\s*m\s*/\s*km",
     re.I | re.S,
 )
+# B1: "D < 600 → 20" / "1000 > D ≥ 600 → 10" (m/km implied by Table 5.3)
+_ARROW = r"(?:\s*(?:→|->|=>|:)\s*|\s+)"
+HEAD_LOSS_LT_600 = re.compile(
+    rf"(?:D\s*<\s*600|< ?600\s*mm){_ARROW}(\d+(?:\.\d+)?)",
+    re.I,
+)
+HEAD_LOSS_600_1000 = re.compile(
+    rf"(?:1000\s*>\s*D\s*[≥>=≤<=]{{0,2}}\s*600"
+    rf"|600\s*[≤<=]{{1,2}}\s*D\s*<\s*1000"
+    rf"|D\s*[≥>=]{{1,2}}\s*600){_ARROW}(\d+(?:\.\d+)?)",
+    re.I,
+)
 VALVE_SPACING = re.compile(
     r"(?:isolat(?:ion|ing)\s+)?valves?[^0-9]{0,80}"
     r"(?:every|maximum\s+distance\s+of\s+every)?\s*(\d+(?:\.\d+)?)\s*m(?:eters?)?\b",
     re.I,
 )
-# §5.5 p.63 — fire residual at hydrant (NMAR declared 1.40 bar)
+# §5.5 — fire residual at hydrant (NMAR: p.75 "pressure of 1.40 bar at each fire hydrant")
 FIRE_RESIDUAL_BAR = re.compile(
+    r"pressure\s+of\s+(\d+(?:\.\d+)?)\s*bars?\s+at\s+(?:each\s+)?(?:fire\s+)?hydrant|"
     r"(?:fire|hydrant)[^.]{0,100}?"
     r"(?:residual\s+)?pressure[^0-9.]{0,40}"
     r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|minimum(?:\s+of)?|≥|>=)?"
@@ -186,7 +200,10 @@ FIRE_RESIDUAL_BAR = re.compile(
     r"fire\s+residual[^0-9]{0,30}(\d+(?:\.\d+)?)\s*bars?\b",
     re.I,
 )
+# B1 p.77: "Where the depth of the pipe soffit is less than 1.0m, the pipeline should be protected"
 SEWER_SOFFIT_COVER = re.compile(
+    r"(?:depth\s+of\s+(?:the\s+)?pipe\s+)?soffit[^0-9]{0,40}"
+    r"(?:is\s+)?(?:less\s+than|below|<\s*)\s*(\d+(?:\.\d+)?)\s*m\b|"
     r"(?:soffit\s+)?cover[^0-9]{0,40}(?:of\s+|≥|>=|minimum(?:\s+of)?\s+)?"
     r"(\d+(?:\.\d+)?)\s*m\b|"
     r"cover\s+(?:to\s+)?soffit[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
@@ -198,9 +215,11 @@ SEWER_MAX_DEPTH = re.compile(
     r"max(?:imum)?\s+depth[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
     re.I,
 )
+# B1 p.78: "depth of flow shall not exceed 0.7 (70%) of the pipe diameters"
 D_OVER_D = re.compile(
     r"(?:d\s*/\s*D|depth\s*/\s*diameter|proportional\s+depth)[^0-9]{0,25}"
-    r"(?:≤|<=|max(?:imum)?(?:\s+of)?|=|:)?\s*(\d+(?:\.\d+)?)",
+    r"(?:≤|<=|max(?:imum)?(?:\s+of)?|=|:)?\s*(\d+(?:\.\d+)?)|"
+    r"depth\s+of\s+flow[^0-9]{0,60}(?:not\s+exceed|≤|<=)\s*(\d+(?:\.\d+)?)",
     re.I,
 )
 SEWER_GRAVITY_MIN_D = re.compile(
@@ -746,8 +765,11 @@ def _extract_pw_criteria(bucket, text, page):
     if vmv:
         _set_criterion(bucket, "valve_spacing_m", float(vmv.group(1)), page, text, "§5.3.11")
 
-    # Table 5.3 head-loss gradient 20 / 10 m/km (U3: store values, not only name)
-    if HEAD_LOSS_TABLE.search(text) or re.search(r"Table\s*5\.3", text, re.I):
+    # Table 5.3 head-loss gradient 20 / 10 m/km (B1: also "D < 600 → 20" rows)
+    hl_hit = HEAD_LOSS_TABLE.search(text) or re.search(r"Table\s*5\.3", text, re.I)
+    lt_m = HEAD_LOSS_LT_600.search(text)
+    ge_m = HEAD_LOSS_600_1000.search(text)
+    if hl_hit or lt_m or ge_m:
         hl = HEAD_LOSS_VALUES.search(text)
         payload = {
             "value": "Table 5.3",
@@ -765,15 +787,32 @@ def _extract_pw_criteria(bucket, text, page):
             if len(mkms) >= 2:
                 payload["lt_600_mm_m_per_km"] = mkms[0]
                 payload["d_600_to_1000_m_per_km"] = mkms[1]
+            elif lt_m or ge_m:
+                if lt_m:
+                    payload["lt_600_mm_m_per_km"] = float(lt_m.group(1))
+                if ge_m:
+                    payload["d_600_to_1000_m_per_km"] = float(ge_m.group(1))
             elif re.search(r"\b20\b", text) and re.search(r"\b10\b", text):
                 payload["lt_600_mm_m_per_km"] = 20.0
                 payload["d_600_to_1000_m_per_km"] = 10.0
         existing = bucket.get("head_loss_table")
-        if existing is None or (
-            existing.get("lt_600_mm_m_per_km") is None
-            and payload.get("lt_600_mm_m_per_km") is not None
-        ):
+        if existing is None:
             bucket["head_loss_table"] = payload
+        else:
+            # Merge values across TOC name-only hit then table-body rows (B1 p.73)
+            for k in ("lt_600_mm_m_per_km", "d_600_to_1000_m_per_km"):
+                if existing.get(k) is None and payload.get(k) is not None:
+                    existing[k] = payload[k]
+            if existing.get("lt_600_mm_m_per_km") is None and payload.get("lt_600_mm_m_per_km") is not None:
+                bucket["head_loss_table"] = payload
+            elif payload.get("as_written") and (
+                existing.get("lt_600_mm_m_per_km") is not None
+                or payload.get("lt_600_mm_m_per_km") is not None
+            ):
+                if "D <" in payload["as_written"] or "→" in payload["as_written"] or "m/km" in payload["as_written"].casefold():
+                    existing["as_written"] = payload["as_written"]
+                    existing["text"] = payload["text"]
+                    existing["page"] = payload["page"]
 
     for key, rx in CRITERION_PATTERNS:
         m = rx.search(text)
@@ -815,7 +854,12 @@ def _extract_sewer_criteria(bucket, text, page):
             val = float(next(g for g in sm.groups() if g is not None))
             if _plausible("cover_m", val):
                 existing = bucket.get("cover_m")
-                if existing is None or abs(val - 1.0) < 0.05:
+                # Prefer the §6.3.3 protection sentence (B1 p.77) over bare defaults
+                prefer = (
+                    "soffit" in text.casefold()
+                    and ("protect" in text.casefold() or "less than" in text.casefold())
+                )
+                if existing is None or abs(val - 1.0) < 0.05 or prefer:
                     bucket["cover_m"] = {
                         "value": val, "page": page, "text": text[:240],
                         "clause": "§6.3.3", "note": "soffit",
@@ -846,11 +890,18 @@ def _extract_sewer_criteria(bucket, text, page):
     dd = D_OVER_D.search(text) or re.search(
         r"d\s*/\s*D[^0-9]{0,15}(\d+(?:\.\d+)?)", text, re.I,
     )
-    if dd and re.search(r"d\s*/\s*D|proportional\s+depth", text, re.I):
-        val = float(dd.group(1))
+    if dd and re.search(
+        r"d\s*/\s*D|proportional\s+depth|depth\s+of\s+flow|pipe\s+diameters?",
+        text, re.I,
+    ):
+        val = float(next(g for g in dd.groups() if g is not None))
+        # 0.7 or 70% → store fractional d/D
+        if val > 1.0 and val <= 100.0:
+            val = val / 100.0
         if _plausible("d_over_d_max", val):
             bucket["d_over_d_max"] = {
-                "value": val, "page": page, "text": text[:240], "clause": "§6.3",
+                "value": val, "page": page, "text": text[:240],
+                "clause": "§6.3.6" if re.search(r"6\.3\.6", text) else "§6.3",
                 "as_written": text[:160].strip(),
             }
 
@@ -925,6 +976,12 @@ def extract(lines):
                         in_table_109 = True
                         in_table_63 = False
                         current = "storm"
+                elif clause == "Table 5.3":
+                    # B1: head-loss table lives under PW criteria (p.73)
+                    if not in_table_109:
+                        current = "potable_water"
+                        in_table_61 = False
+                        in_table_63 = False
                 elif clause == "Table 6.1":
                     if in_table_109:
                         pass  # V1: keep storm table open across repeated headers
@@ -984,25 +1041,35 @@ def extract(lines):
         if current == "sewer":
             _extract_sewer_criteria(bucket, text, page)
         if current == "storm":
-            # Declared storm return / cover for W8 equal checks (A2: units + range)
+            # Declared storm return / cover for W8 equal checks (B1 p.130–131)
             rp = re.search(
-                r"(?:return\s+period|design\s+storm)[^0-9]{0,20}(\d+)\s*(?:[- ]?year|yr)",
+                r"(\d+)\s*[- ]?year\s+return\s+period|"
+                r"(?:return\s+period|design\s+storm)[^0-9]{0,40}(\d+)\s*(?:[- ]?year|yr)",
                 text, re.I,
             )
-            if rp and _plausible("return_period_yr", float(rp.group(1))):
-                bucket.setdefault("return_period_yr", {
-                    "value": int(rp.group(1)), "page": page, "text": text[:240],
-                    "clause": "§10.2", "as_written": text[:160].strip(),
-                })
+            if rp:
+                yr = float(next(g for g in rp.groups() if g is not None))
+                if _plausible("return_period_yr", yr):
+                    bucket.setdefault("return_period_yr", {
+                        "value": int(yr), "page": page, "text": text[:240],
+                        "clause": "§10.2", "as_written": text[:160].strip(),
+                    })
+            # "Soil cover above top of pipe shall not be less than 1.2m" (p.131)
             sc = re.search(
-                r"(?:min(?:imum)?\s+)?cover[^0-9]{0,20}(\d+(?:\.\d+)?)\s*m\b",
+                r"(?:soil\s+)?cover[^0-9]{0,80}"
+                r"(?:shall\s+not\s+be\s+less\s+than|not\s+less\s+than|"
+                r"minimum(?:\s+of)?|≥|>=|:)?\s*(\d+(?:\.\d+)?)\s*m\b|"
+                r"(?:min(?:imum)?\s+)?cover[^0-9]{0,40}(\d+(?:\.\d+)?)\s*m\b",
                 text, re.I,
             )
-            if sc and _plausible("cover_m", float(sc.group(1))):
-                bucket.setdefault("cover_m", {
-                    "value": float(sc.group(1)), "page": page, "text": text[:240],
-                    "clause": "§10.2", "as_written": text[:160].strip(),
-                })
+            if sc:
+                val = float(next(g for g in sc.groups() if g is not None))
+                if _plausible("cover_m", val):
+                    bucket.setdefault("cover_m", {
+                        "value": val, "page": page, "text": text[:240],
+                        "clause": "§10.2.7" if re.search(r"10\.2\.7", text) else "§10.2",
+                        "as_written": text[:160].strip(),
+                    })
 
         for key, rx in CRITERION_PATTERNS:
             m = rx.search(text)

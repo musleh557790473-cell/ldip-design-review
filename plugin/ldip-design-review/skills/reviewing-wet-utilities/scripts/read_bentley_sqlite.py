@@ -313,23 +313,58 @@ def geometry_from_wkb_ft(blob):
     }
 
 
+def _row_blob(row, col):
+    """Return non-empty WKB blob from a sqlite3.Row / mapping, or None."""
+    if row is None or not col:
+        return None
+    blob = None
+    try:
+        if hasattr(row, "keys") and col in row.keys():
+            blob = row[col]
+        else:
+            blob = row[col]
+    except (KeyError, IndexError, TypeError):
+        blob = None
+    if blob is None:
+        return None
+    if isinstance(blob, memoryview):
+        blob = blob.tobytes()
+    if isinstance(blob, bytearray):
+        blob = bytes(blob)
+    if isinstance(blob, bytes) and len(blob) == 0:
+        return None
+    if isinstance(blob, str) and not blob.strip():
+        return None
+    return blob
+
+
+def _geometry_blob(row, cols):
+    """B2: prefer HMIRealGeometry; fall back to HMIGeometry (2D point/line WKB, feet)."""
+    preferred = ("HMIRealGeometry", "RealGeometry")
+    fallback = ("HMIGeometry", "Geometry")
+    for name in preferred:
+        col = _col(cols, name)
+        blob = _row_blob(row, col)
+        if blob is not None:
+            return blob, name
+    for name in fallback:
+        col = _col(cols, name)
+        blob = _row_blob(row, col)
+        if blob is not None:
+            return blob, name
+    return None, None
+
+
 def _attach_link_geometry(conduit, geom_row, geom_cols):
-    """Fill conduit e_m/n_m/vertices_m from HMIRealGeometry when present."""
-    wkb_col = _col(geom_cols, "HMIRealGeometry", "RealGeometry", "Geometry")
+    """Fill conduit e_m/n_m/vertices_m from HMIRealGeometry, else HMIGeometry (B2)."""
     empty = {
         "vertices_m": [], "e_m": None, "n_m": None,
         "end_e_m": None, "end_n_m": None, "has_geometry": False,
     }
-    if not wkb_col or geom_row is None:
+    blob, _src = _geometry_blob(geom_row, geom_cols)
+    if blob is None:
         conduit.update(empty)
         return conduit
-    blob = geom_row[wkb_col] if wkb_col in geom_row.keys() else None
-    # sqlite3.Row supports keys(); also accept mapping / sequence via index
-    if blob is None:
-        try:
-            blob = geom_row[wkb_col]
-        except (KeyError, IndexError, TypeError):
-            blob = None
     geo = geometry_from_wkb_ft(blob)
     conduit["vertices_m"] = geo["vertices_m"]
     conduit["e_m"] = geo["e_m"]
@@ -428,7 +463,7 @@ def _element_type_map(cur, tables, element_ids):
 
 
 def _node_geometry_map(cur, tables, base_alt):
-    """Node E/N from BaseNode / BaseDirectedNode HMIRealGeometry (A4 WKB flags)."""
+    """Node E/N from HMIRealGeometry, else HMIGeometry 2D point WKB in feet (A4/B2)."""
     geo = {}
     for table in (
         "BaseNode_HmiDataSetGeometry_Data",
@@ -439,13 +474,15 @@ def _node_geometry_map(cur, tables, base_alt):
         if not _has(tables, table):
             continue
         rows, cols = _safe_index(cur, table, base_alt)
-        wkb_col = _col(cols, "HMIRealGeometry", "RealGeometry", "Geometry")
-        if not wkb_col:
+        # Need at least one of the geometry columns
+        if not any(_col(cols, n) for n in (
+            "HMIRealGeometry", "RealGeometry", "HMIGeometry", "Geometry",
+        )):
             continue
         for eid, r in rows.items():
             if eid in geo:
                 continue
-            blob = r[wkb_col] if wkb_col in r.keys() else None
+            blob, _src = _geometry_blob(r, cols)
             parsed = geometry_from_wkb_ft(blob)
             if parsed.get("has_geometry"):
                 geo[eid] = {

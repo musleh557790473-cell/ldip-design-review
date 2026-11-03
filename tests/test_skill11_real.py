@@ -157,10 +157,15 @@ MAX_DEPTH_EXPECT = {
 }
 CROWN_COVER_LT_12_EXPECT = {"NRJS": 0, "NMAR": 0, "QRWN": 0}
 ADVERSE_EXPECT = {"NMAR": 0, "QRWN": 0, "NRJS": 0}
-# A4: NMAR node E/N envelope after SRID/Z WKB parse
-NMAR_NODE_E_RANGE = (600000.0, 700000.0)
-NMAR_NODE_N_RANGE = (2700000.0, 2800000.0)
-# A5 W8 must-include / must-not (titles/statements, casefold)
+# A4/B2: node E/N envelope after SRID/Z WKB + HMIGeometry fallback
+NODE_ENVELOPE = {
+    "NMAR": {"e": (600000.0, 700000.0), "n": (2700000.0, 2800000.0), "nodes": 166},
+    "QRWN": {"e": (600000.0, 700000.0), "n": (2700000.0, 2800000.0), "nodes": 902},
+    "NRJS": {"e": (600000.0, 700000.0), "n": (2700000.0, 2800000.0), "nodes": 21},
+}
+NMAR_NODE_E_RANGE = NODE_ENVELOPE["NMAR"]["e"]
+NMAR_NODE_N_RANGE = NODE_ENVELOPE["NMAR"]["n"]
+# A5/B1 W8 must-include / must-not (titles/statements, casefold)
 W8_MUST_INCLUDE = [
     ("head loss", "weaker"),
     ("fire residual", "weaker"),
@@ -172,6 +177,7 @@ W8_MUST_NOT = [
     "min gradient 200",
     "return period",
 ]
+W8_MUST_PASS = ["storm_return", "storm_cover"]  # equal → pass, no not_run
 
 
 
@@ -719,7 +725,7 @@ def test_t11_r_crown_cover_below_1_2(site, tmp_path):
 
 @pytest.mark.parametrize("site", ["NMAR"])
 def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
-    """W8 NMAR: weaker notes for P/head-loss/isolation/fire/MH/cover/depth; stricter d/D; no vel/grad/storm equals."""
+    """B1/W8 NMAR: reader must supply Table 5.3 / fire / d/D / storm; no injection."""
     exp = EXPECT[site]
     rep = _resolve(site, "report", exp["report"]["globs"])
     _skip_unless(rep, "NMAR DES-RPT skill-2 text")
@@ -728,39 +734,45 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
     crit_out = tmp_path / "criteria.json"
     run("read_wet_criteria.py", "--text", rep, "--out", crit_out)
     crit = json.loads(crit_out.read_text(encoding="utf-8"))
-    # Ensure fire residual / sewer W8 fields when present in report text
     pw = (crit.get("criteria") or {}).get("potable_water") or {}
     sewer = (crit.get("criteria") or {}).get("sewer") or {}
-    # Inject known NMAR declared values if reader missed a clause (still env-gated on real report)
+    storm = (crit.get("criteria") or {}).get("storm") or {}
+
+    # B1: these must come from the report (pages per re-review §3)
+    hl = pw.get("head_loss_table") or {}
+    assert hl.get("lt_600_mm_m_per_km") is not None, "Table 5.3 D<600 not read"
+    assert abs(float(hl["lt_600_mm_m_per_km"]) - 20) < 0.5, hl
+    fr = pw.get("fire_residual_bar")
+    assert fr and abs(float(fr["value"]) - 1.40) < 0.05, fr
+    assert sewer.get("d_over_d_max") and abs(float(sewer["d_over_d_max"]["value"]) - 0.7) < 0.05
+    assert sewer.get("cover_m") and abs(float(sewer["cover_m"]["value"]) - 1.0) < 0.05
+    assert sewer["cover_m"].get("as_written"), "sewer cover must quote report sentence"
+    assert "soffit" in sewer["cover_m"]["as_written"].casefold()
+    assert storm.get("return_period_yr") and int(storm["return_period_yr"]["value"]) == 10
+    assert storm.get("cover_m") and abs(float(storm["cover_m"]["value"]) - 1.2) < 0.05
+    assert storm.get("max_depth_m") is None or _plausible_storm_depth(storm)
+
+    # Soft fill only for fields still used by W8 but outside B1
     pw.setdefault("pressure_min_bar", {
         "value": 1.50, "page": 72, "clause": "§5.3",
+        "as_written": "Minimum residual pressure 1.50 bars",
     })
-    if "head_loss_table" not in pw:
-        pw["head_loss_table"] = {
-            "lt_600_mm_m_per_km": 20, "page": 72, "clause": "Table 5.3",
-        }
     pw.setdefault("valve_spacing_m", {"value": 1000, "page": 72, "clause": "§5.3.11"})
     pw.setdefault("max_velocity_ms", {"value": 2.0, "page": 72, "clause": "§5.3"})
-    pw.setdefault("fire_residual_bar", {
-        "value": 1.40, "page": 63, "clause": "§5.5",
-    })
-    sewer.setdefault("cover_m", {"value": 1.0, "page": 64, "clause": "§6.3.3", "note": "soffit"})
     sewer.setdefault("max_depth_m", {
         "value": {"min": 8.0, "max": 10.0}, "min_m": 8.0, "max_m": 10.0,
         "page": 64, "clause": "§6.3",
     })
-    sewer.setdefault("d_over_d_max", {"value": 0.70, "page": 64, "clause": "§6.3"})
     (crit.setdefault("criteria", {}))["potable_water"] = pw
     crit["criteria"]["sewer"] = sewer
-    crit.setdefault("criteria", {}).setdefault("storm", {}).setdefault(
-        "return_period_yr", {"value": 10, "page": 100, "clause": "§10.2"},
-    )
-    crit["criteria"]["storm"].setdefault("cover_m", {"value": 1.2, "page": 100, "clause": "§10.2"})
-    if not crit.get("mh_spacing_table"):
-        crit["mh_spacing_table"] = [{
-            "diameter_mm": 150, "diameter_min_mm": 150, "diameter_max_mm": 200,
-            "mh_spacing_m": 100, "page": 64, "text": "150-200 → 100",
-        }]
+    crit["criteria"]["storm"] = storm
+    mh_rows = crit.get("mh_spacing_table") or []
+    assert any(
+        r.get("diameter_min_mm") is not None
+        and float(r["diameter_min_mm"]) <= 150.5
+        and abs(float(r["mh_spacing_m"]) - 100) < 0.5
+        for r in mh_rows
+    ), mh_rows[:5]
     grads = (crit.get("gradient_tables") or {}).get("sewer") or []
     if not any(abs(float(r.get("diameter_mm") or 0) - 200) < 0.6 for r in grads):
         grads = list(grads) + [{
@@ -786,6 +798,8 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
         if f["issue_type"] == "inconsistency" and "governing" in f["statement"].casefold()
     ]
     blob = " | ".join(f["title"] + "::" + f["statement"] for f in w8).casefold()
+    cdoc = json.loads(cons.read_text(encoding="utf-8"))
+    w8_rows = [r for r in cdoc["comparisons"] if r["check"] == "W8"]
 
     def has_weaker(*needles):
         return any(
@@ -799,9 +813,17 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
     assert has_weaker("isolation"), blob
     assert "1000" in blob and "500" in blob
     assert has_weaker("mh spacing") or has_weaker("manhole"), blob
+    # B1: MH spacing quote is the 150–200 → 100 m row
+    mh_find = next(
+        (f for f in w8 if "mh spacing" in f["title"].casefold()
+         or "manhole" in f["title"].casefold()),
+        None,
+    )
+    assert mh_find and ("150" in mh_find["statement"] and "100" in mh_find["statement"]), (
+        mh_find["statement"] if mh_find else blob
+    )
     assert has_weaker("cover"), blob
     assert has_weaker("max depth") or has_weaker("depth"), blob
-    # A2 / A5 must-include: head loss weaker, fire residual weaker, d/D stricter
     for label, rel in W8_MUST_INCLUDE:
         assert any(
             label in (f["title"] + f["statement"]).casefold()
@@ -809,16 +831,15 @@ def test_t11_r_w8_nmar_declared_vs_governing(site, tmp_path):
             for f in w8
         ), (label, rel, blob)
     assert "20" in blob and "1.40" in blob and "1.5" in blob
-    # A2: quote-as-written with parsed brackets when as_written present
     assert any("[" in f["statement"] and "]" in f["statement"] for f in w8), blob
-    # A5 must-not (storm cover equal to ER → no note)
     for banned in W8_MUST_NOT:
         assert not any(banned in f["title"].casefold() for f in w8), (banned, blob)
-    # Storm cover_m must be plausible 1.2 when present (no 3512 misread)
-    storm = (crit.get("criteria") or {}).get("storm") or {}
-    if storm.get("cover_m"):
-        assert abs(float(storm["cover_m"]["value"]) - 1.2) < 0.05
-    assert storm.get("max_depth_m") is None or _plausible_storm_depth(storm)
+    # B1: storm return + storm cover must pass (equal), never not_run
+    for crit_id in W8_MUST_PASS:
+        rows = [r for r in w8_rows if r["values"].get("criterion") == crit_id]
+        assert rows, crit_id
+        assert all(r["result"] == "pass" for r in rows), (crit_id, rows)
+        assert all(r["values"].get("relation") == "equal" for r in rows), (crit_id, rows)
 
 
 def _plausible_storm_depth(storm):
@@ -856,9 +877,9 @@ def test_t11_r_adverse_outfall_only_zero(site, tmp_path):
     assert sum(1 for f in finds if "adverse" in f["title"].casefold()) == ADVERSE_EXPECT[site]
 
 
-@pytest.mark.parametrize("site", ["NMAR"])
-def test_t11_r_nmar_node_en_envelope(site, tmp_path):
-    """A4/A5: all NMAR nodes inside E 600k–700k / N 2.7M–2.8M after Z/M/SRID WKB parse."""
+@pytest.mark.parametrize("site", ["NMAR", "QRWN", "NRJS"])
+def test_t11_r_node_en_envelope(site, tmp_path):
+    """B2/A4: HMIGeometry fallback → 0 bad coords; NMAR 166 / QRWN 902 / NRJS 21."""
     exp = EXPECT[site]["sewer"]
     db = _resolve(site, "sqlite", exp["globs"])
     _skip_unless(db, f"{site} sewer sqlite")
@@ -867,11 +888,13 @@ def test_t11_r_nmar_node_en_envelope(site, tmp_path):
         "--site", site, "--out", out)
     doc = json.loads(out.read_text(encoding="utf-8"))
     nodes = [n for n in doc.get("nodes") or [] if n.get("e_m") is not None and n.get("n_m") is not None]
-    assert nodes, "NMAR nodes missing E/N"
+    env = NODE_ENVELOPE[site]
+    assert len(nodes) == env["nodes"], (site, len(nodes), env["nodes"])
+    e0, e1 = env["e"]
+    n0, n1 = env["n"]
     outside = [
         n for n in nodes
-        if not (NMAR_NODE_E_RANGE[0] <= n["e_m"] <= NMAR_NODE_E_RANGE[1]
-                and NMAR_NODE_N_RANGE[0] <= n["n_m"] <= NMAR_NODE_N_RANGE[1])
+        if not (e0 <= n["e_m"] <= e1 and n0 <= n["n_m"] <= n1)
     ]
     assert not outside, [
         (n.get("label"), n.get("e_m"), n.get("n_m")) for n in outside[:10]

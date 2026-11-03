@@ -1232,23 +1232,43 @@ def _declared_lookup(criteria, path):
         rows = criteria.get("mh_spacing_table") or []
         if not rows:
             return None
+        # B1: quote the governing small-D row (150–200 mm → 100 m), not 300–500
+        ranged = [
+            r for r in rows
+            if r.get("mh_spacing_m") is not None
+            and r.get("diameter_min_mm") is not None
+        ]
         best = None
-        for r in rows:
-            d = r.get("diameter_min_mm")
-            if d is None:
-                d = r.get("diameter_mm")
-            if d is None:
-                continue
-            if best is None or float(d) < float(best[0]):
-                best = (d, r)
+        if ranged:
+            best = min(ranged, key=lambda r: float(r["diameter_min_mm"]))
+        else:
+            for r in rows:
+                d = r.get("diameter_min_mm")
+                if d is None:
+                    d = r.get("diameter_mm")
+                if d is None or r.get("mh_spacing_m") is None:
+                    continue
+                if best is None or float(d) < float(best.get("diameter_mm") or d):
+                    best = r
         if best is None:
             return None
-        r = best[1]
+        r = best
+        lo = r.get("diameter_min_mm")
+        hi = r.get("diameter_max_mm")
+        if lo is not None and hi is not None:
+            quote = f"{int(lo)} – {int(hi)} mm → {float(r['mh_spacing_m']):g} m"
+        elif lo is not None:
+            quote = f"≥ {int(lo)} mm → {float(r['mh_spacing_m']):g} m"
+        elif hi is not None:
+            quote = f"≤ {int(hi)} mm → {float(r['mh_spacing_m']):g} m"
+        else:
+            quote = r.get("text") or f"{r.get('diameter_mm')} → {r['mh_spacing_m']} m"
         return {
             "value": float(r["mh_spacing_m"]),
             "page": r.get("page"),
             "clause": "Table 6.1",
-            "text": r.get("text"),
+            "text": r.get("text") or quote,
+            "as_written": quote,
             "source": "declared Table 6.1",
         }
     if path.startswith("gradient_tables.sewer."):
