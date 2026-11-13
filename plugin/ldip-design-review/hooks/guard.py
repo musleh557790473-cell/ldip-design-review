@@ -20,10 +20,16 @@ PreToolUse hook for Read | Glob | Grep | Write | Edit | MultiEdit | NotebookEdit
 Allow = exit 0 with no output (normal permission flow continues).
 Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 
+  * External submittal source (0.5.0, SPC-0005 Rev F §7.2; D39-1, D39-4): during a run whose marker
+    has source {logical, path}, a real path under source.path is replaced by the logical path
+    submittals/<SITE>/<sub-id>/... before every check, so the access matrix applies unchanged (writes
+    stay denied by deny_write_always). A path under any submittal_source_roots entry that is not the
+    active run's source is denied to sub-agents. Windows paths compare case-insensitively.
+
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
 $CLAUDE_PLUGIN_DATA, a standard plugin data folder (ldip_common 0.3.0, D6) or next to this file. No network, no shell calls.
 """
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import json
 import os
@@ -36,13 +42,35 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "scripts"))
 
 from ldip_common import (  # noqa: E402
-    ACTIVE_RUN_FILE, any_match, configured_review_root, expand, glob_match, rel_to_root, to_posix_abs,
+    ACTIVE_RUN_FILE, any_match, configured_review_root, configured_source_roots, expand, glob_match,
+    map_source, path_under, rel_to_root, to_posix_abs,
 )
 
 WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
                "NotebookEdit": "notebook_path"}
 PY_LAUNCHERS = {"python", "python3", "py"}
 SHELL_META = re.compile(r"[|;&<>`\n\r]|\$\(|\$\{|\$[A-Za-z_]")
+
+
+def outside_quotes(cmd):
+    """The command with the text inside '…' and "…" blanked, except `$`, backtick and line breaks
+    (0.5.0, SPC-0005 Rev F): a quoted path such as ".../Alayuni Investment & Contracting Co/..." is
+    one literal argument, while `$` and backtick still expand inside double quotes and stay refused.
+    An unclosed quote is left to shlex, which refuses it."""
+    out, q = [], None
+    for ch in cmd:
+        if q is None:
+            if ch in "'\"":
+                q = ch
+                out.append(" ")
+            else:
+                out.append(ch)
+        elif ch == q:
+            q = None
+            out.append(" ")
+        else:
+            out.append(ch if ch in "$`\n\r" else "x")
+    return "".join(out)
 
 
 class Deny(Exception):
@@ -177,13 +205,27 @@ class Ctx:
             self.deny_read += expand(matrix.get("deny_subagents", []), vals) + g("deny_read")
         elif run:
             self.deny_read += g("deny_read_during_run")
+        self.source_roots = configured_source_roots(HERE, root)
 
     @property
     def main(self):
         return self.agent == "orchestrator"
 
 
+def logical_abs(ctx, abs_p):
+    """Map a real path under the active run's external source to <root>/submittals/<SITE>/<sub-id>/...
+    (SPC-0005 Rev F §7.2a). A path under another submittal source root is denied to sub-agents (§7.2b)."""
+    if ctx.run and ctx.root:
+        lp = map_source(abs_p, ctx.run)
+        if lp is not None:
+            return ctx.root.rstrip("/") + "/" + lp
+    if not ctx.main and any(path_under(abs_p, r) for r in ctx.source_roots):
+        raise Deny(f"{abs_p} is not the source of the active run (SPC-0005 Rev F §7.2b)")
+    return abs_p
+
+
 def check_read(ctx, abs_p, recursive_dir=False):
+    abs_p = logical_abs(ctx, abs_p)
     rel = rel_to_root(abs_p, ctx.root) if ctx.root else None
     if "golden_set/answer_key" in abs_p:
         raise Deny("golden_set/answer_key is never readable (SPC-0002 §5.3)")
@@ -208,6 +250,7 @@ def check_read(ctx, abs_p, recursive_dir=False):
 
 
 def check_write(ctx, abs_p):
+    abs_p = logical_abs(ctx, abs_p)
     rel = rel_to_root(abs_p, ctx.root) if ctx.root else None
     if "golden_set/" in abs_p and ("answer_key" in abs_p or "results" in abs_p):
         raise Deny("golden_set answer_key/results are never writable by the plugin (SPC-0002 §5)")
@@ -241,7 +284,7 @@ def check_bash(ctx, command):
     if ctx.main and not ctx.run:
         return
     cmd = command.replace("${CLAUDE_PLUGIN_ROOT}", ctx.proot).replace("$CLAUDE_PLUGIN_ROOT", ctx.proot)
-    if SHELL_META.search(cmd):
+    if SHELL_META.search(outside_quotes(cmd)):
         raise Deny("Bash: shell operators, redirection and variables are not allowed (SPC-0005 §7.3)")
     try:
         tokens = shlex.split(cmd)
@@ -256,11 +299,13 @@ def check_bash(ctx, command):
         val = tok.split("=", 1)[1] if tok.startswith("--") and "=" in tok else tok
         if val.startswith("-") or not ("/" in val or "\\" in val or val.startswith(".")):
             continue
-        p = to_posix_abs(val, ctx.cwd)
+        real = to_posix_abs(val, ctx.cwd)
+        is_dir = os.path.isdir(real)       # judged on the real path; the logical one may not exist (Rev F)
+        p = logical_abs(ctx, real)
         rel = rel_to_root(p, ctx.root) if ctx.root else None
         try:
             # a sub-agent's directory argument (e.g. --resolve-base) is checked as a tree, like Glob/Grep
-            check_read(ctx, p, recursive_dir=not ctx.main and os.path.isdir(p))
+            check_read(ctx, p, recursive_dir=not ctx.main and is_dir)
         except Deny:
             if rel is None or ctx.main or not any_match(rel, ctx.write):
                 raise

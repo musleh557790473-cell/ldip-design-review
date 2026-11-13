@@ -2,8 +2,8 @@
 name: extracting-dwg-data
 description: 'LDIP design review (AICC JV): converts Parsons DWG drawings to DXF and extracts layers, blocks and attributes, text, dimensions with override flags, closed polylines, external references, units, CRS signals and Civil 3D (AECC) object presence into the common ingestion JSON. Use when an LDIP submittal batch contains .dwg files that must be read before package or GIS checks.'
 metadata:
-  version: "0.2.2"
-  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A; Amendment O-a; G-Oa4 (DOa4)"
+  version: "0.2.3"
+  spec: "AICC-BIM-SPC-0006 Rev B §2.4, §4.1; Rev F §4.1A; Amendment O-a; G-Oa4 (DOa4); SPC-0005 Rev F §5.0.5"
 ---
 
 # Extracting DWG data
@@ -72,6 +72,10 @@ your list and `<stem>` its file name without `.dwg`.
    disk; never write or edit it yourself:
    `python "<SK>/write_manifest.py" --out "<B>/batch_manifest.json" --run <run_id> --site <SITE> --sub <sub-id> --file "<F1>" <sha256-1> --file "<F2>" <sha256-2>`
    (always this `--out` form: it also works when every file failed and `<B>` was never created.)
+   **External source (SPC-0005 Rev F).** When the prompt gives `source:` (the submittal is read in
+   place), `<F>` in steps 2–3 is the file's real path and `--source-path` is its logical path
+   (`submittals/<SITE>/<sub-id>/…`, given in the prompt); here `--file` takes the logical paths and you
+   add `--source-root "<source folder from the prompt>"`.
    Give every file of your list (DWG, PDF, LandXML and other) with the SHA-256 from the prompt. It
    sets `status`, `output`, `intermediates`, `side_files` (LandXML surfaces, DWG linework), `error`, `converter` and
    `counts`, validates every listed `.dwg.json`, `.pdf.json` and `.xml.json` (LandXML also: side files

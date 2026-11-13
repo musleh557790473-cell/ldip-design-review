@@ -17,13 +17,17 @@ The manifest is validated against schemas/batch_manifest.schema.json before it i
 Usage: python write_manifest.py --out <0.ai_context/SITE/SUB/bNN>/batch_manifest.json | --batch-dir <…/bNN>
                                 --run <run_id> --site <SITE> --sub <sub_id>
                                 --file <path> <sha256> [--file <path> <sha256> ...] [--root <LDIP_Review>]
+                                [--source-root <external submittal folder>]
+--source-root (0.5.0, SPC-0005 Rev F §5.0.5d): when the run reads the submittal in place, --file keeps
+the logical path (submittals/<SITE>/<sub-id>/...), which is what the manifest records and what the
+provenance rule is applied to; a file the script must open is read at <source-root>/<rest of the path>.
 --out (0.3.0, G19-1) is the form used in a review run: it names a file inside the batch folder, which the
 guard can check before the folder exists, so a batch whose files were all refused before anything was
 written still gets a manifest (all entries `failed`); the folder is created. --batch-dir needs the folder.
 Exit: 0 written · 2 input error · 3 jsonschema missing · 4 manifest failed its schema (not written).
 No network, no shell calls.
 """
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import argparse
 import json
@@ -92,7 +96,16 @@ def pdf_entry(bdir, path, sha, ing_validator, root):
     return entry
 
 
-def landxml_entry(bdir, path, sha, ing_validator, root):
+def input_file(path, root, source_root, site, sub):
+    """Real file behind a --file path: <source-root>/<rest> for a logical submittal path when the run
+    has an external source (Rev F), else <root>/<path>."""
+    prefix = f"submittals/{site}/{sub}/"
+    if source_root and path.startswith(prefix):
+        return Path(source_root) / path[len(prefix):]
+    return Path(root or ".") / path
+
+
+def landxml_entry(bdir, path, sha, ing_validator, root, real=None):
     name = Path(path).name
     stem = name[:-4] if name.lower().endswith(".xml") else name
     out = bdir / f"{name}.json"
@@ -107,7 +120,7 @@ def landxml_entry(bdir, path, sha, ing_validator, root):
         return entry
 
     if not out.is_file():
-        status, code, detail = parse_landxml.classify(Path(root or ".") / path)
+        status, code, detail = parse_landxml.classify(real if real is not None else Path(root or ".") / path)
         if status == "skipped":
             entry.update(type="other", status="skipped", error={"code": int(code), "detail": detail})
             if orphans:
@@ -190,6 +203,7 @@ def main(argv=None):
     ap.add_argument("--sub", required=True)
     ap.add_argument("--file", nargs=2, action="append", required=True, metavar=("PATH", "SHA256"))
     ap.add_argument("--root")
+    ap.add_argument("--source-root")
     a = ap.parse_args(argv)
     try:
         from jsonschema import Draft202012Validator, FormatChecker
@@ -229,7 +243,8 @@ def main(argv=None):
         elif ext == ".pdf":
             entry = pdf_entry(bdir, path, sha, vi, a.root)
         elif ext == ".xml":
-            entry = landxml_entry(bdir, path, sha, vi, a.root)
+            entry = landxml_entry(bdir, path, sha, vi, a.root,
+                                  input_file(path, a.root, a.source_root, a.site, a.sub))
         else:
             entry = {"path": path, "sha256": sha, "type": "other", "status": "skipped", "output": None,
                      "error": {"code": EXIT_INPUT, "detail": "file type not handled by intake-batch"}}

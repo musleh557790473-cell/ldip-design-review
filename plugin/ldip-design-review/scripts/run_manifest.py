@@ -7,6 +7,12 @@ Sub-commands:
          guard hook) and the first run.jsonl event. Refuses (exit 5) if a run is already active,
          the run-id exists, the rulebook is not 'approved' (SPC-0005 §4.12), or the guard hook's
          configured root (LDIP_REVIEW_ROOT / guard_config.json) is missing or differs from --root (P-S3-8).
+         --source <folder> (0.3.0, SPC-0005 Rev F §5.0.5): the submittal is read in place from an
+         external folder under a guard_config.json `submittal_source_roots` entry; for the run it is the
+         logical folder submittals/<SITE>/<sub-id>/. inputs[] keep logical paths (+ mtime_ns); the
+         manifest and the active-run marker carry source {logical, path}. Refused (exit 5) when no
+         roots are configured, the folder (links resolved) is outside them, a link inside it resolves
+         outside it, or submittals/<SITE>/<sub-id>/ also exists.
   Emergency end of a crashed run: close --status aborted (removes the active-run marker, P-S3-1).
   event  --root R --run RUN --agent A --event E [--instance N] [--detail JSON]
          Appends one event to runs/<run>/run.jsonl (SPC-0002 §7.2 event names only).
@@ -14,11 +20,14 @@ Sub-commands:
          rules_skipped[] entry (rule_id and reason only), so no free text passes through the shell:
          rulebook reasons contain ';' which the guard denies on a command line (live trial 2026-10-01).
   close  --root R --run RUN --status completed|failed|aborted
-         Closes the manifest and removes runs/_active_run.json.
+         Closes the manifest and removes runs/_active_run.json. With an external source (Rev F
+         §6.2.4, D39-2) the folder is compared with inputs[] (file set, bytes, mtime_ns; a file whose
+         mtime changed is re-hashed): any difference closes the run `aborted` with
+         source_check.changed, whatever status was asked.
 
 Prints a one-line JSON summary; exit codes per SPC-0006 §2.3.3. No network, no shell calls.
 """
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 import argparse
 import json
@@ -30,8 +39,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ldip_common import (  # noqa: E402
     ACTIVE_RUN_FILE, EXIT_INPUT, EXIT_OK, EXIT_REFUSED, RUN_ID_RE, SITES, SUB_ID_RE, ScriptError,
-    append_jsonl, atomic_write_json, check_path_len, configured_review_root, iso_utc, now_riyadh,
-    parse_summary, read_json, sha256_file, to_posix_abs,
+    append_jsonl, atomic_write_json, check_path_len, configured_review_root, configured_source_roots,
+    iso_utc, now_riyadh, parse_summary, path_under, read_json, sha256_file, to_posix_abs,
 )
 
 MODES = ("live", "test", "shadow")
@@ -67,6 +76,73 @@ def hash_inputs(root, folder):
     return items
 
 
+def list_source(base, logical):
+    """(logical path, real Path) of every file under an external source, links not followed
+    (os.walk). A link that resolves outside the source folder -> refused (D39-1)."""
+    base_posix = to_posix_abs(base, "/")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames.sort()
+        for name in list(dirnames) + filenames:
+            q = Path(dirpath) / name
+            if q.is_symlink() and not path_under(to_posix_abs(q, "/"), base_posix):
+                raise ScriptError(EXIT_REFUSED, f"link inside the source resolves outside it: {q} (SPC-0005 Rev F §7.2)")
+        for name in sorted(filenames):
+            q = Path(dirpath) / name
+            if not q.is_file():
+                continue
+            rel = q.relative_to(base).as_posix()
+            logical_path = f"{logical}/{rel}"
+            check_path_len(logical_path)
+            out.append((logical_path, q))
+    return sorted(out)
+
+
+def hash_source(base, logical):
+    items = []
+    for lp, q in list_source(base, logical):
+        st = q.stat()
+        items.append({"path": lp, "bytes": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": sha256_file(q)})
+    return items
+
+
+def open_source(a, root, guard_root, sub_dir):
+    roots = configured_source_roots(PLUGIN_ROOT / "hooks", guard_root)
+    if not roots:
+        raise ScriptError(EXIT_REFUSED, "--source given but no submittal_source_roots in guard_config.json "
+                                        "(SPC-0005 Rev F §7.6)")
+    src = Path(a.source).resolve()
+    if not src.is_dir():
+        raise ScriptError(EXIT_INPUT, f"source folder not found: {a.source}")
+    src_posix = to_posix_abs(src, "/")
+    if not any(path_under(src_posix, r) for r in roots):
+        raise ScriptError(EXIT_REFUSED, f"source {src_posix} is not under a configured submittal source root "
+                                        "(SPC-0005 Rev F §5.0.5b, D39-1)")
+    if sub_dir.exists():
+        raise ScriptError(EXIT_REFUSED, f"submittals/{a.site}/{a.sub}/ also exists in LDIP_Review; one logical "
+                                        "folder, one physical folder (SPC-0005 Rev F §5.0.5b)")
+    logical = f"submittals/{a.site}/{a.sub}"
+    return {"logical": logical, "path": src_posix}, hash_source(src, logical)
+
+
+def source_changes(m):
+    """Logical paths added, deleted or changed in the external source since open (Rev F §6.2.4)."""
+    src = m["source"]
+    base = Path(src["path"])
+    if not base.is_dir():
+        return [f"{src['logical']}/ (source folder not found)"]
+    old = {i["path"]: i for i in m.get("inputs", [])}
+    now = dict(list_source(base, src["logical"]))
+    changed = set(old) ^ set(now)
+    for lp in set(old) & set(now):
+        st, o = now[lp].stat(), old[lp]
+        if st.st_size != o.get("bytes"):
+            changed.add(lp)
+        elif st.st_mtime_ns != o.get("mtime_ns") and sha256_file(now[lp]) != o.get("sha256"):
+            changed.add(lp)
+    return sorted(changed)
+
+
 def cmd_open(a):
     root = Path(a.root).resolve()
     if a.site not in SITES:
@@ -82,7 +158,7 @@ def cmd_open(a):
     if guard_root != to_posix_abs(root, "/"):
         raise ScriptError(EXIT_REFUSED, f"guard root {guard_root} differs from --root {root} (P-S3-8)")
     sub_dir = root / "submittals" / a.site / a.sub
-    if not sub_dir.is_dir():
+    if not a.source and not sub_dir.is_dir():
         raise ScriptError(EXIT_INPUT, f"submittal folder not found: {sub_dir}")
     active = root / ACTIVE_RUN_FILE
     if active.exists():
@@ -100,6 +176,7 @@ def cmd_open(a):
     if run_dir.exists():
         raise ScriptError(EXIT_REFUSED, f"run folder exists, nothing is overwritten (SPC-0002 §4.3): {run_id}")
 
+    source, inputs = open_source(a, root, guard_root, sub_dir) if a.source else (None, None)
     name, version, skills, scripts = plugin_versions()
     manifest = {
         "run_id": run_id, "site": a.site, "sub_id": a.sub, "mode": a.mode,
@@ -107,17 +184,23 @@ def cmd_open(a):
         "skill_versions": skills, "script_versions": scripts,
         "rulebook_file": rb_path.relative_to(root).as_posix() if rb_path.is_relative_to(root) else str(rb_path),
         "rulebook_version": rb.get("rulebook_version"), "rulebook_sha256": sha256_file(rb_path),
-        "inputs": hash_inputs(root, sub_dir),
+        "inputs": inputs if source else hash_inputs(root, sub_dir),
         "started_at": iso_utc(), "ended_at": None, "status": "running",
         "manifest_script": f"run_manifest.py {__version__}",
     }
+    marker = {"run_id": run_id, "site": a.site, "sub_id": a.sub, "mode": a.mode,
+              "started_at": manifest["started_at"]}
+    if source:
+        manifest["source"] = marker["source"] = source
     atomic_write_json(run_dir / "manifest.json", manifest)
-    atomic_write_json(active, {"run_id": run_id, "site": a.site, "sub_id": a.sub, "mode": a.mode,
-                               "started_at": manifest["started_at"]})
+    atomic_write_json(active, marker)
     append_jsonl(run_dir / "run.jsonl", {"ts": iso_utc(), "agent": "orchestrator", "instance": "1",
                                          "event": "start", "detail": {"mode": a.mode}})
-    return {"status": "ok", "run_id": run_id, "inputs": len(manifest["inputs"]),
-            "rulebook_version": manifest["rulebook_version"], "plugin_version": version}
+    res = {"status": "ok", "run_id": run_id, "inputs": len(manifest["inputs"]),
+           "rulebook_version": manifest["rulebook_version"], "plugin_version": version}
+    if source:
+        res["source"] = source["path"]
+    return res
 
 
 def run_dir_of(root, run):
@@ -180,14 +263,27 @@ def cmd_close(a):
     m = read_json(d / "manifest.json")
     if m.get("status") != "running":
         raise ScriptError(EXIT_REFUSED, f"run already closed ({m.get('status')}); manifests are immutable after the run (SPC-0002 §9.3)")
-    m["status"], m["ended_at"] = a.status, iso_utc()
+    status, detail = a.status, {"status": a.status}
+    if m.get("source"):
+        changed = source_changes(m)
+        m["source_check"] = {"result": "changed" if changed else "unchanged", "changed": changed,
+                             "checked_at": iso_utc()}
+        if changed:
+            status = "aborted"
+            detail = {"status": status, "requested": a.status, "source_changed": changed[:200],
+                      "source_changed_count": len(changed)}
+    m["status"], m["ended_at"] = status, iso_utc()
     atomic_write_json(d / "manifest.json", m)
     append_jsonl(d / "run.jsonl", {"ts": iso_utc(), "agent": "orchestrator", "instance": "1",
-                                   "event": "end", "detail": {"status": a.status}})
+                                   "event": "end", "detail": detail})
     active = Path(a.root).resolve() / ACTIVE_RUN_FILE
     if active.exists() and read_json(active).get("run_id") == a.run:
         active.unlink()
-    return {"status": "ok", "run_id": a.run, "run_status": a.status}
+    res = {"status": "ok", "run_id": a.run, "run_status": status}
+    if m.get("source"):
+        res["source_check"] = m["source_check"]["result"]
+        res["source_changed_count"] = len(m["source_check"]["changed"])
+    return res
 
 
 def main(argv=None):
@@ -199,6 +295,7 @@ def main(argv=None):
     o.add_argument("--sub", required=True)
     o.add_argument("--mode", default="live")
     o.add_argument("--rulebook", required=True)
+    o.add_argument("--source", help="external submittal folder (SPC-0005 Rev F §5.0.5)")
     o.add_argument("--now", help=argparse.SUPPRESS)  # fixed stamp for tests
     e = sp.add_parser("event")
     e.add_argument("--root", required=True)

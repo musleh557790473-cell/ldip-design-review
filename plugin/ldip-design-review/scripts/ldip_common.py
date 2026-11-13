@@ -3,7 +3,7 @@
 Conventions: SPC-0006 Rev B §2.3 (exit codes, atomic writes, pathlib, 250-char
 limit, determinism, no network, no shell).
 """
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import hashlib
 import json
@@ -209,6 +209,73 @@ def configured_review_root(hooks_dir=None):
         if hooks_dir and (Path(hooks_dir) / "guard_config.json").is_file():
             root = json.loads((Path(hooks_dir) / "guard_config.json").read_text(encoding="utf-8")).get("ldip_review_root")
     return to_posix_abs(root, "/") if root else None
+
+
+def _guard_config_value(key, hooks_dir=None):
+    """Value of `key` in guard_config.json, searched in the same order as configured_review_root
+    ($CLAUDE_PLUGIN_DATA wins, then the standard data folders, then hooks/). Two data folders with
+    different values -> None (fail-closed)."""
+    env_dir = os.environ.get("CLAUDE_PLUGIN_DATA")
+    found = []
+    for d in plugin_data_dirs():
+        f = Path(d) / "guard_config.json"
+        if f.is_file():
+            v = json.loads(f.read_text(encoding="utf-8")).get(key)
+            if v:
+                if env_dir and Path(d) == Path(env_dir):
+                    return v
+                found.append(v)
+    uniq = {json.dumps(v, sort_keys=True) for v in found}
+    if len(uniq) > 1:
+        return None
+    if found:
+        return found[0]
+    if hooks_dir and (Path(hooks_dir) / "guard_config.json").is_file():
+        return json.loads((Path(hooks_dir) / "guard_config.json").read_text(encoding="utf-8")).get(key)
+    return None
+
+
+def is_windows_path(p):
+    return os.name == "nt" or bool(re.match(r"^[A-Za-z]:/", str(p)))
+
+
+def _fold(p):
+    """Comparison form of an absolute POSIX path: case-folded on Windows (SPC-0005 Rev F §7.2c, P39-6)."""
+    p = str(p).rstrip("/") or "/"
+    return p.casefold() if is_windows_path(p) else p
+
+
+def path_under(abs_posix, base_posix):
+    """True if abs_posix is base_posix or below it (case-insensitive for Windows paths)."""
+    a, b = _fold(abs_posix), _fold(base_posix)
+    return a == b or a.startswith(b.rstrip("/") + "/")
+
+
+def configured_source_roots(hooks_dir=None, review_root=None):
+    """External submittal roots allowed for --source (SPC-0005 Rev F §7.6; D39-1): guard_config.json
+    key `submittal_source_roots`, absolute POSIX strings. Absent / empty -> []. A root that is inside,
+    or contains, the review root is an error (ScriptError EXIT_REFUSED)."""
+    raw = _guard_config_value("submittal_source_roots", hooks_dir) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    roots = [to_posix_abs(r, "/") for r in raw if isinstance(r, str) and r.strip()]
+    if review_root:
+        for r in roots:
+            if path_under(r, review_root) or path_under(review_root, r):
+                raise ScriptError(EXIT_REFUSED, f"submittal source root {r} overlaps the review root {review_root} "
+                                                "(SPC-0005 Rev F §7.6)")
+    return roots
+
+
+def map_source(abs_posix, active):
+    """Logical path ('submittals/<SITE>/<sub-id>/...') of a real path under the active run's external
+    source (SPC-0005 Rev F §7.2a; D39-4), or None when the run has no source or the path is outside it."""
+    src = (active or {}).get("source") or {}
+    base, logical = src.get("path"), src.get("logical")
+    if not base or not logical or not path_under(abs_posix, base):
+        return None
+    rest = str(abs_posix)[len(str(base).rstrip("/")):].lstrip("/")
+    return logical.rstrip("/") + ("/" + rest if rest else "")
 
 
 SUMMARY_FENCE_RE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(.*)\r?\n```[ \t]*\Z", re.S)

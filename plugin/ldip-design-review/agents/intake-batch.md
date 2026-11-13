@@ -31,6 +31,13 @@ and never read another batch. Several instances run in parallel, one per batch.
 `run_id`, `site`, `sub_id`, `mode`, your batch number `b<nn>`, the DWG engine, and your file list
 (path and SHA-256 of each file under `submittals/<SITE>/<sub-id>/`). Do not list the submittal folder yourself.
 
+External source (SPC-0005 Rev F §5.0.5): when the prompt has a `source:` line, the submittal is read
+in place from that folder and each file line reads `- <real path> <sha256> (logical: <logical path>)`.
+Open the **real** path with the tools (`--dwg`, `--pdf`, `--in`, `--resolve-base`); record the
+**logical** path everywhere a path is recorded (`--source-path`, `write_manifest.py --file`) and add
+`--source-root "<source folder>"` to the `write_manifest.py` call. The folder rule below applies to
+the logical path.
+
 ## 4. Paths
 
 - Read: the files in your list; your own batch folder.
