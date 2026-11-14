@@ -5,10 +5,12 @@ format_check.py (FC5), so the rule-state cap is never coded twice (owner, 30 Sep
 
 The module never edits a rulebook or a value (SPC-0004 §4.4). No network, no shell calls.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 # 0.2.0 (SPC-0004 Rev E, I11): schema 1.1 (ROD / EWK / COR rules, applicability, keyed and advisory parameters,
 # target state, tolerances, required inputs, stage map); lint L5-L12; advisory parameters capped at Probable
 # (Rev E §4.7) in get_rules output and in FC5 when a finding names its parameter (SPC-0003 Rev E §4.8).
+# 0.3.0 (SPC-0004 Rev M, rules_v10): schema 1.2 (WUT rules / agent / skill, source precedence_tier, parameter
+# alternatives, wet-utility inputs, diameter_mm / network keys); L7 and L10 also apply to WUT.
 
 import json
 from pathlib import Path
@@ -24,7 +26,7 @@ CAP_RANK = {"active": 3, "advisory": 2}
 # Missing information ranks with Confirmed (brief §5.1); agreed by the owner, 30 Sep 2026.
 STATUS_RANK = {"Confirmed": 3, "Missing information": 3, "Probable": 2, "Not auto-verifiable": 1}
 APPROVED_SOURCE = ("approved", "internal_agreed")
-ROAD_GROUPS = ("ROD", "EWK", "COR")
+ROAD_GROUPS = ("ROD", "EWK", "COR", "WUT")   # groups under lint L7 / L10 (SPC-0004 Rev M §3 item 3)
 SKILL_NOT_BUILT = "skill not built"
 
 
