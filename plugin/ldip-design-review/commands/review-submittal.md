@@ -1,7 +1,7 @@
 ---
 description: LDIP design review — run the review agents on one Parsons submittal (drafts only; nothing is issued)
 allowed-tools: Agent, Read, Glob, Bash, Write
-argument-hint: <SITE> <sub-id> [--mode live|test|shadow] [--engine oda|accoreconsole|ezdwg|chain] [--schedule <path>] [--schedule-no <document number>]
+argument-hint: <SITE> <sub-id> [--mode live|test|shadow] [--engine oda|accoreconsole|ezdwg|chain] [--schedule <path>] [--schedule-no <document number>] [--source <external submittal folder>]
 ---
 
 # /review-submittal — Orchestrator (Agent 0)
@@ -17,7 +17,9 @@ Nothing produced by this run is issued: every output is a draft for the Human Re
 
 1. Parse `<SITE>` (QRWN, NRJS or NMAR — set by the owner, never detected), `<sub-id>`, `--mode`
    (default `live`), `--engine` (default `oda`), `--schedule` (the masterplan workbook, or the
-   folder holding its CSV exports) and `--schedule-no` (its Parsons document number).
+   folder holding its CSV exports), `--schedule-no` (its Parsons document number) and `--source`
+   (optional, SPC-0005 Rev F §5.0.5: an absolute folder outside LDIP_Review that holds the submittal;
+   it is read in place and is the logical folder `submittals/<SITE>/<sub-id>/` for this run).
 2. The session's working directory is the LDIP_Review folder: `Glob` with pattern `*` and
    `path` = `rulebook` must list `rulebook/rules_v<N>.json`, and with `path` = `runs` must list
    `runs/README.md`. Never Glob or Grep without `path` (the guard denies a search of the whole
@@ -31,10 +33,14 @@ no `&&`, `;`, `|`, redirection, `$VAR`, `$?`, `date`, `mkdir` or `echo` (D11).
 ## 1. Open the run
 
 `python "<P>/run_manifest.py" open --root . --site <SITE> --sub <sub-id> --mode <mode> --rulebook rulebook/rules_v<N>.json`
+(with `--source`, add `--source "<folder>"`).
 
-Exit 5 = refused (a run is already active, the rulebook is not approved, or the guard root differs):
-report the `detail` and stop. Keep the printed `run_id` as `<run>`. Read `runs/<run>/manifest.json`:
-its `inputs[]` give the path and SHA-256 of every submittal file.
+Exit 5 = refused (a run is already active, the rulebook is not approved, the guard root differs, or
+the source is not under a configured submittal source root): report the `detail` and stop. Keep the
+printed `run_id` as `<run>`. Read `runs/<run>/manifest.json`: its `inputs[]` give the logical path and
+SHA-256 of every submittal file. When the manifest has `source` (`{logical, path}`), the real path of
+an input is `source.path` + the part of its path after `source.logical`; every agent prompt below then
+gets one extra line `source: <source.path> = <source.logical>`.
 
 ## 2. Step pattern — apply to every agent step below
 
@@ -80,6 +86,9 @@ batch: b<nn>   engine: <engine>
 files (path, sha256):
 - submittals/<SITE>/<sub-id>/<file> <sha256>
 ```
+
+With an external source the prompt adds `source: <source.path> = submittals/<SITE>/<sub-id>` after
+the `batch:` line, and each file line is `- <real path> <sha256> (logical: submittals/<SITE>/<sub-id>/<file>)`.
 
 If the submittal holds no DWG, PDF or XML, skip step 1a and log it in the chat summary. A `.xml` is
 parsed by skill 3 `parsing-landxml`; the agent sets its provenance by the folder rule (`parsons`, or
@@ -132,7 +141,10 @@ candidate files:
 ## 4. Close and report
 
 `python "<P>/run_manifest.py" close --root . --run <run> --status <completed|failed>`
-(`failed` if any step failed after its retries).
+(`failed` if any step failed after its retries). With an external source the script re-checks the
+source folder (SPC-0005 Rev F §6.2.4): if `source_check` is `changed`, the run is closed `aborted`
+whatever you asked — say so first in the summary, with `source_changed_count`, and state that the
+drafts of this run must not be used.
 
 Then give the owner a short chat summary, built only from the return summaries and
 `findings/<run>/verified.json`: counts by verification status and by severity, the steps skipped

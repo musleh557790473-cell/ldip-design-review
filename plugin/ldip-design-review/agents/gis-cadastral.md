@@ -40,6 +40,9 @@ listed; never search for others.
 
 - Read: `0.ai_context/<SITE>/<sub-id>/**`, `submittals/<SITE>/<sub-id>/**`,
   `submittals/<SITE>/_reference/**`, `submittals/<SITE>/masterplan-schedule/**`, `rulebook/**`.
+- External source (SPC-0005 Rev F §5.0.5): when the prompt has a `source:` line, a path that starts
+  with `submittals/<SITE>/<sub-id>/` is opened at `<source folder>/<rest of the path>`; findings keep
+  the logical path.
 - Write: `findings/<run>/candidates/gis.json`, `findings/<run>/reasoning/gis.md`,
   `findings/<run>/evidence/gis/**`. Nothing else.
 - Run every command from the LDIP_Review folder (the session's working directory), with relative

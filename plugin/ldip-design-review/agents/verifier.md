@@ -38,6 +38,9 @@ cap. A disagreement with a finder is recorded as Probable; it is not retried.
 
 - Read: `findings/<run>/candidates/**`, `findings/<run>/evidence/**`, `0.ai_context/**`,
   `submittals/<SITE>/**`, `rulebook/**`.
+- External source (SPC-0005 Rev F §5.0.5): when the prompt has a `source:` line, a path that starts
+  with `submittals/<SITE>/<sub-id>/` is opened at `<source folder>/<rest of the path>`; findings and
+  evidence keep the logical path.
 - Write: `findings/<run>/verified.json`, `findings/<run>/evidence/verifier/**`. Nothing else.
 - Run every command from the LDIP_Review folder with relative paths; Bash runs your skills'
   scripts only.
