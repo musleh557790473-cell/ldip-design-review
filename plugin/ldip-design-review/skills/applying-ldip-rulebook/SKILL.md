@@ -2,15 +2,15 @@
 name: applying-ldip-rulebook
 description: >-
   LDIP design review (AICC JV): loads the approved LDIP Rulebook file,
-  validates it, returns the PKG, GIS, road (ROD), earthworks (EWK) or
-  utility-corridor (COR) rules for an agent with their state (active,
+  validates it, returns the PKG, GIS, road (ROD), earthworks (EWK),
+  utility-corridor (COR) or wet-utility (WUT) rules for an agent with their state (active,
   advisory, inactive), parameters, tolerances, code lists and highest allowed
   verification status, and checks a proposed or verified status against that
   cap. Use whenever an LDIP agent needs a rule value, tolerance, code list or
   status cap.
 metadata:
-  version: "0.2.0"
-  spec: "AICC-BIM-SPC-0006 Rev B §4.5; AICC-BIM-SPC-0004 Rev E §3-§4"
+  version: "0.3.0"
+  spec: "AICC-BIM-SPC-0006 Rev B §4.5; AICC-BIM-SPC-0004 Rev E §3-§4; Rev M (schema 1.2)"
 ---
 
 # Applying the LDIP Rulebook
@@ -48,7 +48,7 @@ Run the scripts; do not read their source. `<RB>` is the rulebook path from the 
 2. **Plan** — get your rules and write them to your evidence folder:
    `python "<SK>/get_rules.py" --rulebook "<RB>" --agent GIS --out "findings/<run>/evidence/gis/rules_GIS.json"`
    (Intake package step: `--agent INT`, folder `evidence/intake/`; roads and earthworks `--agent RDE`;
-   coordination `--agent COO`.) The file lists `rules` (state, cap, parameters with their own cap and
+   coordination `--agent COO`; wet utilities `--agent WUT`.) The file lists `rules` (state, cap, parameters with their own cap and
    tolerance, code lists, default status by evidence source, exclusions, applicability, required inputs),
    `rules_skipped` (with `target_state`) and the `stage_map`.
 3. **Execute** — run each listed rule with its own skill. For a code list or one parameter:

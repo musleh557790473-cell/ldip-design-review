@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aicc.local/ldip-design-review/rules.schema.json",
   "title": "LDIP Design Review Rulebook",
-  "description": "AICC-BIM-SPC-0004 Rev E (approved 14 Oct 2026). Structure of rulebook/rules_v<N>.json, schema 1.1 (adds ROD / EWK / COR rules, applicability, table-valued and advisory parameters, target state, source tier, tolerances, check type, required inputs, stage map). Schema 1.0 files stay valid. Git holds this schema and a placeholder example only; real values stay in LDIP_Review/rulebook/ (SPC-0002 C7, brief §10.2).",
+  "description": "AICC-BIM-SPC-0004 Rev E (approved 14 Oct 2026). Structure of rulebook/rules_v<N>.json, schema 1.2 (SPC-0004 Rev M: adds WUT rules / agent / skill, DQ-7a precedence_tier on sources, parameter alternatives, wet-utility inputs, diameter_mm / network keys). Schema 1.1 (adds ROD / EWK / COR rules, applicability, table-valued and advisory parameters, target state, source tier, tolerances, check type, required inputs, stage map). Schema 1.0 files stay valid. Git holds this schema and a placeholder example only; real values stay in LDIP_Review/rulebook/ (SPC-0002 C7, brief §10.2).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,8 @@
     "rulebook_schema_version": {
       "enum": [
         "1.0",
-        "1.1"
+        "1.1",
+        "1.2"
       ]
     },
     "rulebook_version": {
@@ -141,6 +142,17 @@
             null
           ],
           "description": "Value hierarchy tier (SPC-0004 Rev E §2.3): 1 ER / DTR; 2 standards; 2b draft sources; observation (law, OCR copy)."
+        },
+        "precedence_tier": {
+          "enum": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            null
+          ],
+          "description": "DQ-7a design-criteria precedence (SPC-0006 Rev Q §4.19.9; WT-2): 1 contract ER → DTR → CMP; 2 project authority conditions; 3 RIPC; 4 provider / MOMAH / SHC standards; 5 Parsons declared. Independent of the Rev E 'tier' field, which stays valid for ROD / EWK / COR."
         }
       }
     },
@@ -238,7 +250,9 @@
               "junction_type",
               "land_use",
               "parking_type",
-              "phase"
+              "phase",
+              "diameter_mm",
+              "network"
             ]
           },
           "description": "S8: value is an object keyed by these dimensions (e.g. street_class)."
@@ -256,6 +270,34 @@
         },
         "required_from_phase": {
           "$ref": "#/$defs/phase"
+        },
+        "alternatives": {
+          "type": "array",
+          "description": "Tier-1 (or lower-tier) values that differ from the governing value; reported as Observation rows (DQ-15, DQ-7a).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "source_id",
+              "clause"
+            ],
+            "properties": {
+              "value": {},
+              "source_id": {
+                "type": "string"
+              },
+              "clause": {
+                "type": "string"
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
         }
       },
       "allOf": [
@@ -317,7 +359,7 @@
       "properties": {
         "rule_id": {
           "type": "string",
-          "pattern": "^(PKG|GIS|ROD|EWK|COR)-[0-9]{3}$"
+          "pattern": "^(PKG|GIS|ROD|EWK|COR|WUT)-[0-9]{3}$"
         },
         "title": {
           "type": "string",
@@ -329,7 +371,8 @@
             "GIS",
             "ROD",
             "EWK",
-            "COR"
+            "COR",
+            "WUT"
           ]
         },
         "agent": {
@@ -337,7 +380,8 @@
             "INT",
             "GIS",
             "RDE",
-            "COO"
+            "COO",
+            "WUT"
           ]
         },
         "skill": {
@@ -347,7 +391,8 @@
             "checking-cadastral-geometry",
             "reviewing-road-design",
             "reviewing-earthworks-geotech",
-            "coordinating-utility-corridors"
+            "coordinating-utility-corridors",
+            "reviewing-wet-utilities"
           ]
         },
         "owner_role": {
@@ -657,7 +702,13 @@
         "grading_surface",
         "plot_levels",
         "parking_schedule",
-        "landscape_plan"
+        "landscape_plan",
+        "hydraulic_model",
+        "hydraulic_results",
+        "long_section",
+        "hydrology_report",
+        "demand_calculation",
+        "authority_mom"
       ]
     },
     "required_input": {
