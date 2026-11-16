@@ -218,6 +218,26 @@ def min_rotated_rect(poly):
     return w, L, ang
 
 
+def parking_layer_match(layer, patterns):
+    """True when layer (short name) matches a site parking_layers entry (R-I3 / fullmatch, like curb_layers)."""
+    if not patterns or not layer:
+        return False
+    return any(re.fullmatch(p, layer, re.I) for p in patterns)
+
+
+def stall_size_ok(width, length, c3=None):
+    """G-1 size gate: width and length must both fall in the configured stall ranges.
+
+    Defaults cover parallel / perpendicular / angle / accessible bay envelopes in check_parking.SIZES
+    and ACC_SIZES (≈ 2.0–5.5 m × 4.5–7.0 m). Parcel-scale polygons fail length or width.
+    """
+    c3 = c3 or {}
+    w_lo, w_hi = (c3.get("bay_width_m") or [2.0, 5.5])[:2]
+    l_lo, l_hi = (c3.get("bay_length_m") or [4.5, 7.0])[:2]
+    w, L = (width, length) if width <= length else (length, width)
+    return (w_lo - 1e-9 <= w <= w_hi + 1e-9) and (l_lo - 1e-9 <= L <= l_hi + 1e-9)
+
+
 def angle_class(ang_to_curb, classes):
     """classes: {parallel_max, angle_lo, angle_hi, perp_min}."""
     a = abs(ang_to_curb) % 180
