@@ -11,10 +11,12 @@ PreToolUse hook for Read | Glob | Grep | Write | Edit | MultiEdit | NotebookEdit
   * Bash must match the agent's script allowlist (SPC-0005 §4.3, §7.3); shell operators
     are refused; path arguments are checked like reads/writes.
   * Fail-closed: unknown agent_type, missing configuration or an internal error -> deny.
-  * Scope (D12, owner approved 5 Oct 2026): the plugin is enabled account-wide, so the guard sees
-    every task. A sub-agent that is not an LDIP agent (another plugin's, or a built-in one such as
-    general-purpose) is left alone unless it touches the LDIP_Review folder or an LDIP review run is
-    active; then it is denied. Spoofs stay denied: bare LDIP agent names, unknown
+  * Scope (D12, owner approved 5 Oct 2026; narrowed by G41-1, 23 Nov 2026): the plugin is enabled
+    account-wide, so the guard sees every task. A sub-agent that is not an LDIP agent (another plugin's,
+    or a built-in one such as general-purpose) is left alone unless it touches the LDIP_Review folder,
+    or an LDIP review run is active and the call is made from, or refers to, LDIP_Review or a
+    submittal_source_roots entry; then it is denied. The main session's Bash allowlist during a run
+    applies under the same scope test (0.5.1). Calls from other projects pass unchecked. Spoofs stay denied: bare LDIP agent names, unknown
     "ldip-design-review:*" names, an empty or non-string agent_type.
 
 Allow = exit 0 with no output (normal permission flow continues).
@@ -29,7 +31,7 @@ Deny  = JSON with hookSpecificOutput.permissionDecision = "deny" and a reason.
 Configuration: LDIP_REVIEW_ROOT (env) or guard_config.json {"ldip_review_root": "..."} in
 $CLAUDE_PLUGIN_DATA, a standard plugin data folder (ldip_common 0.3.0, D6) or next to this file. No network, no shell calls.
 """
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 import json
 import os
@@ -111,30 +113,37 @@ def foreign_agent(data, matrix):
     return at not in bare_ours
 
 
-def touches_root(data, root):
-    """True if the call refers to the LDIP_Review folder (path inputs, cwd, or text of a Bash command)."""
-    if not root:
+def touches_root(data, root, extra_roots=()):
+    """True if the call refers to the LDIP_Review folder or a submittal source root (path inputs, cwd,
+    or text of a Bash command). Windows paths compare case-insensitively (0.5.1, P39-6)."""
+    bases = [to_posix_abs(b, "/").rstrip("/") for b in ([root] if root else []) + list(extra_roots) if b]
+    if not bases:
         return False
-    root_p = to_posix_abs(root, "/").rstrip("/")
     cwd = data.get("cwd") or os.getcwd()
-    if under(to_posix_abs(cwd, "/"), root_p):
+    if any(path_under(to_posix_abs(cwd, "/"), b) for b in bases):
         return True
     ti = data.get("tool_input") or {}
     for key in ("file_path", "notebook_path", "path"):
         v = ti.get(key)
-        if isinstance(v, str) and v and under(to_posix_abs(v, cwd), root_p):
+        if isinstance(v, str) and v and any(path_under(to_posix_abs(v, cwd), b) for b in bases):
             return True
     pat = ti.get("pattern")
     if data.get("tool_name") == "Glob" and isinstance(pat, str) and (pat.startswith("/") or re.match(r"^[A-Za-z]:", pat)):
-        if under(to_posix_abs(re.split(r"[*?\[{]", pat, 1)[0] or "/", "/"), root_p) or root_p.startswith(
-                to_posix_abs(re.split(r"[*?\[{]", pat, 1)[0] or "/", "/").rstrip("/") + "/"):
+        lit = to_posix_abs(re.split(r"[*?\[{]", pat, 1)[0] or "/", "/")
+        if any(path_under(lit, b) or path_under(b, lit) for b in bases):
             return True
     cmd = ti.get("command")
     if isinstance(cmd, str):
-        flat = cmd.replace("\\", "/")
-        if root_p in flat or Path(root_p).name in flat:
+        flat = cmd.replace("\\", "/").casefold()
+        if any(b.casefold() in flat for b in bases) or (root and Path(bases[0]).name.casefold() in flat):
             return True
     return False
+
+
+def in_ldip_scope(data, root):
+    """D12 scope (0.5.1): a call is governed by an active run only when it is made from, or refers to,
+    the LDIP_Review tree or a submittal source root. Calls from other projects pass unchecked."""
+    return touches_root(data, root, configured_source_roots(HERE, root))
 
 
 def resolve_agent(data, matrix):
@@ -281,8 +290,8 @@ def allowed_scripts(ctx):
 
 
 def check_bash(ctx, command):
-    if ctx.main and not ctx.run:
-        return
+    if ctx.main and (not ctx.run or not ctx.in_scope):
+        return  # main session of another project during a run: not governed (0.5.1, D12 scope)
     cmd = command.replace("${CLAUDE_PLUGIN_ROOT}", ctx.proot).replace("$CLAUDE_PLUGIN_ROOT", ctx.proot)
     if SHELL_META.search(outside_quotes(cmd)):
         raise Deny("Bash: shell operators, redirection and variables are not allowed (SPC-0005 §7.3)")
@@ -314,7 +323,7 @@ def check_bash(ctx, command):
 def decide(data):
     root, matrix = load_config()
     if foreign_agent(data, matrix):        # D12: other projects and other plugins are not governed
-        if root and active_run(root):
+        if root and active_run(root) and in_ldip_scope(data, root):
             raise Deny(f"agent_type {data['agent_type']!r} may not act while an LDIP review run is active (fail-closed)")
         if touches_root(data, root):
             raise Deny(f"agent_type {data['agent_type']!r} may not touch the LDIP_Review folder (only LDIP agents)")
@@ -330,6 +339,7 @@ def decide(data):
         raise Deny(f"{agent} may act only during an active review run (runs/_active_run.json)")
     cwd = data.get("cwd") or os.getcwd()
     ctx = Ctx(root, matrix, agent, run, cwd)
+    ctx.in_scope = bool(run) and in_ldip_scope(data, root)
     tool = data.get("tool_name", "")
     ti = data.get("tool_input") or {}
 
