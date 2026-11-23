@@ -63,10 +63,16 @@ def test_other_agents_kept_out_of_ldip_review(root, tool, ti, cwd):
     assert guard(d, root) == "deny"
 
 
-def test_other_agents_denied_during_an_ldip_run(root):
+def test_other_agents_elsewhere_not_governed_during_an_ldip_run(root):
+    """G41-1 (0.5.1): an open run no longer reaches other projects."""
     d = {"tool_name": "Read", "tool_input": {"file_path": f"{OTHER}/notes.md"}, "agent_type": "general-purpose", "cwd": str(OTHER)}
-    assert guard(d, root, run=True) == "deny"
+    assert guard(d, root, run=True) == "allow"
     assert guard(d, root, run=False) == "allow"
+
+
+def test_other_agents_denied_during_an_ldip_run_inside_root(root):
+    d = {"tool_name": "Read", "tool_input": {"file_path": f"{OTHER}/notes.md"}, "agent_type": "general-purpose", "cwd": str(root / "findings")}
+    assert guard(d, root, run=True) == "deny"
 
 
 def test_answer_key_text_denied_for_everyone():
@@ -84,3 +90,65 @@ def test_spoofs_still_denied_everywhere(agent):
 def test_main_session_elsewhere_still_allowed(root):
     d = {"tool_name": "Bash", "tool_input": {"command": "ls && pwd"}, "cwd": str(OTHER)}
     assert guard(d, root) == "allow"
+
+
+def test_main_session_elsewhere_not_limited_during_a_run(root):
+    """G41-1 (0.5.1): the Bash allowlist binds the main session only inside the LDIP scope."""
+    d = {"tool_name": "Bash", "tool_input": {"command": "ls && pwd"}, "cwd": str(OTHER)}
+    assert guard(d, root, run=True) == "allow"
+
+
+@pytest.mark.parametrize("cwd,cmd", [
+    ("{R}", "ls -la"),                                   # session inside the root
+    ("{R}/runs", "python3 -c 1"),                        # not a plugin script
+    (str(OTHER), 'ls "{R}/runs"'),                       # outside, but names the root
+    (str(OTHER), "cat ../LDIP & Review/x"),              # outside, names the root folder
+])
+def test_main_session_bash_limited_in_scope_during_a_run(root, cwd, cmd):
+    d = {"tool_name": "Bash", "tool_input": {"command": cmd.replace("{R}", str(root))}, "cwd": cwd.replace("{R}", str(root))}
+    assert guard(d, root, run=True) == "deny"
+
+
+def _with_source(root, tmp_path):
+    src = tmp_path / "Parsons" / "Submission"
+    (src / "NRJS" / "60pct").mkdir(parents=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "guard_config.json").write_text(json.dumps({"ldip_review_root": str(root),
+                                                        "submittal_source_roots": [str(src)]}))
+    return src, data
+
+
+def guard_cfg(data, root, data_dir, run=True):
+    env = {**os.environ}
+    for k in ("LDIP_REVIEW_ROOT", "CLAUDE_PLUGIN_DATA", "CLAUDE_CONFIG_DIR"):
+        env.pop(k, None)
+    env["CLAUDE_CONFIG_DIR"] = "/nonexistent-claude-config"
+    env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
+    act = Path(root) / "runs/_active_run.json"
+    if run:
+        act.write_text(json.dumps({"run_id": "NRJS-60pct-20261122T2259", "site": "NRJS", "sub_id": "60pct", "mode": "live"}))
+    elif act.exists():
+        act.unlink()
+    p = subprocess.run([sys.executable, str(GUARD)], input=json.dumps({"hook_event_name": "PreToolUse", **data}),
+                       capture_output=True, text=True, env=env)
+    assert p.returncode == 0
+    return "deny" if p.stdout.strip() else "allow"
+
+
+def test_source_root_is_in_scope_during_a_run(root, tmp_path):
+    src, data_dir = _with_source(root, tmp_path)
+    read_src = {"tool_name": "Read", "tool_input": {"file_path": f"{src}/NRJS/60pct/a.pdf"}, "agent_type": "general-purpose", "cwd": str(OTHER)}
+    assert guard_cfg(read_src, root, data_dir) == "deny"
+    in_src = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_type": "general-purpose", "cwd": str(src / "NRJS")}
+    assert guard_cfg(in_src, root, data_dir) == "deny"
+    main_names_src = {"tool_name": "Bash", "tool_input": {"command": f'ls "{src}"'}, "cwd": str(OTHER)}
+    assert guard_cfg(main_names_src, root, data_dir) == "deny"
+    elsewhere = {"tool_name": "Read", "tool_input": {"file_path": f"{OTHER}/a.md"}, "agent_type": "general-purpose", "cwd": str(OTHER)}
+    assert guard_cfg(elsewhere, root, data_dir) == "allow"
+
+
+def test_ldip_agents_unchanged_outside_scope(root):
+    d = {"tool_name": "Read", "tool_input": {"file_path": f"{OTHER}/notes.md"},
+         "agent_type": "ldip-design-review:intake-batch", "cwd": str(OTHER)}
+    assert guard(d, root, run=True) == "deny"
